@@ -1,0 +1,27 @@
+{
+  "name": "open-ledger",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "@minka/ledger-sdk": "^2.45.1"
+  },
+  "dependencies": {
+    "fastify": "^5.12.5",
+    "jose": "^5.10.0",
+    "nanoid": "^5.1.16",
+    "safe-stable-stringify": "^2.5.0"
+  },
+  "scripts": {
+    "start": "tsx server/src/main.ts",
+    "typecheck": "tsc -p .",
+    "conformance:check": "conformance/run.sh check",
+    "conformance:record": "conformance/run.sh record"
+  }
+}
