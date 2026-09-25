@@ -22,6 +22,7 @@
     "start": "tsx server/src/main.ts",
     "typecheck": "tsc -p .",
     "conformance:check": "conformance/run.sh check",
-    "conformance:record": "conformance/run.sh record"
+    "conformance:record": "conformance/run.sh record",
+    "test": "node --import tsx --test 'server/test/**/*.test.ts'"
   }
 }
