@@ -3,6 +3,7 @@
 # touched. Prints the DATABASE_URL to use.
 #
 #   scripts/dev-db.sh start | stop | url
+#   scripts/dev-db.sh fresh <name>     an empty database <name> (dropped first), its URL
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DATA=.rec/pgdata
@@ -24,6 +25,16 @@ case "${1:-start}" in
     psql -h 127.0.0.1 -p "$PORT" -d postgres -tAc "select 1 from pg_database where datname='open_ledger'" | grep -q 1 \
       || createdb -h 127.0.0.1 -p "$PORT" open_ledger
     echo "$URL"
+    ;;
+  # A server resumes every unfinished intent in its database, and some scenarios leave
+  # one that never finishes on purpose (l6: a commit no bridge confirms). Runs that
+  # must not see an earlier run's intents get a database of their own.
+  fresh)
+    "$0" start >/dev/null
+    name=${2:?database name}
+    dropdb -h 127.0.0.1 -p "$PORT" --if-exists --force "$name" 2>/dev/null
+    createdb -h 127.0.0.1 -p "$PORT" "$name"
+    echo "postgres://$(whoami)@127.0.0.1:$PORT/$name"
     ;;
   stop) pg_ctl -D "$DATA" -m fast stop ;;
   url) echo "$URL" ;;

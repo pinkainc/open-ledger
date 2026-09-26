@@ -105,8 +105,24 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Debit and credit on the same bridge in one intent; grouping (`claims.groupBy`) — l6
 - [x] A commit report that never comes: the intent stays `committed` (recorded, l6; same here)
 - [ ] Bridge proof authorisation: today any signer allowed to sign the intent may report
-- [ ] Routes (`wallet.routes`), address resolution `schema:handle@parent`
+- [x] Routes (`wallet.routes`), address resolution `schema:handle@parent` — see Routes below
 - [ ] `/bridges/{id}/events` (deliveries) — L8
+## Routes and addresses (recorded: `routes`, 62/62 + 18/18)
+
+- [x] Address hierarchy `schema:handle@parent → schema@parent → parent → schema` (`routing.ts`)
+- [x] Routes: `credit`, `debit`, `accept` with filters (claim paths, `ctx.intent`, operators),
+      unmatched in/out routes, cycles; resolved proof names the wallet, bridges get the address
+- [x] `forward`: a new intent of the same thread by the ledger (`data.origin`), no core, no
+      reservation, no permission check
+- [x] Spend permission on the wallet an address resolves to
+- [x] Balance rows: `parent: ""` on every update, not only reservations (all recordings)
+- [ ] (?) Route depth beyond 3: our wording `… routing depth 3 exceeded …` is a guess
+- [ ] (?) Debit routing cycle wording (we mirror the credit one)
+- [ ] (?) A forward intent that fails: does the reference abort the thread (first intent
+      already completed)? — L7 thread abort
+- [ ] (?) Route target that does not resolve: our message reuses the unresolved-wallet one
+- [ ] `GET /wallets/{address}/anchors`, `/domains` resolution (needs anchors, domains)
+
 ## L6 — N participants, ordered prepare/commit/abort, timeouts, crashes
 
 - [x] Scenario `l6` with two bridges behind one tunnel (`startBridges`, path prefix per
@@ -155,3 +171,5 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 
 - [x] Coverage report `COVERAGE.md` (`npx tsx conformance/coverage.ts`, part of `npm run check`)
 - [x] `npm run check`: typecheck, unit tests and every level's conformance, on memory and Postgres
+- [x] Postgres conformance runs get an empty database each (`dev-db.sh fresh`): a server
+      resumes every unfinished intent, and l6 leaves one on purpose

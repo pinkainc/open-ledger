@@ -16,7 +16,8 @@ for level in $(ls conformance/fixtures | sed -n 's/\.reference\.jsonl$//p'); do
   why=$(node -e 'const p=require("./conformance/pending.json"); process.stdout.write(p[process.argv[1]] ?? "")' "$level")
   if [ -n "$why" ]; then printf '==> conformance %-9s pending: %s\n' "$level" "$why"; continue; fi
   for store in memory postgres; do
-    if [ $store = memory ]; then url=; else url=$DATABASE_URL; fi
+    # Postgres: an empty database per run, so no earlier run's intent is resumed.
+    if [ $store = memory ]; then url=; else url=$(./scripts/dev-db.sh fresh open_ledger_conf); fi
     printf '==> conformance %-9s %-9s ' "$level" "$store"
     DATABASE_URL=$url ./conformance/run.sh check "$level" > .rec/conf.log 2>&1 && ok=1 || ok=0
     grep -E "exchanges match" .rec/conf.log | paste -sd '|' - | sed 's/|/ · bridge calls: /'
@@ -27,7 +28,7 @@ done
 # The official CLI through a whole flow, on Postgres (skipped when it is not installed).
 if command -v minka >/dev/null; then
   printf '==> minka CLI end to end (postgres) '
-  scripts/cli-e2e.sh > .rec/cli.log 2>&1 && ok=1 || ok=0
+  DATABASE_URL=$(./scripts/dev-db.sh fresh open_ledger_cli) scripts/cli-e2e.sh > .rec/cli.log 2>&1 && ok=1 || ok=0
   tail -1 .rec/cli.log
   [ $ok = 1 ] || { grep -E "FAIL" -A3 .rec/cli.log; exit 1; }
 fi

@@ -4,6 +4,41 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — Addresses and wallet routes
+
+Recorded with `conformance/scenarios/routes.ts` (62 client exchanges, 18 bridge calls;
+bridge `hpb` owns wallet `hpb`). All reproduced.
+
+- **Address resolution** follows the documented hierarchy: `account:1050000029@hpb` →
+  `hpb` (the bridge is called), `tel:15261234578` → `tel`, `loan:42@hpb` → `loan@hpb`,
+  and a source address `account:9@hpb` → `hpb` (debit on the bridge). An issue to
+  `tel:888` credits `tel`. The resolved proof names the **wallet**; the bridge is sent
+  the claim's **address** (`target: {handle: "account:1050000029@hpb"}`; through a
+  credit route, still the claim's `tel:777`).
+- **Unresolvable addresses**: `core.routing-failed`, `Target wallet not resolved for the
+  address 41111339@zaba - does not resolve to any existing wallet. Parent wallet:
+  41111339@zaba` — the "parent" is the whole address; same for `acct:1`.
+- `GET /wallets/<address>` of a non-wallet address is 404 `Wallet not found` (no
+  resolution on reads).
+- **Routes are stored as sent** (`routes` in the wallet data; creating a route to a
+  wallet that does not exist yet is accepted).
+- `credit` → the credit lands on the route's target (resolved proof `wallet: alice`);
+  `debit` → the debit comes from the route's target. `accept` with a filter refuses
+  other claims: `No matching out route found for intent i-accept-usd.`; an input route
+  that matches nothing: `No matching in route found for intent i-eur-out.`; a cycle:
+  `Credit routing cycle detected for the address cyc1.` All `core.routing-failed`,
+  before any resolved entry.
+- `forward` credits the wallet, then the ledger makes **a new intent in the same
+  thread**: handle of 17 characters (the entry-id alphabet), `data: {handle, claims:
+  [transfer <wallet> → <route target>], origin: <first intent>}`, a bare `created` proof
+  by `system`'s key, then `system` pending ×2; created after the first intent's
+  `prepared`. Its trail has **no core proofs** although it debits (`system {coreId,
+  cleared}` like an issue) and the wallet gets **no reserved row**.
+- **Balance rows**: every recording fits one rule — a row that is updated (moved again
+  after it was created, or touched by a reservation) carries `parent: ""`; a row only
+  ever created by one credit has none (`tel`, credited twice, has it; `loan@hpb`, once,
+  has not).
+
 ## 2026-09-26 — L6: several bridges in one intent
 
 Recorded with `conformance/scenarios/l6.ts`: two bridges on one port behind one tunnel

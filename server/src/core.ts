@@ -27,6 +27,7 @@ import { hashData } from './crypto.js'
 import type { AccessControl, Principal } from './access.js'
 import { Bridges, type BridgeCall, type BridgeOptions } from './bridges.js'
 import { createHash } from 'node:crypto'
+import { RoutingError, filterMatches, resolveAddress, route } from './routing.js'
 
 const entryId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 17)
 
@@ -118,10 +119,12 @@ export class Core {
    */
   async process(ledger: string, handle: string, redrive = false) {
     const calls: Delivery[] = []
+    let spawned: string[] = []
     await this.store.transaction(ledger, async (tx) => {
       const intent = await tx.get(ledger, 'intents', handle)
       if (!intent || FINAL.has(intent.meta.status)) return
       const run = new Run(tx, ledger, intent, (await tx.getKey(ledger, 'system'))!, (await tx.getKey(ledger, 'core'))!)
+      spawned = run.spawned
       try {
         if (intent.meta.status === 'pending') await this.advancePending(run, calls, redrive)
         else if (intent.meta.status === 'committed') await this.advanceCommitted(run, calls, redrive)
@@ -134,6 +137,7 @@ export class Core {
       await run.finish()
     })
     await this.deliver(calls)
+    for (const h of spawned) this.schedule(ledger, h)
   }
 
   // pending: resolve, check permissions and limits, prepare. With bridged entries the
@@ -170,8 +174,9 @@ export class Core {
       // Bridges get the intent as it was resolved, before the core's own prepare.
       const resolved = run.snapshot('pending')
       await this.checkLimits(tx, ledger, run.books, entries)
-      // The ledger core takes part as a participant only when balances are spent.
-      if (debits.length) {
+      // The ledger core takes part as a participant only when balances are spent — and
+      // not in an intent a forward route made (recorded: no core proofs, no reservation).
+      if (debits.length && !intent.data.origin) {
         const tp = run.now()
         for (const e of entries) trail.push(serverProof(intent.hash, { handle: e.handle, moment: tp, schema: e.schema, status: 'prepared' }, run.core, 'core'))
         for (const e of debits) {
@@ -216,6 +221,7 @@ export class Core {
     const { tx, ledger, intent, trail } = run
     trail.push(run.sign({ moment: run.now(), status: 'prepared' }))
     run.stage('prepared')
+    await this.forward(run, entries)
     if (bridged.length) calls.push({ order: 'parallel', calls: await this.statusCalls(run, bridged, run.snapshot('prepared')) })
     run.stage('prepared', true)
     trail.push(run.sign({ detail: 'awaiting-clearance', moment: run.now(), status: 'committed' }))
@@ -228,9 +234,12 @@ export class Core {
       await run.books.touch(l.wallet, l.symbol, tc)
     }
     const debits = entries.filter((e) => e.schema === 'debit')
-    for (const e of debits) await run.books.move(e.wallet, e.symbol, 'reserved', -e.amount, tc, true)
+    const reserved = debits.length > 0 && !intent.data.origin
+    for (const e of debits)
+      if (reserved) await run.books.move(e.wallet, e.symbol, 'reserved', -e.amount, tc, true)
+      else await run.books.move(e.wallet, e.symbol, 'available', -e.amount, tc, false)
     for (const e of entries.filter((e) => e.schema === 'credit')) await run.books.move(e.wallet, e.symbol, 'available', +e.amount, tc, false)
-    if (debits.length) {
+    if (reserved) {
       for (const e of entries) {
         // Clearance proofs by the core are bare: no `signer`, no `origin`.
         const { signer: _s, origin: _o, ...bare } = serverProof(intent.hash, { detail: 'cleared', handle: e.handle, moment: tc, schema: e.schema, status: 'committed' }, run.core, 'core')
@@ -243,6 +252,34 @@ export class Core {
     intent.meta.routed = true
     intent.meta.status = 'committed'
     if (!bridged.length) await this.complete(run, calls, bridged)
+  }
+
+  // A credit that ended at a `forward` route is passed on in a new intent of the same
+  // thread, made and signed by the ledger once the first is prepared (recorded):
+  // `{handle: <17 characters>, claims: [transfer wallet → route target], origin}`.
+  private async forward(run: Run, entries: Entry[]) {
+    const { tx, ledger, intent } = run
+    const claims: any[] = intent.data.claims
+    for (const e of entries.filter((e) => e.schema === 'credit')) {
+      const c = claims[e.input]
+      const wallet = await tx.get(ledger, 'wallets', e.wallet)
+      const r = ((wallet?.data.routes ?? []) as any[]).filter((r) => ['credit', 'forward', 'accept'].includes(r.action)).find((r) => filterMatches(r.filter, c, intent))
+      if (r?.action !== 'forward') continue
+      const data = {
+        handle: entryId(),
+        claims: [{ action: 'transfer', amount: e.amount, source: { handle: e.wallet }, symbol: { handle: e.symbol }, target: { handle: r.target } }],
+        origin: intent.data.handle,
+      }
+      const hash = hashData(data)
+      const luid = newLuid('$int')
+      const moment = run.now()
+      const { signer: _s, origin: _o, ...created } = serverProof(hash, { moment, status: 'created' }, run.system, 'system')
+      const proofs = [created as Proof, serverProof(hash, { moment: run.now(), status: 'pending' }, run.system, 'system'), serverProof(hash, { luid, moment: run.now(), status: 'pending' }, run.system, 'system')]
+      const record: StoredRecord = { hash, data, luid, meta: { proofs, status: 'pending', thread: intent.meta.thread, domains: [], moment, owners: [run.system.public] } }
+      await tx.insert(ledger, 'intents', record)
+      await tx.addChange(ledger, 'intents', data.handle, { ...record, meta: { ...record.meta, change: 1, action: 'create', labels: null } })
+      run.spawned.push(data.handle)
+    }
   }
 
   private async advanceCommitted(run: Run, calls: Delivery[], redrive: boolean) {
@@ -411,14 +448,16 @@ export class Core {
     if (this.expiryTimer) clearInterval(this.expiryTimer)
   }
 
-  // Every claim needs its permission from at least one of the intent's signers.
+  // Every claim needs its permission from at least one of the intent's signers. A
+  // wallet named by address is the wallet the address resolves to. An intent the
+  // ledger made itself (a forward route's, `data.origin`) was authorised by its origin.
   private async permitted(tx: Store, ledger: string, intent: StoredRecord) {
-    if (!this.access) return true
+    if (!this.access || intent.data.origin) return true
     const ledgerRecord = await tx.get('', 'ledgers', ledger)
     if (!ledgerRecord) return false
     const { keys, who } = await signersOf(tx, ledger, intent)
     for (const need of needsOf(intent.data.claims)) {
-      const record = await tx.get(ledger, need.record === 'wallet' ? 'wallets' : 'symbols', need.handle)
+      const record = need.record === 'wallet' ? await resolveAddress(tx, ledger, need.handle) : await tx.get(ledger, 'symbols', need.handle)
       if (!record) return false
       if (!(await this.access.allowed(need.action, need.record, { who, proofs: keys }, { ledger: ledgerRecord, record }))) return false
     }
@@ -426,23 +465,32 @@ export class Core {
   }
 
   // Resolution checks each claim's wallets before its symbol (source, then target):
-  // with both unknown the reference reports the wallet.
+  // with both unknown the reference reports the wallet. An address resolves up its
+  // hierarchy and then along the wallet's routes (routing.ts); the entry names the
+  // wallet it ended at, and that wallet's bridge. Routes are followed once, on the
+  // first pass; later passes rebuild the entries from the resolved proofs.
   private async resolve(tx: Store, ledger: string, intent: StoredRecord, earlier?: Entry[]): Promise<{ entries: Entry[]; limits: LimitOp[] }> {
     const entries: Entry[] = []
     const limits: LimitOp[] = []
     const claims: any[] = intent.data.claims
+    const unresolved = (side: string, address: string) =>
+      new Rejection('core.routing-failed', `${side} wallet not resolved for the address ${address} - does not resolve to any existing wallet. Parent wallet: ${address}`)
     for (const [i, c] of claims.entries()) {
-      const sides = c.action === 'limit' ? ([['Wallet', c.wallet]] as const) : ([['Source', c.source], ['Target', c.target]] as const)
-      const bridgeOf: Record<string, string | undefined> = {}
-      for (const [side, ref] of sides) {
-        if (!ref) continue
-        const wallet = await tx.get(ledger, 'wallets', ref.handle)
-        bridgeOf[ref.handle] = wallet?.data.bridge
-        if (!wallet)
-          throw new Rejection(
-            'core.routing-failed',
-            `${side} wallet not resolved for the address ${ref.handle} - does not resolve to any existing wallet. Parent wallet: ${ref.handle}`,
-          )
+      const ends: Partial<Record<'Source' | 'Target', StoredRecord>> = {}
+      if (c.action === 'limit') {
+        if (!(await tx.get(ledger, 'wallets', c.wallet.handle))) throw unresolved('Wallet', c.wallet.handle)
+      } else if (!earlier) {
+        for (const side of ['Source', 'Target'] as const) {
+          if (!(side === 'Source' ? c.source : c.target)) continue
+          try {
+            const routed = await route(tx, ledger, intent, c, side)
+            if (!routed) throw unresolved(side, (side === 'Source' ? c.source : c.target).handle)
+            ends[side] = routed.wallet
+          } catch (e) {
+            if (e instanceof RoutingError) throw new Rejection('core.routing-failed', e.detail)
+            throw e
+          }
+        }
       }
       const symbol = c.symbol.handle
       if (!(await tx.get(ledger, 'symbols', symbol))) throw new Rejection('core.symbol-invalid', `Symbol ${symbol} not found.`)
@@ -452,9 +500,17 @@ export class Core {
         continue
       }
       if (earlier) continue
-      const withBridge = (w: string) => (bridgeOf[w] ? { bridge: bridgeOf[w] } : {})
-      if (c.source) entries.push({ schema: 'debit', handle: `deb_${entryId()}`, wallet: c.source.handle, symbol, amount: c.amount, input: i, ...withBridge(c.source.handle) })
-      if (c.target) entries.push({ schema: 'credit', handle: `cre_${entryId()}`, wallet: c.target.handle, symbol, amount: c.amount, input: i, ...withBridge(c.target.handle) })
+      const entry = (schema: 'debit' | 'credit', w: StoredRecord): Entry => ({
+        schema,
+        handle: `${schema === 'debit' ? 'deb' : 'cre'}_${entryId()}`,
+        wallet: w.data.handle,
+        symbol,
+        amount: c.amount,
+        input: i,
+        ...(w.data.bridge ? { bridge: w.data.bridge } : {}),
+      })
+      if (ends.Source) entries.push(entry('debit', ends.Source))
+      if (ends.Target) entries.push(entry('credit', ends.Target))
     }
     return { entries: earlier ?? entries, limits }
   }
@@ -599,6 +655,8 @@ class Run {
   readonly stages: Stage[] = []
   readonly books: Books
   readonly limitWrites: LimitRow[] = []
+  /** Intents this pass made (forward routes), to be processed after it. */
+  readonly spawned: string[] = []
   readonly sign = (custom: Record<string, unknown>) => serverProof(this.intent.hash, custom, this.system, 'system')
   readonly stage = (status: string, routed = false) => void this.stages.push({ proofs: this.trail.length, status, routed })
 
@@ -703,6 +761,8 @@ class Books {
   private rows = new Map<string, BalanceRow>()
   private loaded = new Set<string>()
   private dirty = new Set<string>()
+  /** Rows this pass created; moving one again in the same pass is not an update. */
+  private created = new Set<string>()
 
   constructor(
     private readonly tx: Store,
@@ -720,17 +780,21 @@ class Books {
     return this.rows.get(`${wallet}\u0000${symbol}\u0000${schema}`)?.data.amount ?? 0
   }
 
-  // A row touched by a reservation carries `parent: ""` from then on — the
-  // reference's serialisation, reproduced because clients see it.
+  // A row that is updated — an earlier row moved again, or any row a reservation
+  // touches — carries `parent: ""` from then on; a row only ever created by one credit
+  // has none. The reference's serialisation, reproduced because clients see it
+  // (every balance in every recording fits this rule).
   async move(wallet: string, symbol: string, schema: 'available' | 'reserved', delta: number, moment: string, reservation: boolean) {
     await this.load(wallet)
     const key = `${wallet}\u0000${symbol}\u0000${schema}`
     let row = this.rows.get(key)
+    const existed = !!row && !this.created.has(key)
     if (!row) {
       row = { hash: '', data: { wallet, symbol, schema, amount: 0 }, luid: newLuid('$wbl'), meta: { moment } }
       this.rows.set(key, row)
+      this.created.add(key)
     }
-    if (reservation && row.data.parent === undefined) row.data = { parent: '', ...row.data }
+    if ((reservation || existed) && row.data.parent === undefined) row.data = { parent: '', ...row.data }
     row.data.amount += delta
     row.meta.moment = moment
     this.dirty.add(key)
