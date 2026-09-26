@@ -337,7 +337,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   app.post('/api/v2/ledgers', async (req, reply) => {
     validateBody('ledgers', req.body)
     const who = await authenticate(req)
-    if (!who) throw errors.forbidden()
+    if (!who) throw errors.forbidden('create', 'ledger')
     await acl.authorizeServer('create', 'ledger', { who, proofs: proofKeys(req.body) })
     const handle = (req.body as any).data.handle
     const keys = { system: generateKeyPair(), core: generateKeyPair(), 'system.auth': generateKeyPair(), 'system.dtc': generateKeyPair() }

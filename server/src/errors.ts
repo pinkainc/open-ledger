@@ -28,5 +28,6 @@ export const errors = {
   dropRejected: (detail: string) => new LedgerError(422, 'record.drop-rejected', detail),
   changeNotFound: () => new LedgerError(404, 'record.not-found', 'Change not found'),
   unauthorized: () => new LedgerError(401, 'auth.unauthorized', 'Invalid token.'),
-  forbidden: () => new LedgerError(403, 'auth.forbidden', 'Forbidden.'),
+  // Observed for create and read, whether the ledger gate or the rules refused.
+  forbidden: (action: string, record: string) => new LedgerError(403, 'auth.forbidden', `Cannot ${action} ${record}.`),
 }

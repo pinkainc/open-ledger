@@ -140,14 +140,14 @@ export class AccessControl {
   }
 
   async authorize(action: string, record: string, access: Access, scope: Scope) {
-    if (action !== 'read' && !(await this.entered(access, scope))) throw errors.forbidden()
-    if (!(await this.allowed(action, record, access, scope))) throw errors.forbidden()
+    if (action !== 'read' && !(await this.entered(access, scope))) throw errors.forbidden(action, record)
+    if (!(await this.allowed(action, record, access, scope))) throw errors.forbidden(action, record)
   }
 
   /** Server rules alone, for operations above any ledger (creating one). */
   async authorizeServer(action: string, record: string, access: Access) {
     const none = { ledger: { hash: '', data: { handle: '' }, luid: '', meta: {} } }
     for (const r of this.serverRules) if (await this.grants(r, action, record, access, none, 'server')) return
-    throw errors.forbidden()
+    throw errors.forbidden(action, record)
   }
 }

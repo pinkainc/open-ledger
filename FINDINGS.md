@@ -30,7 +30,8 @@ established. Newest first.
 - **Circles** `$crc`, circle signers `$csn` (created with 200, client proof without
   `origin`, no `meta.status`), policies `$plc`.
 - **Forbidden details** name the operation: `Cannot create symbol.`, `Cannot create
-  wallet.` (we say `Forbidden.`).
+  wallet.`, `Cannot read intent.` — also when the ledger gate refused (access2, B
+  without `access`). Reproduced as `Cannot <action> <record>.`
 - **Token impersonation** (`access3` #7, docs: about-authentication): when the
   token's `kid` is the key of a **registered signer record**, `system.auth` adds a
   proof `{custom: {moment, status, bearer.<claim>…}, origin: "self-signed-token",

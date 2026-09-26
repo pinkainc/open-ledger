@@ -71,8 +71,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       l0/l1 run mixed in (shared proxy) — removed; `run.sh` now refuses busy ports and keeps
       only the run's own ledger when recording (`conformance/own-ledger.ts`)
 - [ ] NEXT: access4 is listed in `conformance/pending.json` until claim permissions and expiry exist
-- [ ] Forbidden details: `Cannot create symbol.` etc. instead of `Forbidden.`
-- [ ] Tests for circles, status policies, matchers (behaviour is conformance-checked only)
+- [x] Forbidden details: `Cannot <action> <record>.` — no soft `detail` difference left at any level
+- [x] Tests for scope, gate, 403 details, bearer and signer matchers, circles, status policies (`access.test.ts`)
 - [ ] Access policies (`{policy: handle}`) and `access.strategy: policy-based`
 - [ ] Status policies: allowed transitions, quorum (`record.status-policy-violation`, quorum-not-met)
 - [ ] Circles and circle signers (`/circles`, `/circles/{id}/signers`)
