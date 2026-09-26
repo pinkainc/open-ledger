@@ -63,8 +63,9 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Rule scope (ledger rule without `record` = ledger only) and the ledger `access` gate — recorded access2/3
 - [x] Circles, circle signers (`$crc`, `$csn`), policies (`$plc`); status policies with quorum (`server/src/status.ts`)
 - [x] Proofs by registered signers annotated with `signer: <handle>`
-- [ ] NEXT: `access3` #7 — token impersonation: `system.auth` adds a proof with
-      `custom["bearer.aud"]` and becomes a second owner when an intent is sent with a token
+- [x] `access3` #7 — token impersonation: a token whose key is a registered signer gets a
+      `system.auth` proof (`self-signed-token`, `bearer.*` claims); token-only bodies and
+      partial proofs; spoofed origin/signer/issuer on client proofs are stripped (16/16)
 - [ ] NEXT: run `conformance/run.sh check access2` and `check access4` (recorded, never compared);
       their scenarios poll up to 200–240 s against our server — shorten waits when a read is forbidden
 - [ ] Forbidden details: `Cannot create symbol.` etc. instead of `Forbidden.`

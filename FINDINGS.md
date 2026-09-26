@@ -31,9 +31,15 @@ established. Newest first.
   `origin`, no `meta.status`), policies `$plc`.
 - **Forbidden details** name the operation: `Cannot create symbol.`, `Cannot create
   wallet.` (we say `Forbidden.`).
-- **Open:** in `access3` an intent created with a token carries an extra proof with
-  `custom["bearer.aud"]` and a second owner — token impersonation by `system.auth`
-  (docs: about-authentication). Not reproduced yet.
+- **Token impersonation** (`access3` #7, docs: about-authentication): when the
+  token's `kid` is the key of a **registered signer record**, `system.auth` adds a
+  proof `{custom: {moment, status, bearer.<claim>…}, origin: "self-signed-token",
+  signer: <handle>, issuer: <handle of iss>}` after the client proofs, and its key
+  becomes a second owner. It is added even though the client signed the body itself
+  (the docs say fully signed proofs skip impersonation — they are kept, but the extra
+  proof still appears). With a token whose key is no signer record nothing is added:
+  `access` #9 (A's token, B's registered proof) has none. Reproduced; token-only
+  bodies and partial proofs follow the docs (not recorded).
 
 ## 2026-09-26 — Record lifecycle, signers, access check
 

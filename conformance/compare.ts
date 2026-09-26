@@ -37,6 +37,8 @@ function normaliser() {
     if (/^[0-9a-f]{64}$/.test(v)) return '<hex64>'
     if (/^[A-Za-z0-9+/]{86}==$/.test(v)) return '<signature>'
     if (/^[A-Za-z0-9+/]{43}=$/.test(v)) return token('key', v)
+    // A token subject naming a key, as `bearer.sub` carries it on impersonated proofs.
+    if (/^signer:[A-Za-z0-9+/]{43}=$/.test(v)) return `signer:${token('key', v.slice(7))}`
     const lh = v.match(ledgerHandle)
     if (lh) return v.replace(lh[0], '<ledger>')
     return v
@@ -48,7 +50,8 @@ function normaliser() {
       const out: any = {}
       for (const k of Object.keys(x).sort()) {
         if (k === 'trace') continue
-        const v = walk(x[k])
+        // Token times (epoch seconds) copied into impersonated proofs as `bearer.*`.
+        const v = /^bearer\.(iat|exp|nbf)$/.test(k) && typeof x[k] === 'number' ? '<epoch>' : walk(x[k])
         // An error `custom` that held only the trace is empty once the trace is gone.
         if (k === 'custom' && v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length) continue
         out[k] = v

@@ -131,6 +131,44 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
 
   const proofKeys = (body: any): string[] => (body?.meta?.proofs ?? []).map((p: any) => p.public)
 
+  // ---- token impersonation -------------------------------------------------------
+
+  // When the token's key belongs to a signer record of the ledger, the ledger's
+  // `system.auth` signer signs the request on that signer's behalf
+  // (about-authentication, "token impersonation"). The proof carries the token's
+  // claims as `bearer.*`, `origin: self-signed-token`, and the signer and issuer
+  // handles. Observed (access3): it is added even when the client signed the body
+  // itself, and its key becomes an owner. A token whose key is not a signer record
+  // impersonates nothing (access, l0).
+  //
+  // Partial proofs — without `public` — are templates: each becomes an impersonated
+  // proof carrying its `custom`. A body with no proofs and no hash is hashed here.
+  // Returns the keys access rules see: the token's key stands for the proofs made
+  // on its behalf.
+  async function impersonate(body: any, ledger: string, who: Principal | undefined, status?: string): Promise<string[]> {
+    const signer = who && (await signerByKey(ledger, who.public))
+    const auth = signer && (await store.getKey(ledger, 'system.auth'))
+    if (!who || !signer || !auth) return proofKeys(body)
+    body.hash ??= hashData(body.data)
+    body.meta ??= {}
+    const given: any[] = body.meta.proofs ?? []
+    const full = given.filter((p) => p?.public)
+    const templates = given.filter((p) => !p?.public)
+    if (!templates.length) templates.push({ custom: { ...(status || full[0]?.custom?.status ? { status: full[0]?.custom?.status ?? status } : {}) } })
+    const issuer = typeof who.claims.iss === 'string' ? ((await signerByKey(ledger, who.claims.iss)) ?? who.claims.iss) : undefined
+    const bearer = Object.fromEntries(Object.keys(who.claims).sort().map((k) => [`bearer.${k}`, who.claims[k]]))
+    const made = templates.map((t) => ({
+      ...serverProof(body.hash, { moment: now(), ...t.custom, ...bearer }, auth, signer),
+      origin: 'self-signed-token',
+      ...(issuer ? { issuer } : {}),
+    }))
+    body.meta.proofs = [...full, ...made]
+    return [...full.map((p) => p.public), who.public]
+  }
+
+  const signerByKey = async (ledger: string, key: string) =>
+    (await store.list(ledger, 'signers')).find((s) => s.data.public === key)?.data.handle as string | undefined
+
   // ---- lookups ------------------------------------------------------------------
 
   async function hostedLedger(req: FastifyRequest) {
@@ -167,12 +205,16 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
 
   // Client proofs are stored tagged with their origin and, when the key belongs to a
   // signer record of the ledger, that signer's handle (observed: a proof by signer
-  // `b` comes back with `signer: "b"`).
+  // `b` comes back with `signer: "b"`). What a client claims about a proof — origin,
+  // signer, issuer — is replaced; only proofs `system.auth` made keep theirs.
   async function annotate(ledger: string, proofs: Proof[], origin = true): Promise<Proof[]> {
     const signers = ledger ? await store.list(ledger, 'signers') : []
-    return proofs.map((p) => {
+    const auth = ledger ? (await store.getKey(ledger, 'system.auth'))?.public : undefined
+    return proofs.map((p: any) => {
+      if (auth && p.public === auth && p.origin === 'self-signed-token') return p
+      const { origin: _o, signer: _s, issuer: _i, ...plain } = p
       const signer = signers.find((s) => s.data.public === p.public)?.data.handle
-      return { ...p, ...(origin ? { origin: p.origin ?? 'key-pair' } : {}), ...(signer && !p.signer ? { signer } : {}) }
+      return { ...plain, ...(origin ? { origin: 'key-pair' } : {}), ...(signer ? { signer } : {}) }
     })
   }
 
@@ -331,7 +373,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       validateBody(kind as ValidatedKind, req.body)
       const who = await authenticate(req)
       const ledger = await hostedLedger(req)
-      await acl.authorize('create', record, { who, proofs: proofKeys(req.body) }, { ledger })
+      const keys = await impersonate(req.body, ledger.data.handle, who, 'created')
+      await acl.authorize('create', record, { who, proofs: keys }, { ledger })
       reply.status(201).send(await create(kind, ledger.data.handle, req.ledgerKey!, req))
     })
 
@@ -390,7 +433,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       const who = await authenticate(req)
       const { ledger, found } = await existing(req, kind, req.params.id)
       const body = req.body as any
-      await acl.authorize('update', record, { who, proofs: proofKeys(body) }, { ledger, record: found })
+      const keys = await impersonate(req.body, ledger.data.handle, who)
+      await acl.authorize('update', record, { who, proofs: keys }, { ledger, record: found })
       if (body.data.parent !== found.hash) throw errors.parentHashInvalid()
       const proofs = await annotate(ledger.data.handle, verifyProofs(body))
       const updated: StoredRecord = {
@@ -410,8 +454,12 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     app.post<{ Params: { id: string } }>(`/api/v2/${kind}/:id/proofs`, async (req) => {
       const who = await authenticate(req)
       const { ledger, found } = await existing(req, kind, req.params.id)
-      const proof = req.body as any
-      await acl.authorize('update', record, { who, proofs: proof?.public ? [proof.public] : [] }, { ledger, record: found })
+      // A proof without `public` is a template the token's signer is impersonated on.
+      const sent = req.body as any
+      const wrapped = { hash: found.hash, data: found.data, meta: { proofs: sent && !sent.public ? [sent] : [] } }
+      const keys = wrapped.meta.proofs.length ? await impersonate(wrapped, ledger.data.handle, who) : sent?.public ? [sent.public] : []
+      const proof: any = wrapped.meta.proofs.at(-1) ?? sent
+      await acl.authorize('update', record, { who, proofs: keys.filter(Boolean) }, { ledger, record: found })
       if (!proof?.digest || !proof?.public || !proof?.result) throw errors.signatureMissing()
       if (proof.digest !== digestFor(found.hash, proof.custom) || !verifyDigest(proof.digest, proof.public, proof.result))
         throw errors.signatureInvalid(proof.public)
@@ -432,7 +480,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const who = await authenticate(req)
     const { ledger, found } = await existing(req, 'wallets', req.params.id)
     const body = req.body as any
-    await acl.authorize('drop', 'wallet', { who, proofs: proofKeys(body) }, { ledger, record: found })
+    const keys = await impersonate(req.body, ledger.data.handle, who, 'dropped')
+    await acl.authorize('drop', 'wallet', { who, proofs: keys }, { ledger, record: found })
     if (body.data.parent !== found.hash) throw errors.parentHashInvalid()
     verifyProofs(body)
     const held = (await store.balances(ledger.data.handle, found.data.handle)).filter((b) => b.data.amount !== 0)
