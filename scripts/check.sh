@@ -19,7 +19,7 @@ for level in $(ls conformance/fixtures | sed -n 's/\.reference\.jsonl$//p'); do
     if [ $store = memory ]; then url=; else url=$DATABASE_URL; fi
     printf '==> conformance %-9s %-9s ' "$level" "$store"
     DATABASE_URL=$url ./conformance/run.sh check "$level" > .rec/conf.log 2>&1 && ok=1 || ok=0
-    tail -1 .rec/conf.log
+    grep -E "exchanges match" .rec/conf.log | paste -sd '|' - | sed 's/|/ · bridge calls: /'
     [ $ok = 1 ] || { grep -E "FAIL|^ " .rec/conf.log | head -40; exit 1; }
   done
 done

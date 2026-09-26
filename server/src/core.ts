@@ -25,12 +25,19 @@ import { newLuid } from './ids.js'
 import type { BalanceRow, LimitRow, Store, StoredRecord } from './store.js'
 import { hashData } from './crypto.js'
 import type { AccessControl, Principal } from './access.js'
+import { Bridges, type BridgeCall, type BridgeOptions } from './bridges.js'
+import { createHash } from 'node:crypto'
 
 const entryId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 17)
 
 type LimitOp = { wallet: string; symbol: string; metric: string; amount: number }
 
-type Entry = { schema: 'debit' | 'credit'; handle: string; wallet: string; symbol: string; amount: number; input: number }
+type Entry = { schema: 'debit' | 'credit'; handle: string; wallet: string; symbol: string; amount: number; input: number; bridge?: string }
+
+const FINAL = new Set(['completed', 'rejected'])
+
+/** Calls to make once a transaction has committed. */
+type Delivery = { order: 'sequential' | 'parallel'; calls: BridgeCall[] }
 
 class Rejection {
   constructor(
@@ -55,6 +62,7 @@ export type CoreOptions = {
    * that a one-minute expiry recorded on the reference does not take a minute here.
    */
   minuteMs?: number
+  bridges?: BridgeOptions
 }
 
 /** A claim permission: an action on one wallet or symbol. */
@@ -63,116 +71,277 @@ type Need = { action: string; record: 'wallet' | 'symbol'; handle: string }
 export class Core {
   /** Access rules for claim permissions; set by the app that owns the rules. */
   access?: AccessControl
+  readonly bridges: Bridges
   private readonly minuteMs: number
   private expiryTimer?: NodeJS.Timeout
 
   constructor(
     private readonly store: Store,
-    { minuteMs = 60_000 }: CoreOptions = {},
+    { minuteMs = 60_000, bridges }: CoreOptions = {},
   ) {
     this.minuteMs = minuteMs
+    this.bridges = new Bridges(bridges)
   }
 
   /** Process an intent after the current request has been answered. */
-  schedule(ledger: string, handle: string) {
-    setImmediate(() => void this.process(ledger, handle).catch((e) => console.error(`intent ${ledger}/${handle}:`, e)))
+  schedule(ledger: string, handle: string, redrive = false) {
+    setImmediate(() => void this.process(ledger, handle, redrive).catch((e) => console.error(`intent ${ledger}/${handle}:`, e)))
   }
 
-  /** Pick up intents left pending by a previous run. */
+  /**
+   * Pick up intents a previous run left unfinished. Calls to bridges that were in
+   * flight are sent again; bridges treat a repeat as a no-op.
+   */
   async resume() {
     for (const l of await this.store.list('', 'ledgers'))
       for (const i of await this.store.list(l.data.handle, 'intents'))
-        if (i.meta.status === 'pending') this.schedule(l.data.handle, i.data.handle)
+        if (!FINAL.has(i.meta.status)) this.schedule(l.data.handle, i.data.handle, true)
   }
 
-  async process(ledger: string, handle: string) {
+  close() {
+    this.stopExpiry()
+    this.bridges.close()
+  }
+
+  /**
+   * Moves an intent as far as it can go now. Everything the intent has done is in
+   * its proof trail, so the next step is read from there: this runs again whenever a
+   * bridge reports, and after a restart.
+   */
+  async process(ledger: string, handle: string, redrive = false) {
+    const calls: Delivery[] = []
     await this.store.transaction(ledger, async (tx) => {
       const intent = await tx.get(ledger, 'intents', handle)
-      if (!intent || intent.meta.status !== 'pending') return // already processed
-
-      const system = (await tx.getKey(ledger, 'system'))!
-      const core = (await tx.getKey(ledger, 'core'))!
-      const now = clock()
-      const sign = (custom: Record<string, unknown>) => serverProof(intent.hash, custom, system, 'system')
-      const trail: Proof[] = []
-      // Each stage the reference saves separately is one change of the intent.
-      const stages: Stage[] = []
-      const stage = (status: string, routed = false) => stages.push({ proofs: trail.length, status, routed })
-      const writes: BalanceRow[] = []
-      const limitWrites: LimitRow[] = []
-
+      if (!intent || FINAL.has(intent.meta.status)) return
+      const run = new Run(tx, ledger, intent, (await tx.getKey(ledger, 'system'))!, (await tx.getKey(ledger, 'core'))!)
       try {
-        // An intent that waited for signatures was resolved before; its entries are
-        // in its trail and are not resolved twice.
-        const earlier = resolvedEntries(intent)
-        const { entries, limits } = await this.resolve(tx, ledger, intent, earlier)
-        if (!earlier) {
-          const t = now()
-          for (const e of entries)
-            trail.push(
-              sign({ amount: e.amount, handle: e.handle, inputs: [e.input], moment: t, schema: e.schema, status: 'resolved', symbol: e.symbol, wallet: e.wallet }),
-            )
-        }
-        if (trail.length) stage('pending')
-        if (!(await this.permitted(tx, ledger, intent))) {
-          // Waiting: nothing moves, no reservation is taken.
-          await save(tx, ledger, intent, trail, stages)
-          return
-        }
-
-        const books = new Books(tx, ledger)
-        await this.checkLimits(tx, ledger, books, entries)
-
-        const debits = entries.filter((e) => e.schema === 'debit')
-        // The ledger core takes part as a participant only when balances are spent.
-        if (debits.length) {
-          const tp = now()
-          for (const e of entries) trail.push(serverProof(intent.hash, { handle: e.handle, moment: tp, schema: e.schema, status: 'prepared' }, core, 'core'))
-          for (const e of debits) {
-            await books.move(e.wallet, e.symbol, 'available', -e.amount, tp, true)
-            await books.move(e.wallet, e.symbol, 'reserved', +e.amount, tp, true)
-          }
-        }
-        trail.push(sign({ moment: now(), status: 'prepared' }))
-        stage('prepared')
-        stage('prepared', true)
-        trail.push(sign({ detail: 'awaiting-clearance', moment: now(), status: 'committed' }))
-        stage('committed', true)
-
-        const tc = now()
-        for (const l of limits) {
-          limitWrites.push(await this.limitRow(tx, ledger, l, system, tc))
-          await books.touch(l.wallet, l.symbol, tc)
-        }
-        for (const e of debits) await books.move(e.wallet, e.symbol, 'reserved', -e.amount, tc, true)
-        for (const e of entries.filter((e) => e.schema === 'credit')) await books.move(e.wallet, e.symbol, 'available', +e.amount, tc, false)
-        if (debits.length) {
-          for (const e of entries) {
-            // Clearance proofs by the core are bare: no `signer`, no `origin`.
-            const { signer: _s, origin: _o, ...bare } = serverProof(intent.hash, { detail: 'cleared', handle: e.handle, moment: tc, schema: e.schema, status: 'committed' }, core, 'core')
-            trail.push(bare as Proof)
-          }
-        } else {
-          trail.push(sign({ coreId: intent.data.handle, detail: 'cleared', moment: tc, status: 'committed' }))
-        }
-        stage('committed', true)
-        trail.push(sign({ moment: now(), status: 'completed' }))
-        stage('completed', true)
-        writes.push(...books.changed())
-        intent.meta.status = 'completed'
-        intent.meta.routed = true
+        if (intent.meta.status === 'pending') await this.advancePending(run, calls, redrive)
+        else if (intent.meta.status === 'committed') await this.advanceCommitted(run, calls, redrive)
+        else if (intent.meta.status === 'aborted') await this.advanceAborted(run, calls, redrive)
       } catch (e) {
         if (!(e instanceof Rejection)) throw e
-        reject(trail, stage, sign, now, e.reason, e.detail)
+        reject(run.trail, run.stage, run.sign, run.now, e.reason, e.detail)
         intent.meta.status = 'rejected'
       }
-
-      // Nothing is written until the outcome is known, so a rejection leaves no trace
-      // in the books and the memory store needs no rollback.
-      for (const row of writes) await tx.putBalance(ledger, row)
-      for (const row of limitWrites) await tx.putLimit(ledger, row)
-      await save(tx, ledger, intent, trail, stages)
+      await run.finish()
     })
+    await this.deliver(calls)
+  }
+
+  // pending: resolve, check permissions and limits, prepare. With bridged entries the
+  // intent then waits for every bridge to report `prepared` (or one to report `failed`).
+  private async advancePending(run: Run, calls: Delivery[], redrive: boolean) {
+    const { tx, ledger, intent, trail } = run
+    const earlier = resolvedEntries(intent)
+    const { entries, limits } = await this.resolve(tx, ledger, intent, earlier)
+    if (!earlier) {
+      const t = run.now()
+      for (const e of entries)
+        trail.push(
+          run.sign({
+            amount: e.amount,
+            ...(e.bridge ? { bridge: e.bridge } : {}),
+            handle: e.handle,
+            inputs: [e.input],
+            moment: t,
+            schema: e.schema,
+            status: 'resolved',
+            symbol: e.symbol,
+            wallet: e.wallet,
+          }),
+        )
+    }
+    if (trail.length) run.stage('pending')
+    if (!(await this.permitted(tx, ledger, intent))) return // waiting for signatures; nothing moves
+
+    const bridged = bridgedEntries(intent.data.claims, entries)
+    const debits = entries.filter((e) => e.schema === 'debit')
+    if (!run.corePrepared()) {
+      // Bridges get the intent as it was resolved, before the core's own prepare.
+      const resolved = run.snapshot('pending')
+      await this.checkLimits(tx, ledger, run.books, entries)
+      // The ledger core takes part as a participant only when balances are spent.
+      if (debits.length) {
+        const tp = run.now()
+        for (const e of entries) trail.push(serverProof(intent.hash, { handle: e.handle, moment: tp, schema: e.schema, status: 'prepared' }, run.core, 'core'))
+        for (const e of debits) {
+          await run.books.move(e.wallet, e.symbol, 'available', -e.amount, tp, true)
+          await run.books.move(e.wallet, e.symbol, 'reserved', +e.amount, tp, true)
+        }
+      }
+      if (bridged.length) {
+        run.stage('pending')
+        calls.push({ order: 'sequential', calls: await this.entryCalls(run, bridged, resolved) })
+        return
+      }
+    } else if (redrive && bridged.length) {
+      const waiting = bridged.filter((e) => !run.reported(e.handle, ['prepared', 'failed']))
+      calls.push({ order: 'sequential', calls: await this.entryCalls(run, waiting, run.snapshot('pending')) })
+    }
+
+    if (bridged.length) {
+      const failed = bridged.filter((e) => run.reported(e.handle, ['failed']))
+      if (failed.length) {
+        const names = [...new Set(failed.map((e) => e.bridge!))].join(', ')
+        return this.abort(run, calls, bridged, 'core.bridge-prepare-failed', `Bridge(s) failed to process intent: ${names}`)
+      }
+      if (!bridged.every((e) => run.reported(e.handle, ['prepared']))) return
+    }
+    await this.commit(run, calls, entries, limits, bridged)
+  }
+
+  // prepared → committed: the ledger commits its own part at once; bridges are told to
+  // commit and the intent completes when each has reported `committed`.
+  private async commit(run: Run, calls: Delivery[], entries: Entry[], limits: LimitOp[], bridged: Entry[]) {
+    const { tx, ledger, intent, trail } = run
+    trail.push(run.sign({ moment: run.now(), status: 'prepared' }))
+    run.stage('prepared')
+    if (bridged.length) calls.push({ order: 'parallel', calls: await this.statusCalls(run, bridged, run.snapshot('prepared')) })
+    run.stage('prepared', true)
+    trail.push(run.sign({ detail: 'awaiting-clearance', moment: run.now(), status: 'committed' }))
+    run.stage('committed', true)
+    if (bridged.length) calls.push({ order: 'parallel', calls: await this.commandCalls(run, bridged, 'commit', run.snapshot('committed', true)) })
+
+    const tc = run.now()
+    for (const l of limits) {
+      run.limitWrites.push(await this.limitRow(tx, ledger, l, run.system, tc))
+      await run.books.touch(l.wallet, l.symbol, tc)
+    }
+    const debits = entries.filter((e) => e.schema === 'debit')
+    for (const e of debits) await run.books.move(e.wallet, e.symbol, 'reserved', -e.amount, tc, true)
+    for (const e of entries.filter((e) => e.schema === 'credit')) await run.books.move(e.wallet, e.symbol, 'available', +e.amount, tc, false)
+    if (debits.length) {
+      for (const e of entries) {
+        // Clearance proofs by the core are bare: no `signer`, no `origin`.
+        const { signer: _s, origin: _o, ...bare } = serverProof(intent.hash, { detail: 'cleared', handle: e.handle, moment: tc, schema: e.schema, status: 'committed' }, run.core, 'core')
+        trail.push(bare as Proof)
+      }
+    } else {
+      trail.push(run.sign({ coreId: intent.data.handle, detail: 'cleared', moment: tc, status: 'committed' }))
+    }
+    run.stage('committed', true)
+    intent.meta.routed = true
+    intent.meta.status = 'committed'
+    if (!bridged.length) await this.complete(run, calls, bridged)
+  }
+
+  private async advanceCommitted(run: Run, calls: Delivery[], redrive: boolean) {
+    const bridged = bridgedEntries(run.intent.data.claims, resolvedEntries(run.intent) ?? [])
+    if (redrive) {
+      const waiting = bridged.filter((e) => !run.reported(e.handle, ['committed']))
+      calls.push({ order: 'parallel', calls: await this.commandCalls(run, waiting, 'commit', run.snapshot('committed', true)) })
+    }
+    if (bridged.every((e) => run.reported(e.handle, ['committed']))) await this.complete(run, calls, bridged)
+  }
+
+  private async complete(run: Run, calls: Delivery[], bridged: Entry[]) {
+    run.trail.push(run.sign({ moment: run.now(), status: 'completed' }))
+    run.stage('completed', true)
+    run.intent.meta.status = 'completed'
+    if (bridged.length) calls.push({ order: 'parallel', calls: await this.statusCalls(run, bridged, run.snapshot('completed', true)) })
+  }
+
+  // failed → aborted: bridges are told to abort (every bridged entry, the failing one
+  // too, in reverse order) and the intent is rejected once each has reported `aborted`;
+  // then the core releases its reservations.
+  private async abort(run: Run, calls: Delivery[], bridged: Entry[], reason: string, detail: string) {
+    run.trail.push(run.sign({ detail, moment: run.now(), reason, status: 'failed' }))
+    run.stage('failed')
+    run.trail.push(run.sign({ moment: run.now(), status: 'aborted' }))
+    run.stage('aborted')
+    run.intent.meta.status = 'aborted'
+    if (bridged.length) calls.push({ order: 'sequential', calls: await this.commandCalls(run, [...bridged].reverse(), 'abort', run.snapshot('aborted')) })
+    else await this.rejectAborted(run, calls, bridged)
+  }
+
+  private async advanceAborted(run: Run, calls: Delivery[], redrive: boolean) {
+    const bridged = bridgedEntries(run.intent.data.claims, resolvedEntries(run.intent) ?? [])
+    if (redrive) {
+      const waiting = bridged.filter((e) => !run.reported(e.handle, ['aborted'])).reverse()
+      calls.push({ order: 'sequential', calls: await this.commandCalls(run, waiting, 'abort', run.snapshot('aborted')) })
+    }
+    if (bridged.every((e) => run.reported(e.handle, ['aborted']))) await this.rejectAborted(run, calls, bridged)
+  }
+
+  private async rejectAborted(run: Run, calls: Delivery[], bridged: Entry[]) {
+    const entries = resolvedEntries(run.intent) ?? []
+    if (run.corePrepared()) {
+      const ta = run.now()
+      for (const e of entries) run.trail.push(serverProof(run.intent.hash, { handle: e.handle, moment: ta, schema: e.schema, status: 'aborted' }, run.core, 'core'))
+      for (const e of entries.filter((e) => e.schema === 'debit')) {
+        await run.books.move(e.wallet, e.symbol, 'reserved', -e.amount, ta, true)
+        await run.books.move(e.wallet, e.symbol, 'available', +e.amount, ta, true)
+      }
+    }
+    run.trail.push(run.sign({ moment: run.now(), status: 'rejected' }))
+    run.stage('rejected')
+    run.intent.meta.status = 'rejected'
+    if (bridged.length) calls.push({ order: 'parallel', calls: await this.statusCalls(run, bridged, run.snapshot('rejected')) })
+  }
+
+  // ---- calls to bridges -----------------------------------------------------------
+
+  private async server(tx: Store, ledger: string, bridge: string) {
+    return (await tx.get(ledger, 'bridges', bridge))?.data.config?.server as string | undefined
+  }
+
+  private signed(run: Run, data: unknown) {
+    const hash = hashData(data)
+    return { hash, data, meta: { proofs: [serverProof(hash, { moment: run.now() }, run.system, 'system')] } }
+  }
+
+  // Prepare: the entry as a signed record, debits before credits. Observed: both
+  // `source` and `target` of the claim, the claim index as `inputs`, and a `$ben` luid
+  // that stays the same when the call is retried.
+  private async entryCalls(run: Run, entries: Entry[], intent: unknown): Promise<BridgeCall[]> {
+    const out: BridgeCall[] = []
+    const claims: any[] = run.intent.data.claims
+    for (const e of [...entries].sort((a, b) => (a.schema === b.schema ? 0 : a.schema === 'debit' ? -1 : 1))) {
+      const server = await this.server(run.tx, run.ledger, e.bridge!)
+      if (!server) continue
+      const c = claims[e.input]
+      const data = {
+        handle: e.handle,
+        luid: entryLuid(run.ledger, e.handle),
+        schema: e.schema,
+        ...(c.source ? { source: c.source } : {}),
+        ...(c.target ? { target: c.target } : {}),
+        symbol: c.symbol,
+        amount: e.amount,
+        inputs: [e.input],
+        intent,
+      }
+      out.push({ bridge: e.bridge!, server, method: 'POST', path: `/${e.schema}s`, body: this.signed(run, data) })
+    }
+    return out
+  }
+
+  private async commandCalls(run: Run, entries: Entry[], action: 'commit' | 'abort', intent: unknown): Promise<BridgeCall[]> {
+    const out: BridgeCall[] = []
+    for (const e of entries) {
+      const server = await this.server(run.tx, run.ledger, e.bridge!)
+      if (server) out.push({ bridge: e.bridge!, server, method: 'POST', path: `/${e.schema}s/${e.handle}/${action}`, body: this.signed(run, { handle: e.handle, action, intent }) })
+    }
+    return out
+  }
+
+  // Status notifications go once to each bridge of the intent: on `prepared` and on the
+  // final status (recorded; a rejected intent that never prepared gets only the last).
+  private async statusCalls(run: Run, entries: Entry[], intent: any): Promise<BridgeCall[]> {
+    const out: BridgeCall[] = []
+    for (const bridge of new Set(entries.map((e) => e.bridge!))) {
+      const server = await this.server(run.tx, run.ledger, bridge)
+      if (server) out.push({ bridge, server, method: 'PUT', path: `/intents/${encodeURIComponent(run.intent.data.handle)}`, body: intent })
+    }
+    return out
+  }
+
+  // After the transaction: the calls go out in the background, in the order asked for.
+  private async deliver(deliveries: Delivery[]) {
+    for (const d of deliveries) {
+      if (d.order === 'sequential') void this.bridges.inOrder(d.calls)
+      else for (const c of d.calls) void this.bridges.deliver(c)
+    }
   }
 
   /** Rejects pending intents older than their ledger's expiry threshold. */
@@ -184,21 +353,24 @@ export class Core {
       for (const i of await this.store.list(l.data.handle, 'intents')) {
         const created = createdMoment(i)
         if (i.meta.status !== 'pending' || created === undefined || nowMs - created <= minutes * this.minuteMs) continue
-        await this.store.transaction(l.data.handle, async (tx) => {
-          const intent = await tx.get(l.data.handle, 'intents', i.data.handle)
-          if (!intent || intent.meta.status !== 'pending') return
-          const system = (await tx.getKey(l.data.handle, 'system'))!
-          const now = clock()
-          const sign = (custom: Record<string, unknown>) => serverProof(intent.hash, custom, system, 'system')
-          const trail: Proof[] = []
-          const stages: Stage[] = []
-          const stage = (status: string) => stages.push({ proofs: trail.length, status, routed: false })
-          reject(trail, stage, sign, now, 'core.intent-expired', `Intent ${intent.data.handle} expired`)
-          intent.meta.status = 'rejected'
-          await save(tx, l.data.handle, intent, trail, stages)
-        })
+        await this.expireOne(l.data.handle, i.data.handle)
       }
     }
+  }
+
+  // An expired intent is aborted like one a bridge refused: bridges it involves are
+  // told to abort, reservations are released, and it ends `rejected` (access4).
+  private async expireOne(ledger: string, handle: string) {
+    const calls: Delivery[] = []
+    await this.store.transaction(ledger, async (tx) => {
+      const intent = await tx.get(ledger, 'intents', handle)
+      if (!intent || intent.meta.status !== 'pending') return
+      const run = new Run(tx, ledger, intent, (await tx.getKey(ledger, 'system'))!, (await tx.getKey(ledger, 'core'))!)
+      const bridged = run.corePrepared() ? bridgedEntries(intent.data.claims, resolvedEntries(intent) ?? []) : []
+      await this.abort(run, calls, bridged, 'core.intent-expired', `Intent ${intent.data.handle} expired`)
+      await run.finish()
+    })
+    await this.deliver(calls)
   }
 
   /** Runs `expire` periodically; the reference's job is not immediate either. */
@@ -234,9 +406,12 @@ export class Core {
     const claims: any[] = intent.data.claims
     for (const [i, c] of claims.entries()) {
       const sides = c.action === 'limit' ? ([['Wallet', c.wallet]] as const) : ([['Source', c.source], ['Target', c.target]] as const)
+      const bridgeOf: Record<string, string | undefined> = {}
       for (const [side, ref] of sides) {
         if (!ref) continue
-        if (!(await tx.get(ledger, 'wallets', ref.handle)))
+        const wallet = await tx.get(ledger, 'wallets', ref.handle)
+        bridgeOf[ref.handle] = wallet?.data.bridge
+        if (!wallet)
           throw new Rejection(
             'core.routing-failed',
             `${side} wallet not resolved for the address ${ref.handle} - does not resolve to any existing wallet. Parent wallet: ${ref.handle}`,
@@ -250,8 +425,9 @@ export class Core {
         continue
       }
       if (earlier) continue
-      if (c.source) entries.push({ schema: 'debit', handle: `deb_${entryId()}`, wallet: c.source.handle, symbol, amount: c.amount, input: i })
-      if (c.target) entries.push({ schema: 'credit', handle: `cre_${entryId()}`, wallet: c.target.handle, symbol, amount: c.amount, input: i })
+      const withBridge = (w: string) => (bridgeOf[w] ? { bridge: bridgeOf[w] } : {})
+      if (c.source) entries.push({ schema: 'debit', handle: `deb_${entryId()}`, wallet: c.source.handle, symbol, amount: c.amount, input: i, ...withBridge(c.source.handle) })
+      if (c.target) entries.push({ schema: 'credit', handle: `cre_${entryId()}`, wallet: c.target.handle, symbol, amount: c.amount, input: i, ...withBridge(c.target.handle) })
     }
     return { entries: earlier ?? entries, limits }
   }
@@ -330,6 +506,70 @@ async function save(tx: Store, ledger: string, intent: StoredRecord, trail: Proo
   await tx.update(ledger, 'intents', intent)
 }
 
+// Entries a bridge takes part in: those of transfers whose wallet has a bridge. An
+// issue or destroy records the bridge but does not call it (resolution-proofs;
+// recorded: an issue to a bridged wallet completed without a call).
+function bridgedEntries(claims: any[], entries: Entry[]) {
+  return entries.filter((e) => e.bridge && claims[e.input]?.action === 'transfer')
+}
+
+// The `$ben` luid an entry is sent with; derived, so a retry after a restart repeats it.
+const LUID_ALPHABET = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz'
+function entryLuid(ledger: string, handle: string) {
+  const bytes = createHash('sha256').update(`${ledger}\u0000${handle}`).digest()
+  let id = '-'
+  for (let i = 0; i < 16; i++) id += LUID_ALPHABET[bytes[i] & 63]
+  return `$ben.${id}`
+}
+
+/** One pass over an intent inside a transaction: what it adds, and how to save it. */
+class Run {
+  readonly now = clock()
+  readonly trail: Proof[] = []
+  readonly stages: Stage[] = []
+  readonly books: Books
+  readonly limitWrites: LimitRow[] = []
+  readonly sign = (custom: Record<string, unknown>) => serverProof(this.intent.hash, custom, this.system, 'system')
+  readonly stage = (status: string, routed = false) => void this.stages.push({ proofs: this.trail.length, status, routed })
+
+  constructor(
+    readonly tx: Store,
+    readonly ledger: string,
+    readonly intent: StoredRecord,
+    readonly system: KeyPair,
+    readonly core: KeyPair,
+  ) {
+    this.books = new Books(tx, ledger)
+  }
+
+  private get proofs(): Proof[] {
+    return [...this.intent.meta.proofs, ...this.trail]
+  }
+
+  corePrepared() {
+    return this.proofs.some((p) => p.signer === 'core' && p.custom?.status === 'prepared')
+  }
+
+  /** Has a participant other than the ledger reported one of these statuses for an entry? */
+  reported(entry: string, statuses: string[]) {
+    return this.proofs.some((p) => p.custom?.handle === entry && !SERVER_SIGNERS.has(p.signer ?? '') && p.origin && statuses.includes(p.custom.status as string))
+  }
+
+  /** The intent as bridges see it now: without `domains` (recorded). */
+  snapshot(status: string, routed = false) {
+    const { domains: _d, routed: _r, proofs: _p, status: _s, ...meta } = this.intent.meta
+    return { hash: this.intent.hash, data: this.intent.data, luid: this.intent.luid, meta: { proofs: this.proofs, status, ...meta, ...(routed ? { routed: true } : {}) } }
+  }
+
+  // Nothing is written until the pass is over, so a rejection leaves no trace in the
+  // books and the memory store needs no rollback.
+  async finish() {
+    for (const row of this.books.changed()) await this.tx.putBalance(this.ledger, row)
+    for (const row of this.limitWrites) await this.tx.putLimit(this.ledger, row)
+    await save(this.tx, this.ledger, this.intent, this.trail, this.stages)
+  }
+}
+
 /** Permissions the claims need (about-authorization, access actions). */
 function needsOf(claims: any[]): Need[] {
   const needs: Need[] = []
@@ -370,7 +610,7 @@ async function signersOf(tx: Store, ledger: string, intent: StoredRecord): Promi
 function resolvedEntries(intent: StoredRecord): Entry[] | undefined {
   const resolved = (intent.meta.proofs as Proof[]).filter((p) => p.signer === 'system' && p.custom?.status === 'resolved')
   if (!resolved.length) return undefined
-  return resolved.map(({ custom: c }: any) => ({ schema: c.schema, handle: c.handle, wallet: c.wallet, symbol: c.symbol, amount: c.amount, input: c.inputs[0] }))
+  return resolved.map(({ custom: c }: any) => ({ schema: c.schema, handle: c.handle, wallet: c.wallet, symbol: c.symbol, amount: c.amount, input: c.inputs[0], ...(c.bridge ? { bridge: c.bridge } : {}) }))
 }
 
 /** When the client created the intent: the moment of its `created` proof. */

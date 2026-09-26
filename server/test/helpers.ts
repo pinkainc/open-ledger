@@ -23,6 +23,7 @@ export async function startServer(store: Store & { close?: () => Promise<void> }
     core,
     base: `http://127.0.0.1:${port}/api/v2`,
     close: async () => {
+      core.close()
       await app.close()
       await store.close?.()
     },

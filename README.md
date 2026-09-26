@@ -33,8 +33,10 @@ and why; the comparator reports those exchanges instead of failing on them. So f
 one (an intent breaking `maxBalance` stays `committed` forever on the reference).
 
 Documentation (the mirror in `../docs.minka.io`) is the specification for what the
-sandbox cannot show from outside: 2PC with banks, event delivery, expiry. Where docs
-and sandbox disagree, the sandbox wins.
+sandbox cannot show from outside. Where docs and sandbox disagree, the sandbox wins —
+and more can be shown than it seems: for 2PC the scenario runs its own bridge, which
+the sandbox reaches through a public quick tunnel, so the calls the reference makes to
+a bank are recorded too (`fixtures/*.bridge.jsonl`).
 
 ## Status
 
@@ -45,7 +47,8 @@ and sandbox disagree, the sandbox wins.
 | **L3** | limits (`minBalance`, `maxBalance`), pagination, reads by luid | 13 of 146 | **39/41** match, 2 deliberately differ |
 | **L4** (part) | record lifecycle: update, status proofs, changes, drop, access check; signers, the ledger record, system policies | see `COVERAGE.md` | records **23/23**, records2 **52/52** |
 | **L4** access | rule scope, ledger gate, matchers, circles, status policies, token impersonation, claim permissions | see `COVERAGE.md` | access **35/35**, access2 **15/15**, access3 **16/16**, access4 **14/14** |
-| **L7** (part) | intent expiry | — | covered by access4 |
+| **L5** | 2PC with one bridge: prepare/commit/abort calls, status notifications, retries, restart | bridges 8/14 | **21/21** client exchanges, **24/24** bridge calls |
+| **L7** (part) | intent expiry (also of intents waiting for a bridge) | — | covered by access4 |
 
 (L2, multi-claim atomicity, is covered by the L1 and L3 scenarios.)
 

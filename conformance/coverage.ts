@@ -26,7 +26,8 @@ await app.ready()
 const confirmed = new Set<string>()
 const fixtures = new URL('./fixtures/', import.meta.url)
 const specShapes = Object.keys(spec.paths).map((p) => ({ p, re: new RegExp('^' + shape(p).replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\\\{\\\}|\{\}/g, '[^/]+') + '$') }))
-for (const f of readdirSync(fixtures).filter((f) => f.endsWith('.jsonl'))) {
+// Bridge logs (*.bridge.jsonl) hold calls to bridges, not ledger routes.
+for (const f of readdirSync(fixtures).filter((f) => f.endsWith('.reference.jsonl'))) {
   for (const line of readFileSync(new URL(f, fixtures), 'utf8').trim().split('\n')) {
     const { req } = JSON.parse(line)
     const path = decodeURIComponent(req.url.replace(/^\/api\/v2/, '').split('?')[0])

@@ -12,6 +12,7 @@ LEVEL=${2:?level, e.g. l0}
 REFERENCE=${REFERENCE:-https://ldg-stg.one}
 PROXY_PORT=4610
 SERVER_PORT=4620
+BRIDGE_PORT=4630
 RUN=${RUN:-$(date -u +%Y%m%d%H%M%S | tr -d '\n')$(printf '%s' $RANDOM | tail -c 3)}
 mkdir -p .rec conformance/fixtures
 
@@ -20,7 +21,7 @@ pids=()
 cleanup() {
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
   for _ in $(seq 50); do
-    nc -z 127.0.0.1 $PROXY_PORT 2>/dev/null || nc -z 127.0.0.1 $SERVER_PORT 2>/dev/null || return 0
+    nc -z 127.0.0.1 $PROXY_PORT 2>/dev/null || nc -z 127.0.0.1 $SERVER_PORT 2>/dev/null || nc -z 127.0.0.1 $BRIDGE_PORT 2>/dev/null || return 0
     sleep 0.1
   done
 }
@@ -28,7 +29,7 @@ trap cleanup EXIT
 
 # Record and check share these ports; a second run would record through the first
 # one's proxy and mix two scenarios into one fixture (it happened to access4).
-for port in $PROXY_PORT $SERVER_PORT; do
+for port in $PROXY_PORT $SERVER_PORT $BRIDGE_PORT; do
   if nc -z 127.0.0.1 $port 2>/dev/null; then echo "port $port is in use: another conformance run?" >&2; exit 1; fi
 done
 
@@ -51,6 +52,28 @@ TARGET=$target PORT=$PROXY_PORT OUT=$out npx tsx conformance/proxy.ts 2>.rec/pro
 pids+=($!)
 wait_port $PROXY_PORT
 
+# A scenario that says `needs-bridge` runs a bridge (conformance/bridge.ts) on
+# BRIDGE_PORT. Our server reaches it directly; the sandbox through a public quick
+# tunnel, which exposes nothing but that bridge for the length of the run.
+BRIDGE_URL=http://127.0.0.1:$BRIDGE_PORT/v2
+if grep -q needs-bridge conformance/scenarios/$LEVEL.ts; then
+  if [ "$MODE" = record ]; then
+    bridge_out=conformance/fixtures/$LEVEL.bridge.jsonl
+    cloudflared tunnel --no-autoupdate --url http://127.0.0.1:$BRIDGE_PORT 2>.rec/tunnel.log &
+    pids+=($!)
+    for _ in $(seq 60); do url=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' .rec/tunnel.log | head -1 || true); [ -n "$url" ] && break; sleep 0.5; done
+    [ -n "$url" ] || { echo "tunnel did not come up" >&2; exit 1; }
+    # The edge answers 502 until the bridge listens, which proves the tunnel is routed.
+    for _ in $(seq 60); do code=$(curl -s -o /dev/null -w '%{http_code}' "$url/" || true); [ "$code" != 000 ] && [ "$code" != 530 ] && break; sleep 1; done
+    BRIDGE_URL=$url/v2
+  else
+    bridge_out=.rec/$LEVEL.bridge.candidate.jsonl
+  fi
+  rm -f "$bridge_out"
+  export BRIDGE_OUT=$bridge_out BRIDGE_PORT
+fi
+export BRIDGE_URL
+
 echo "==> $LEVEL against $target (run $RUN)"
 # DIRECT bypasses the proxy, for polling whose count would otherwise depend on timing.
 RUN=$RUN BASE=http://127.0.0.1:$PROXY_PORT/api/v2 DIRECT=$target/api/v2 npx tsx conformance/scenarios/$LEVEL.ts
@@ -62,4 +85,8 @@ fi
 if [ "$MODE" = check ]; then
   echo "==> compare"
   npx tsx conformance/compare.ts conformance/fixtures/$LEVEL.reference.jsonl "$out"
+  if [ -f conformance/fixtures/$LEVEL.bridge.jsonl ]; then
+    echo "==> compare bridge calls"
+    npx tsx conformance/compare.ts conformance/fixtures/$LEVEL.bridge.jsonl .rec/$LEVEL.bridge.candidate.jsonl
+  fi
 fi

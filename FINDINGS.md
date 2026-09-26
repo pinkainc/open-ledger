@@ -4,6 +4,49 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — L5: two-phase commit with a bridge
+
+Recorded with `conformance/scenarios/l5.ts`: a bridge (`conformance/bridge.ts`) reached
+by the sandbox through a cloudflared quick tunnel, recording every call it received
+(`fixtures/l5.bridge.jsonl`, 24 lines) next to the client's exchanges (21). All
+reproduced.
+
+- **A bridge must name a schema.** Every ledger has one bridge schema, `rest`; without
+  `schema` the create is 422 `record.schema-invalid`, `There are schemas defined for
+  record of type bridge, you must specify at least one.` Every ledger has 12 system
+  schemas (policy status/layout/access/labels/schedule/processing/authentication/dtc,
+  bridge rest, signer-factor oauth-client-credentials/key-pair/otp) —
+  `docs/reference-system-schemas.json`. A wallet naming a missing bridge: 
+  `record.relation-not-found`, `Referenced Bridge bank not found.` (status per the
+  error reference: 422).
+- **Bridged wallets keep ledger balances.** `acc` (bridge `bank`) ended with native
+  `available` 58 and a `reserved` row: the core prepares, reserves and clears every
+  entry as for any wallet; the bridge takes part *in addition* for its entries.
+- **Resolution** adds `bridge: <handle>` to the resolved proof of a bridged entry.
+- **Only transfers call the bridge.** An issue to `acc` records `bridge` and completes
+  like any issue, with no call.
+- **Calls** (no auth headers with `secure: []`; axios, tracing headers only):
+  prepare `POST {server}/credits|debits` with `{hash, data: {handle, luid: "$ben.…",
+  schema, source, target, symbol, amount, inputs, intent}, meta: {proofs: [system
+  {moment}]}}` — the intent as it was right after resolution (5 proofs, before the
+  core's `prepared`), **without `meta.domains`**; commit/abort
+  `POST {server}/<schema>s/<entry>/commit|abort` with `{handle, action, intent}`, the
+  intent at `committed` (10 proofs, `routed`) or `aborted`; status
+  `PUT {server}/intents/<handle>` with the intent itself, on `prepared` and on the final
+  status (a rejected intent that never prepared gets only the final one). Every body is
+  hashed and signed by `system` like a record.
+- **Success trail:** resolved… → core prepared per entry → bank prepared → system
+  prepared → system committed awaiting-clearance → (commit call) → core cleared per
+  entry → bank committed → system completed.
+- **Failure trail:** bank failed `{reason: bridge.…, detail}` → system failed
+  `{reason: core.bridge-prepare-failed, detail: "Bridge(s) failed to process intent:
+  bank"}` → system aborted → (abort call, also to the failing entry) → bank aborted →
+  core aborted per entry (reservation released) → system rejected.
+- **Retry:** a prepare answered 500 was sent again with the same body (`$ben` luid and
+  hash) and accepted.
+- **Reports** arrive as proofs on `POST /intents/{id}/proofs` from the bridge's key
+  (a registered signer, so annotated `signer: bank`); no impersonation proof is added.
+
 ## 2026-09-26 — Operations confirmed by `records2`
 
 Recorded with `conformance/scenarios/records2.ts` (52 exchanges, all reproduced).

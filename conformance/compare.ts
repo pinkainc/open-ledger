@@ -13,7 +13,7 @@
 //   tsx conformance/compare.ts <reference.jsonl> <candidate.jsonl>
 import { readFileSync } from 'node:fs'
 
-type Exchange = { seq: number; req: any; res: { status: number; headers: Record<string, string>; body: any } }
+type Exchange = { seq: number; req: any; res: { status: number; headers: Record<string, string>; body: any }; proof?: any; answer?: number; error?: unknown }
 
 const load = (f: string): Exchange[] =>
   readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
@@ -39,9 +39,12 @@ function normaliser() {
     if (/^[A-Za-z0-9+/]{43}=$/.test(v)) return token('key', v)
     // A token subject naming a key, as `bearer.sub` carries it on impersonated proofs.
     if (/^signer:[A-Za-z0-9+/]{43}=$/.test(v)) return `signer:${token('key', v.slice(7))}`
+    // The bridge's address: a quick tunnel for the reference, localhost for us.
+    if (/^(https:\/\/[a-z0-9-]+\.trycloudflare\.com|http:\/\/127\.0\.0\.1:\d+)\/v2$/.test(v)) return '<bridge-url>'
     const lh = v.match(ledgerHandle)
-    if (lh) return v.replace(lh[0], '<ledger>')
-    return v
+    if (lh) v = v.replace(lh[0], '<ledger>')
+    // Entry handles inside paths, e.g. /v2/credits/cre_…/commit.
+    return v.replace(/\b(deb|cre)_[A-Za-z0-9]{17}\b/g, (e) => token(`entry:${e.slice(0, 3)}`, e))
   }
   const walk = (x: any): any => {
     if (typeof x === 'string') return value(x)
@@ -76,7 +79,35 @@ function diff(a: any, b: any, path = ''): string[] {
 const show = (v: any) => JSON.stringify(v)?.slice(0, 80)
 
 const [refFile, candFile] = process.argv.slice(2)
-const ref = load(refFile), cand = load(candFile)
+
+// A bridge log interleaves by timing: a status notification may overtake a commit call,
+// and a late notification may land among the next intent's calls. Compared in a
+// canonical order instead: by intent (first appearance), then by phase.
+function canonical(log: Exchange[]): Exchange[] {
+  const intentOfEntry = new Map<string, string>()
+  const intentOf = (x: any): string => {
+    if (x.proof) return intentOfEntry.get(x.proof.handle) ?? ''
+    const d = x.req.body?.data
+    const handle = d?.intent?.data?.handle ?? (x.req.method === 'PUT' ? d?.handle : '')
+    if (d?.handle && d?.intent) intentOfEntry.set(d.handle, handle)
+    return handle
+  }
+  const rank = (x: any): number => {
+    if (x.proof) return ['prepared', 'failed'].includes(x.proof.status) ? 1 : 4
+    if (x.req.method === 'PUT') return x.req.body?.meta?.status === 'prepared' ? 2 : 5
+    return x.req.body?.data?.action ? 3 : 0
+  }
+  const order = new Map<string, number>()
+  const keyed = log.map((x, i) => {
+    const intent = intentOf(x)
+    if (!order.has(intent)) order.set(intent, order.size)
+    return { x, i, k: [order.get(intent)!, rank(x)] }
+  })
+  return keyed.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.i - b.i).map((e) => e.x)
+}
+const bridgeFile = refFile.endsWith('.bridge.jsonl')
+const ref = bridgeFile ? canonical(load(refFile)) : load(refFile)
+const cand = bridgeFile ? canonical(load(candFile)) : load(candFile)
 
 // Deliberate divergences: exchanges where we answer differently on purpose, each with
 // the reason. They are reported, never counted as passes, and must still be listed
@@ -89,17 +120,24 @@ const deliberate = new Map<number, string>()
 for (const d of divergences) if (d.fixture === fixtureName) for (const i of d.exchanges) deliberate.set(i, d.what)
 const nr = normaliser(), nc = normaliser()
 
+// A bridge log (`*.bridge.jsonl`) holds the calls a ledger made to the bridge and the
+// proofs the bridge sent back; what is compared there is the ledger's request.
+const bridgeLog = bridgeFile
+const subject = (x: any) =>
+  !bridgeLog ? x.res.body : x.proof ? { proof: x.proof, answer: x.answer, error: x.error } : { method: x.req.method, url: x.req.url, body: x.req.body, status: x.res.status }
+const title = (x: any, n: (v: any) => any) => (x.proof ? `proof ${x.proof.status}` : `${x.req.method} ${n(x.req.url)}`)
+
 let pass = 0
 let diverged = 0
 const n = Math.max(ref.length, cand.length)
 for (let i = 0; i < n; i++) {
   const r = ref[i], c = cand[i]
-  const label = r ? `${r.req.method} ${nr(r.req.url)}` : `${c.req.method} ${nc(c.req.url)}`
+  const label = r ? title(r, nr) : title(c, nc)
   if (!r || !c) {
     console.log(`FAIL  #${i} ${label}: only in ${r ? 'reference' : 'candidate'}`)
     continue
   }
-  const rb = nr(r.res.body), cb = nc(c.res.body)
+  const rb = nr(subject(r)), cb = nc(subject(c))
   // `detail` is human text: a wording difference is reported but does not fail.
   const soft: string[] = []
   // Keys and hashes embedded in the text differ per run; compare the wording around them.
@@ -112,18 +150,18 @@ for (let i = 0; i < n; i++) {
     delete cb.data.detail
   }
   const hard = [
-    ...(r.res.status !== c.res.status ? [`status: ${r.res.status} ≠ ${c.res.status}`] : []),
+    ...(!bridgeLog && r.res.status !== c.res.status ? [`status: ${r.res.status} ≠ ${c.res.status}`] : []),
     ...diff(rb, cb),
   ]
   if (hard.length && deliberate.has(i)) {
     diverged++
     console.log(`diff  #${i} ${label} — deliberate: ${deliberate.get(i)}`)
   } else if (hard.length) {
-    console.log(`FAIL  #${i} ${label} (${r.res.status})`)
+    console.log(`FAIL  #${i} ${label} (${r.res?.status ?? r.answer})`)
     for (const d of hard) console.log(`        ${d}`)
   } else {
     pass++
-    console.log(`pass  #${i} ${label} (${r.res.status})`)
+    console.log(`pass  #${i} ${label} (${r.res?.status ?? r.answer})`)
   }
   for (const s of soft) console.log(`        ~ ${s}`)
 }

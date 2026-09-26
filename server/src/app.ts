@@ -35,13 +35,14 @@ const KINDS = {
   circles: { luid: '$crc', name: 'Circle', record: 'circle' },
   policies: { luid: '$plc', name: 'Policy', record: 'policy' },
   'circle-signers': { luid: '$csn', name: 'Circle signer', record: 'circle-signer' },
+  bridges: { luid: '$brg', name: 'Bridge', record: 'bridge' },
 } as const
 type Kind = keyof typeof KINDS
 
 /** Kinds with the full record surface under `/api/v2/<kind>`. */
-const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies'] as const
+const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges'] as const
 /** Kinds a client may update and sign after creation. Intents are immutable. */
-const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies'] as const
+const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges'] as const
 
 const PAGE_LIMIT = 20
 // Any caller may reach the server, read a ledger record, and (signed) create a ledger.
@@ -396,6 +397,18 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     reply.status(201).send(record)
   })
 
+  // References between records and what a record of a kind must name (recorded, l5):
+  // a bridge must choose one of the ledger's bridge schemas (`rest`), and a wallet's
+  // `bridge` must exist.
+  async function related(kind: Kind, scope: string, data: any) {
+    if (kind === 'bridges') {
+      if (!data.schema) throw new LedgerError(422, 'record.schema-invalid', 'There are schemas defined for record of type bridge, you must specify at least one.')
+      if (data.schema !== 'rest') throw new LedgerError(422, 'record.relation-not-found', `Referenced Schema ${data.schema} not found.`)
+    }
+    if (kind === 'wallets' && data.bridge && !(await store.get(scope, 'bridges', data.bridge)))
+      throw new LedgerError(422, 'record.relation-not-found', `Referenced Bridge ${data.bridge} not found.`)
+  }
+
   // A record a route addresses: `/ledger` is the ledger record itself, stored at the
   // server scope; `/<kind>/:id` is a record inside the ledger.
   type Target = { ledger: StoredRecord; found: StoredRecord; scope: string; kind: Kind }
@@ -450,6 +463,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const keys = await impersonate(body, t.ledger.data.handle, who)
     await acl.authorize('update', KINDS[t.kind].record, { who, proofs: keys }, { ledger: t.ledger, record: t.found })
     if (body.data.parent !== t.found.hash) throw errors.parentHashInvalid()
+    if (t.kind !== 'ledgers') await related(t.kind, t.scope, body.data)
     const proofs = await annotate(t.ledger.data.handle, verifyProofs(body))
     const updated: StoredRecord = {
       hash: body.hash,
@@ -483,10 +497,18 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     // Intents are also written by the core; append under the ledger's lock.
     return store.transaction(t.ledger.data.handle, async (tx) => {
       const current = (await tx.get(t.scope, t.kind, keyOf(t.found))) ?? t.found
-      await applyStatus(tx, acl, t.ledger, record, current, stored)
+      // An intent's status belongs to its processing: a participant's report (which
+      // carries a status) is appended and read by the core, never applied here. A late
+      // duplicate `committed` must not move a completed intent back.
+      if (t.kind === 'intents') current.meta.proofs.push(stored)
+      else await applyStatus(tx, acl, t.ledger, record, current, stored)
       await tx.update(t.scope, t.kind, current)
       const n = (await tx.changes(t.scope, t.kind, keyOf(current))).length + 1
       await tx.addChange(t.scope, t.kind, keyOf(current), snapshot(current, n, 'update', now()))
+      return current
+    }).then((current) => {
+      // A participant reporting on an entry (`custom.handle`) may let the intent move on.
+      if (t.kind === 'intents' && typeof stored.custom?.handle === 'string') core.schedule(t.scope, current.data.handle)
       return current
     })
   }
@@ -513,6 +535,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       const ledger = await hostedLedger(req)
       const keys = await impersonate(req.body, ledger.data.handle, who, 'created')
       await acl.authorize('create', record, { who, proofs: keys }, { ledger })
+      await related(kind, ledger.data.handle, (req.body as any).data)
       reply.status(201).send(await create(kind, ledger.data.handle, req.ledgerKey!, req))
     })
 

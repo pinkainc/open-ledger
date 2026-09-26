@@ -59,6 +59,16 @@ const DATA = {
   policies: { allOf: [{ type: 'object', required: ['handle', 'schema', 'values'] }, baseData] },
   'circle-signers': { type: 'object', required: ['circle', 'signer'] },
   drop: { type: 'object', required: ['parent'] },
+  bridges: {
+    allOf: [
+      {
+        type: 'object',
+        required: ['config', 'secure'],
+        properties: { config: { type: 'object', required: ['server'], properties: { server: { type: 'string' } } }, secure: { type: 'array' } },
+      },
+      baseData,
+    ],
+  },
 } as const
 
 export type ValidatedKind = keyof typeof DATA

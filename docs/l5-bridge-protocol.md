@@ -2,8 +2,7 @@
 
 What the ledger must do to run two-phase commit with an external participant, taken
 from the docs mirror and the `@minka/bridge-sdk` 2.18.0 source (`npm pack`, not in the
-mirror). **Not recorded yet**: everything here is documentation until a sandbox
-recording through a tunnel confirms it. Citations: `AB` about-bridges, `BB`
+mirror). **Recorded since** (FINDINGS, "L5"): what the recording settled is marked below. Citations: `AB` about-bridges, `BB`
 build-a-bridge, `AI` about-intents, `RP` resolution-proofs, `BR` balance-reservations,
 `AW` about-wallets (all under `docs.minka.io/docs/ledger/`), `NS`
 solutions/bank-integration-no-sdk, `OA` `_raw/openapi.yaml`, `SDK` bridge-sdk source.
@@ -88,11 +87,14 @@ call, JWT `iss: <bridge handle>`, `sub: "bridge:<handle>"`, `aud: <ledger>`.
 - Bridged wallets: the bridge holds funds in its core; whether the ledger also reserves
   is not stated (BR:74-78).
 
-## Open (answer by recording)
+## Open questions, and what the l5 recording answered
 
-1. Headers the ledger sends to a bridge.
-2. Abort order: reverse sequence or parallel.
-3. Entry `luid` (the SDK reads `data.luid`; no sample has one; prefix unknown).
-4. `source: {}` on credit entries (NS:410) vs. target only (AI:124).
-5. Prepare timeout; which intent statuses allow abort.
-6. Whether bridged wallets get ledger balance rows at all.
+1. Headers the ledger sends to a bridge — **none beyond content type and tracing** with
+   `secure: []`.
+2. Abort order: reverse sequence or parallel — open (one bridged entry recorded).
+3. Entry `luid` — **`$ben.…`, stable across a retry**.
+4. `source` on credit entries — **both `source` and `target` of the claim are sent**.
+5. Prepare timeout; which intent statuses allow abort — open.
+6. Whether bridged wallets get ledger balance rows — **yes: the core prepares, reserves
+   and clears them like any wallet**.
+7. Issue/destroy — **an issue to a bridged wallet does not call the bridge**.

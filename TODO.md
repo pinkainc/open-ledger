@@ -90,6 +90,23 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       not (records2). Try a proof with `custom.status` (`pending`? `created`?) in a recording
 - [ ] `GET /ledgers` — lists every ledger on the sandbox; needs a comparison that ignores others
 ## L5 — 2PC with one external participant (bridge), idempotency by handle
+
+- [x] Recording through a tunnel: `conformance/bridge.ts`, `needs-bridge` in run.sh, bridge
+      logs compared in a canonical order (by intent, then phase)
+- [x] Bridges (`$brg`, schema `rest` required), wallet `bridge` reference
+- [x] Core as a state machine over the trail: prepare calls (debits first), wait for reports,
+      commit / abort (reverse), status notifications, core aborted + release on rejection
+- [x] Retries (1 s, ×1.2, ≤ 1 h; 501 stops), resume re-sends calls in flight (same `$ben` luid)
+- [x] Invariant: a report delivered twice has the effect of one (`l5.test.ts`); intent status is
+      never set by a proof on the intent (found by that test)
+- [x] Expiry of an intent waiting for a bridge aborts the bridge and releases the reservation
+- [ ] `secure` rules: `header` and `oauth2` (needs secret references → a secret store)
+- [ ] `traits` (a bridge without `statuses` gets no PUT; filters)
+- [ ] (?) Debit and credit on the same bridge in one intent — order, grouping (`claims.groupBy`)
+- [ ] (?) What the ledger does when a commit report never comes (commit cannot fail)
+- [ ] Bridge proof authorisation: today any signer allowed to sign the intent may report
+- [ ] Routes (`wallet.routes`), address resolution `schema:handle@parent`
+- [ ] `/bridges/{id}/events` (deliveries) — L8
 ## L6 — N participants, ordered prepare/commit/abort, timeouts, crashes
 ## L7 — expiry and thread abort
 
