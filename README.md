@@ -30,7 +30,8 @@ official SDK ──► recording proxy ──► open-ledger             → .re
 Where the reference is plainly defective we answer differently on purpose, and say so:
 `conformance/divergences.json` lists each case with what the reference does, what we do
 and why; the comparator reports those exchanges instead of failing on them. So far:
-one (an intent breaking `maxBalance` stays `committed` forever on the reference).
+two (an intent breaking `maxBalance` stays `committed` forever on the reference; the
+sandbox grants every caller any action on wallets server-wide).
 
 Documentation (the mirror in `../docs.minka.io`) is the specification for what the
 sandbox cannot show from outside: 2PC with banks, event delivery, expiry. Where docs
@@ -43,11 +44,12 @@ and sandbox disagree, the sandbox wins.
 | **L0** | ledger, symbol, wallet — records only, no money moves | 9 of 146 | **18/18** exchanges match |
 | **L1** | intents: issue, transfer, destroy; balances; async processing | 12 of 146 | **30/30** exchanges match |
 | **L3** | limits (`minBalance`, `maxBalance`), pagination, reads by luid | 13 of 146 | **39/41** match, 2 deliberately differ |
+| **L4** (part) | record lifecycle: update, status proofs, changes, drop, access check; signers | see `COVERAGE.md` | **22/23** match, 1 deliberately differs |
 
 (L2, multi-claim atomicity, is covered by the L1 and L3 scenarios.)
 
 Every level passes on the in-memory store and on Postgres. Beyond conformance, the unit
-tests (`server/test/`, 66 tests) check invariants the reference cannot show from
+tests (`server/test/`, 80 tests) check invariants the reference cannot show from
 outside: conservation of supply over a random intent sequence compared against a
 model, no overdraft under 50 concurrent transfers, two processes sharing one
 Postgres, and recovery of intents left pending by a crashed process.
@@ -78,8 +80,9 @@ only when a scenario changes.
   Verifying it behind a reverse proxy needs the URL the client used (the same problem
   as `Host` in S3 SigV4 signatures). The recording proxy has the same issue, which is
   why the scenario sends tokens without `hsh`.
-- **Access rules are ledger-level only**, matched by public key. Record-level rules,
-  signer-by-handle, circles and policies arrive with L4.
+- **Access rules** cover record, ledger and server levels with `signer` (by public
+  key) and `bearer` matchers. Signer-by-handle, `$circle`, `$record`, access policies,
+  status policies and claim-level permissions (`spend`, `issue`) are open in `TODO.md`.
 - **Ledger-wide serialisation.** Intents of one ledger are processed one at a time
   (advisory lock in Postgres). Correct, and far above the reference's ~100 intents/s,
   but per-wallet locking would scale further.

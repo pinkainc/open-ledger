@@ -52,6 +52,23 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] Balance reservations visible while an intent is in flight (only matters once
       intents wait on external participants, L5)
 ## L4 — signatures, quorum, status policies, record-level access
+
+- [x] Generic lifecycle for symbols, wallets, signers: `PUT` update with parent hash,
+      status by proof, `changes` (+ single change), access check; wallet drop (`DELETE`, `POST …/drop`)
+- [x] Signers (`$snr`), and the four server signers every ledger publishes
+- [x] Access rules per about-authorization: `signer` → proof signers (mutations only),
+      `bearer` → token (claims, `$signer`), neither → everyone; record → ledger → server, additive
+- [x] Server rules configurable; default: `access`, `create ledger` (divergence from the sandbox's wallet grant)
+- [ ] `signer: {handle}` and `$circle` matchers (need signer lookup and circles)
+- [ ] `$record: owner`, `$ledger: owner` matchers (docs disagree: `owner` vs `creator` — record reference)
+- [ ] Access policies (`{policy: handle}`) and `access.strategy: policy-based`
+- [ ] Status policies: allowed transitions, quorum (`record.status-policy-violation`, quorum-not-met)
+- [ ] Circles and circle signers (`/circles`, `/circles/{id}/signers`)
+- [ ] Claim authorisation: `spend` on source wallet, `issue`/`destroy` on symbol, `limit`;
+      per docs a missing permission leaves the intent pending until expiry (no 403) — record
+- [ ] (?) Record reference: read with a token on a ledger whose rules are signer-only
+- [ ] (?) Record reference: drop of a funded wallet (our reason `record.drop-rejected`, wording ours)
+- [ ] `PUT /ledger`, `POST /ledger/proofs`, `/ledger/access/!check`, `GET /ledgers`
 ## L5 — 2PC with one external participant (bridge), idempotency by handle
 ## L6 — N participants, ordered prepare/commit/abort, timeouts, crashes
 ## L7 — expiry and thread abort
@@ -60,5 +77,5 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 
 ## Tooling
 
-- [ ] Coverage report: implemented operations vs the 146 in Minka's spec
+- [x] Coverage report `COVERAGE.md` (`npx tsx conformance/coverage.ts`, part of `npm run check`)
 - [x] `npm run check`: typecheck, unit tests and every level's conformance, on memory and Postgres

@@ -32,6 +32,14 @@ create table if not exists balances (
   row    jsonb not null,
   unique (ledger, wallet, symbol, schema)
 );
+create table if not exists changes (
+  seq    bigserial primary key,
+  ledger text  not null,
+  kind   text  not null,
+  handle text  not null,
+  record jsonb not null
+);
+create index if not exists changes_by_record on changes (ledger, kind, handle, seq);
 create table if not exists limits (
   seq    bigserial primary key,
   ledger text  not null,
@@ -100,6 +108,19 @@ export class PgStore implements Store {
       r.meta,
     ])
     if (rowCount !== 1) throw new Error(`update of missing ${kind} ${r.data.handle}`)
+  }
+
+  async remove(ledger: string, kind: string, handle: string) {
+    await this.db.query('delete from records where ledger=$1 and kind=$2 and handle=$3', [ledger, kind, handle])
+  }
+
+  async addChange(ledger: string, kind: string, handle: string, change: StoredRecord) {
+    await this.db.query('insert into changes (ledger, kind, handle, record) values ($1,$2,$3,$4)', [ledger, kind, handle, change])
+  }
+
+  async changes(ledger: string, kind: string, handle: string) {
+    const { rows } = await this.db.query('select record from changes where ledger=$1 and kind=$2 and handle=$3 order by seq', [ledger, kind, handle])
+    return rows.map((r) => r.record as StoredRecord)
   }
 
   async list(ledger: string, kind: string) {

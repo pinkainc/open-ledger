@@ -54,6 +54,8 @@ const DATA = {
   symbols: { allOf: [{ type: 'object', required: ['factor'] }, baseData] },
   wallets: baseData,
   intents: { allOf: [{ type: 'object', required: ['handle', 'claims'], properties: { claims } }, baseData] },
+  signers: baseData,
+  drop: { type: 'object', required: ['parent'] },
 } as const
 
 export type ValidatedKind = keyof typeof DATA

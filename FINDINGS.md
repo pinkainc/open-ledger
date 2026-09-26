@@ -4,6 +4,41 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — Record lifecycle, signers, access check
+
+Recorded with `conformance/scenarios/records.ts` (`fixtures/records.reference.jsonl`).
+
+- **Update** is `PUT /<kind>/<id>` with the whole new data and `data.parent` = the
+  current hash; `luid` travels in the body. The answer (200) keeps luid, `meta.status`
+  and `owners`, sets a new `meta.moment`, and the ledger countersigns with
+  `{luid, moment}` — no status. A stale parent → 422 `crypto.parent-hash-invalid`,
+  `Hash verification failed, hashes don't match` (in the error reference, not in the
+  spec's enum).
+- **Status** changes by `POST /<kind>/<id>/proofs` with one proof whose `custom.status`
+  is the new status, signed over the current hash. The record comes back (200) with the
+  proof appended as sent (plus `origin`), **no server proof**, `meta.status` changed,
+  `meta.moment` unchanged.
+- **Changes**: `GET /<kind>/<id>/changes` is newest first with `page.total`; each item
+  is the full record at that version with `meta.change` (1, 2, …), `meta.action`
+  (`create` | `update`) and `meta.labels: null`. A status proof is a change of its own.
+  `GET …/changes/<n>` returns one.
+- **Drop**: `DELETE /wallets/<id>` with `{luid, hash, data: {parent}, meta.proofs}`
+  (the SDK signs it with `custom.status: "dropped"`) → **204** with no body; the wallet
+  is gone from reads and lists.
+- **Server signers**: every ledger publishes `system`, `core`, `system.auth` and
+  `system.dtc` as signer records (`$snr` luids), listed in that order after any
+  user-created signers. Data `{handle, access: [{action: read}], format, public,
+  secret: "{{ secret.<16 letters> }}"}` — the secret is a reference into a secret
+  store. Each is self-signed (proof without `origin` or `signer`) and countersigned by
+  `system`; `owners` is its own key.
+- **Access check** `POST /<kind>/<id>/access/!check` with `data: {action}` answers a
+  list (no `page`) of the rules that grant it, each wrapped `{hash: sha256(rule), data:
+  rule, meta: {proofs: [system], moment}}`. For `read` on a wallet it listed the ledger
+  rule and a server-level `{action: any, record: wallet}` — but **not** the wallet's own
+  `{action: any, signer: {public: <caller>}}`, which confirms the documented rule that
+  `signer` constraints apply to mutations only (reads are matched through `bearer`).
+  We do not copy the sandbox's server-wide wallet grant: `divergences.json`.
+
 ## 2026-09-26 — L3 and the questions L1 left open
 
 Recorded with `conformance/scenarios/l3.ts` (`fixtures/l3.reference.jsonl`, 41 exchanges).

@@ -36,6 +36,12 @@ export interface Store {
   insert(ledger: string, kind: string, record: StoredRecord): Promise<boolean>
   /** Replaces the stored record with the same handle. */
   update(ledger: string, kind: string, record: StoredRecord): Promise<void>
+  /** Removes a record; its change history stays. */
+  remove(ledger: string, kind: string, handle: string): Promise<void>
+  /** Appends a snapshot to a record's change history (numbered by the caller). */
+  addChange(ledger: string, kind: string, handle: string, change: StoredRecord): Promise<void>
+  /** Change history, oldest first. */
+  changes(ledger: string, kind: string, handle: string): Promise<StoredRecord[]>
   /** Oldest first. */
   list(ledger: string, kind: string): Promise<StoredRecord[]>
   /** The ledger's own server signers (`system`, `core`). Never served. */
@@ -58,6 +64,7 @@ export class MemoryStore implements Store {
   private keys = new Map<string, KeyPair>()
   private bals = new Map<string, BalanceRow[]>()
   private lims = new Map<string, LimitRow[]>()
+  private hist = new Map<string, StoredRecord[]>()
   private locks = new Map<string, Promise<unknown>>()
 
   private bucket<T>(map: Map<string, T[]>, key: string) {
@@ -93,6 +100,20 @@ export class MemoryStore implements Store {
 
   async list(ledger: string, kind: string) {
     return clone(this.records(ledger, kind))
+  }
+
+  async remove(ledger: string, kind: string, handle: string) {
+    const b = this.records(ledger, kind)
+    const i = b.findIndex((r) => r.data.handle === handle)
+    if (i >= 0) b.splice(i, 1)
+  }
+
+  async addChange(ledger: string, kind: string, handle: string, change: StoredRecord) {
+    this.bucket(this.hist, `${ledger}\u0000${kind}\u0000${handle}`).push(clone(change))
+  }
+
+  async changes(ledger: string, kind: string, handle: string) {
+    return clone(this.bucket(this.hist, `${ledger}\u0000${kind}\u0000${handle}`))
   }
 
   async getKey(ledger: string, signer = 'system') {

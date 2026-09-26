@@ -32,6 +32,7 @@ function normaliser() {
     if (/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(v)) return '<moment>'
     if (/^\$[a-z]{3}\.-[\w-]{16}$/.test(v)) return token(`luid:${v.slice(1, 4)}`, v)
     if (/^-[\w-]{16}$/.test(v)) return token('thread', v)
+    if (/^\{\{ secret\.[a-z0-9]+ \}\}$/.test(v)) return token('secret', v)
     if (/^(deb|cre)_[A-Za-z0-9]{17}$/.test(v)) return token(`entry:${v.slice(0, 3)}`, v)
     if (/^[0-9a-f]{64}$/.test(v)) return '<hex64>'
     if (/^[A-Za-z0-9+/]{86}==$/.test(v)) return '<signature>'

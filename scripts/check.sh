@@ -20,3 +20,5 @@ for level in $(ls conformance/fixtures | sed -n 's/\.reference\.jsonl$//p'); do
     [ $ok = 1 ] || { grep -E "FAIL|^ " .rec/conf.log | head -40; exit 1; }
   done
 done
+
+echo "==> coverage" && npx tsx conformance/coverage.ts

@@ -51,11 +51,16 @@ test('unknown ledger is an unsigned 404 api.route-not-found', async () => {
   assert.deepEqual(e.body.meta.proofs, [])
 })
 
-test('an open rule lets anonymous reads through; a signer rule does not', async () => {
+// A `signer` rule is matched against proof signers, so it grants mutations only;
+// reads are granted by `bearer` rules, matched against the token.
+test('an open rule lets anonymous reads through; bearer rules gate reads by token', async () => {
   const open = await newLedger(server.base, kp)
   await sdkFor(server.base, open.handle).ledger.read()
 
-  const closed = await newLedger(server.base, kp, [{ action: 'any', signer: { public: kp.public } }])
+  const closed = await newLedger(server.base, kp, [
+    { action: 'any', signer: { public: kp.public } },
+    { action: 'read', bearer: { $signer: { public: kp.public } } },
+  ])
   const e = await failure(sdkFor(server.base, closed.handle).ledger.read())
   assert.equal(e.status, 403)
   assert.equal(e.reason, 'auth.forbidden')

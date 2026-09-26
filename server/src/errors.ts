@@ -23,6 +23,10 @@ export const errors = {
   signatureMissing: () => new LedgerError(422, 'crypto.signature-missing', 'Ledger mutations must be signed.'),
   signatureInvalid: (key: string) => new LedgerError(422, 'crypto.signature-invalid', `Invalid signature for key: ${key}`),
   hashInvalid: (hash: string) => new LedgerError(422, 'crypto.hash-invalid', `Invalid record hash: ${hash}`),
+  parentHashInvalid: () => new LedgerError(422, 'crypto.parent-hash-invalid', "Hash verification failed, hashes don't match"),
+  // Not yet observed on the reference; wording is ours.
+  dropRejected: (detail: string) => new LedgerError(422, 'record.drop-rejected', detail),
+  changeNotFound: () => new LedgerError(404, 'record.not-found', 'Change not found'),
   unauthorized: () => new LedgerError(401, 'auth.unauthorized', 'Invalid token.'),
   forbidden: () => new LedgerError(403, 'auth.forbidden', 'Forbidden.'),
 }

@@ -1,10 +1,23 @@
 [
   {
     "fixture": "l3",
-    "exchanges": [35, 40],
+    "exchanges": [
+      35,
+      40
+    ],
     "what": "An issue that would take bob above his maxBalance limit.",
     "reference": "Checks maxBalance only after commit: the intent stays `committed` forever with a core.limit-exceeded proof and the credit is never applied.",
-    "ours": "Checks maxBalance with the other limits before preparing and rejects the intent: failed (same reason and detail) → aborted → rejected.",
+    "ours": "Checks maxBalance with the other limits before preparing and rejects the intent: failed (same reason and detail) \u2192 aborted \u2192 rejected.",
     "why": "An intent that can never reach a final status is a defect, not a contract. Clients waiting for completed/rejected would wait forever."
+  },
+  {
+    "fixture": "records",
+    "exchanges": [
+      13
+    ],
+    "what": "Access check for `read` on a wallet.",
+    "reference": "Lists the ledger rule {action: any, record: any} and a server-level rule {action: any, record: wallet} \u2014 the public sandbox grants every caller any action on wallets of every ledger.",
+    "ours": "Lists only the ledger rule. Our default server rules grant `access` and `create ledger` to authenticated signers, nothing on wallets.",
+    "why": "A server-wide grant on every wallet is a sandbox convenience, not part of the API contract; copying it would make wallets world-writable. Server rules are configurable (buildApp serverRules) for anyone who wants the sandbox's behaviour."
   }
 ]
