@@ -1,0 +1,92 @@
+#!/usr/bin/env expect
+#
+# Drive an interactive `minka` command by walking its prompts IN ORDER.
+#
+# Why sequential rather than a reactive pattern loop: inquirer redraws its prompt line
+# on every keystroke, so the PTY buffer accumulates stale copies of earlier prompts.
+# A reactive loop keyed on prompt text then matches the wrong (older) prompt and types
+# the wrong value into the wrong field. Waiting for each expected prompt in turn
+# consumes the buffer as it goes, so each answer lands where it belongs.
+#
+# Usage: minka-seq.exp <timeout> <steps> -- <minka-args...>
+#   <steps> is a ';'-separated list of "label>>value" pairs, applied in order.
+#     label   literal substring of the prompt to wait for (regex-quoted)
+#     value   text to send; the special forms are:
+#               @ENTER   just press Enter (accept default)
+#               @YES     send "y"
+#               @PASS    send $MINKA_PASS
+#
+# Example:
+#   minka-seq.exp 30 'Handle>>alice;Bridge>>@ENTER;Signer>>@ENTER;password>>@PASS' \
+#       -- -ie wallet create
+
+set timeout [lindex $argv 0]
+set steps [lindex $argv 1]
+set idx [lsearch $argv "--"]
+set args [lrange $argv [expr {$idx + 1}] end]
+
+set pass ""
+if {[info exists env(MINKA_PASS)]} { set pass $env(MINKA_PASS) }
+
+log_user 1
+eval spawn minka $args
+
+foreach step [split $steps ";"] {
+    set step [string trim $step]
+    if {$step eq ""} continue
+    set p [string first ">>" $step]
+    if {$p < 0} continue
+    set label [string trim [string range $step 0 [expr {$p - 1}]]]
+    set value [string range $step [expr {$p + 2}] end]
+
+    # Wait for this specific prompt. Everything buffered before it is consumed.
+    expect {
+        -re [string map {( \\( ) \\) [ \\[ ] \\] ? \\? . \\. * \\* + \\+} $label] {}
+        timeout {
+            puts "\n__SEQ_TIMEOUT__ waiting for prompt: $label"
+            exit 2
+        }
+        eof {
+            puts "\n__SEQ_EOF__ process ended while waiting for: $label"
+            catch wait result
+            exit [lindex $result 3]
+        }
+    }
+
+    switch -glob -- $value {
+        "@ENTER" { send "\r" }
+        "@YES"   { send "y\r" }
+        "@PASS"  { send "$pass\r" }
+        "@SELECT" {
+            # Checkbox prompt ("Signers:", plural): space ticks the highlighted entry,
+            # enter confirms. Distinct from the single-select "Signer:" list.
+            send " "
+            after 150
+            send "\r"
+        }
+        "@DOWN*" {
+            # List prompts (inquirer) only respond to arrow keys, not typed text.
+            # "@DOWN2" means: move down twice, then select.
+            set n [string range $value 5 end]
+            if {$n eq ""} { set n 1 }
+            for {set i 0} {$i < $n} {incr i} {
+                send "\033\[B"
+                after 120
+            }
+            send "\r"
+        }
+        default  { send "$value\r" }
+    }
+}
+
+# Drain whatever the command prints after the last answer. The CLI frequently leaves
+# the PTY open, so a timeout here is the normal way this ends, not a failure.
+set timeout 20
+expect {
+    -re {successfully|Operation cancelled|Reason:|Error} { set timeout 3; exp_continue }
+    timeout { exit 0 }
+    eof {
+        catch wait result
+        exit [lindex $result 3]
+    }
+}

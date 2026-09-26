@@ -63,7 +63,10 @@ const out: string[] = [
   '',
   '✓ = a reference exchange for this operation is recorded in `conformance/fixtures/`.',
   '',
+  'Also served, not in the spec: `GET /api/v2` — server information, which `minka server connect` reads.',
+  '',
 ]
 writeFileSync(new URL('../COVERAGE.md', import.meta.url), out.join('\n'))
-const unconfirmed = [...ours].filter((k) => !rows.some((r) => `${r.method.toLowerCase()} ${shape(r.path)}` === k))
+// `GET /api/v2` (server info, read by `minka server connect`) is not in the spec.
+const unconfirmed = [...ours].filter((k) => !rows.some((r) => `${r.method.toLowerCase()} ${shape(r.path)}` === k) && !['get ', 'get /'].includes(k))
 console.log(`${done.length}/${rows.length} implemented, ${done.filter((r) => r.confirmed).length} confirmed${unconfirmed.length ? `; not in spec: ${unconfirmed.join(', ')}` : ''}`)

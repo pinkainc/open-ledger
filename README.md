@@ -52,6 +52,10 @@ a bank are recorded too (`fixtures/*.bridge.jsonl`).
 
 (L2, multi-claim atomicity, is covered by the L1 and L3 scenarios.)
 
+The official `minka` CLI runs a whole flow against the server — connect, signer, ledger,
+symbol, wallets, issue, transfer, balances, filtered lists — in `scripts/cli-e2e.sh`,
+part of `npm run check`.
+
 Every level passes on the in-memory store and on Postgres. Beyond conformance, the unit
 tests (`server/test/`, 148 with Postgres) check invariants the reference cannot show from
 outside: conservation of supply over a random intent sequence compared against a
@@ -71,6 +75,7 @@ npm run check                       # everything: typecheck, tests, conformance,
 npm run conformance:check -- l1     # one level against our server
 npm run conformance:record -- l1    # re-record the reference (creates one sandbox ledger)
 scripts/dev-db.sh start             # project-local Postgres on :5439, prints DATABASE_URL
+scripts/cli-e2e.sh                  # the minka CLI end to end against a fresh server on :4640
 DATABASE_URL=… npm start            # server on :4620 (memory store without DATABASE_URL)
 ```
 

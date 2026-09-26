@@ -8,9 +8,11 @@ import { Core } from './core.js'
 import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, signDigest, verifyDigest, type KeyPair, type Proof } from './crypto.js'
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
+import { matches, parseQuery } from './query.js'
 import { validateBody, type ValidatedKind } from './schemas.js'
 import { keyOf, type Store, type StoredRecord } from './store.js'
 import { applyStatus } from './status.js'
+import { SYSTEM_SCHEMAS } from './system-schemas.js'
 
 export type AppOptions = {
   store: Store
@@ -22,7 +24,15 @@ export type AppOptions = {
   serverRules?: any[]
   /** Called for every registered route; used by the coverage report. */
   onRoute?: (method: string, url: string) => void
+  /**
+   * What `GET /api/v2` reports. `url` is the address clients use; without it the
+   * address is taken from the request (`Host`, `X-Forwarded-Proto`).
+   */
+  server?: { handle?: string; url?: string }
 }
+
+/** The reference release whose API this server answers (published spec version). */
+export const SEMVER = '2.45.5'
 
 // Record kinds: path segment → luid prefix, name used in error details, and the
 // record type access rules refer to. Prefixes are the reference's.
@@ -36,13 +46,14 @@ const KINDS = {
   policies: { luid: '$plc', name: 'Policy', record: 'policy' },
   'circle-signers': { luid: '$csn', name: 'Circle signer', record: 'circle-signer' },
   bridges: { luid: '$brg', name: 'Bridge', record: 'bridge' },
+  schemas: { luid: '$sch', name: 'Schema', record: 'schema' },
 } as const
 type Kind = keyof typeof KINDS
 
 /** Kinds with the full record surface under `/api/v2/<kind>`. */
-const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges'] as const
+const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges', 'schemas'] as const
 /** Kinds a client may update and sign after creation. Intents are immutable. */
-const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges'] as const
+const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges', 'schemas'] as const
 
 const PAGE_LIMIT = 20
 // Any caller may reach the server, read a ledger record, and (signed) create a ledger.
@@ -56,7 +67,7 @@ declare module 'fastify' {
   }
 }
 
-export function buildApp({ store, core = new Core(store), onRoute, serverRules = DEFAULT_SERVER_RULES }: AppOptions) {
+export function buildApp({ store, core = new Core(store), onRoute, serverRules = DEFAULT_SERVER_RULES, server = {} }: AppOptions) {
   const app = Fastify({ logger: false })
   if (onRoute) app.addHook('onRoute', (r) => [r.method].flat().forEach((m) => onRoute(m, r.url)))
   const acl = new AccessControl(store, serverRules)
@@ -332,9 +343,17 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   ]
 
   async function publishPolicies(ledger: StoredRecord, system: KeyPair) {
-    for (const data of SYSTEM_POLICIES) {
+    await publishSystem(ledger, system, 'policies', '$plc', SYSTEM_POLICIES)
+    // Listed in this order on the reference (lists are newest first).
+    await publishSystem(ledger, system, 'schemas', '$sch', [...SYSTEM_SCHEMAS].reverse())
+  }
+
+  // System records (policies, schemas) are signed by `system` itself (a bare proof
+  // without custom), countersigned with the luid, dated with the ledger, no status.
+  async function publishSystem(ledger: StoredRecord, system: KeyPair, kind: Kind, prefix: string, rows: readonly object[]) {
+    for (const data of rows) {
       const hash = hashData(data)
-      const luid = newLuid('$plc')
+      const luid = newLuid(prefix)
       const digest = digestFor(hash)
       const self = { method: 'ed25519-v2', public: system.public, digest, result: signDigest(digest, system) }
       const record: StoredRecord = {
@@ -343,8 +362,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
         luid,
         meta: { proofs: [self, serverProof(hash, { luid, moment: now() }, system, 'system')], moment: ledger.meta.moment, owners: [system.public] },
       }
-      await store.insert(ledger.data.handle, 'policies', record)
-      await addChange(ledger.data.handle, 'policies', record, 'create')
+      await store.insert(ledger.data.handle, kind, record)
+      await addChange(ledger.data.handle, kind, record, 'create')
     }
   }
 
@@ -361,10 +380,14 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   }
   const slice = <T>(rows: T[], p: { index: number; limit: number }) => rows.slice(p.index * p.limit, (p.index + 1) * p.limit)
 
-  // Record lists come newest first and carry no total.
+  // Record lists come newest first and carry no total. Filters (`query.ts`) come
+  // before paging; the CLI asks `GET /schemas?data.record=wallet` and
+  // `GET /policies?data.record.$in[0]=any&…` before every create.
   function listPage(req: FastifyRequest, rows: StoredRecord[]) {
     const p = pageParams(req)
-    return envelope(req.ledgerKey, slice([...rows].reverse(), p), { page: p })
+    const q = parseQuery(req.query as Record<string, unknown>)
+    const kept = rows.filter((r) => matches(r, q))
+    return envelope(req.ledgerKey, slice([...kept].reverse(), p), { page: p })
   }
 
   // Changes list newest first, with a total.
@@ -374,16 +397,29 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     return envelope(req.ledgerKey, slice(all, p), { page: { ...p, total: all.length } })
   }
 
+  // ---- server --------------------------------------------------------------------
+
+  // Server information, unsigned (no ledger is addressed). `minka server connect`
+  // reads it and refuses a server that does not answer.
+  const info = async (req: FastifyRequest) => {
+    const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0] ?? req.protocol
+    const url = server.url ?? `${proto}://${req.headers.host}/api/v2`
+    const data = { handle: server.handle ?? 'open-ledger', server: url, semver: SEMVER, status: 'UP' }
+    return { hash: hashData(data), data, meta: { moment: now() } }
+  }
+  app.get('/api/v2', info)
+  app.get('/api/v2/', info)
+
   // ---- ledgers -------------------------------------------------------------------
 
-  // Any authenticated signer may create a ledger (server rule). The ledger gets four
+  // Anyone may create a signed ledger (server rule). The ledger gets four
   // signers of its own: `system` signs what the ledger says, `core` signs its part as
   // a participant in moving balances; `system.auth` and `system.dtc` are published
   // like on the reference and reserved for token impersonation and data transfer.
   app.post('/api/v2/ledgers', async (req, reply) => {
     validateBody('ledgers', req.body)
+    // No token needed: `minka ledger create` sends none. The proofs sign the request.
     const who = await authenticate(req)
-    if (!who) throw errors.forbidden('create', 'ledger')
     await acl.authorizeServer('create', 'ledger', { who, proofs: proofKeys(req.body) })
     const handle = (req.body as any).data.handle
     const keys = { system: generateKeyPair(), core: generateKeyPair(), 'system.auth': generateKeyPair(), 'system.dtc': generateKeyPair() }
@@ -403,7 +439,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   async function related(kind: Kind, scope: string, data: any) {
     if (kind === 'bridges') {
       if (!data.schema) throw new LedgerError(422, 'record.schema-invalid', 'There are schemas defined for record of type bridge, you must specify at least one.')
-      if (data.schema !== 'rest') throw new LedgerError(422, 'record.relation-not-found', `Referenced Schema ${data.schema} not found.`)
+      const schema = await store.get(scope, 'schemas', data.schema)
+      if (!schema || schema.data.record !== 'bridge') throw new LedgerError(422, 'record.relation-not-found', `Referenced Schema ${data.schema} not found.`)
     }
     if (kind === 'wallets' && data.bridge && !(await store.get(scope, 'bridges', data.bridge)))
       throw new LedgerError(422, 'record.relation-not-found', `Referenced Bridge ${data.bridge} not found.`)

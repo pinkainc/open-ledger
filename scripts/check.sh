@@ -24,4 +24,12 @@ for level in $(ls conformance/fixtures | sed -n 's/\.reference\.jsonl$//p'); do
   done
 done
 
+# The official CLI through a whole flow, on Postgres (skipped when it is not installed).
+if command -v minka >/dev/null; then
+  printf '==> minka CLI end to end (postgres) '
+  scripts/cli-e2e.sh > .rec/cli.log 2>&1 && ok=1 || ok=0
+  tail -1 .rec/cli.log
+  [ $ok = 1 ] || { grep -E "FAIL" -A3 .rec/cli.log; exit 1; }
+fi
+
 echo "==> coverage" && npx tsx conformance/coverage.ts

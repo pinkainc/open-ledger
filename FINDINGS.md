@@ -4,6 +4,24 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — What the `minka` CLI needs (end to end, and the sandbox read directly)
+
+Found by running `minka` 2.45.1 against our server (`scripts/cli-e2e.sh`), each answer
+then read from the sandbox with curl.
+
+- **`GET /api/v2`** (not in the spec): `minka server connect` refuses a server without it.
+  The sandbox answers 200 `{hash, data: {handle: "stg", server: "https://ldg-stg.one/api/v2",
+  semver: "2.45.7", status: "UP"}, meta: {moment}}` — hashed, unsigned; `/api/v2/` too.
+- **`minka ledger create` sends no token**, only the signed body. The sandbox creates the
+  ledger (the 2026-08 walkthrough did it the same way); we required a token until now.
+- **Before every create** the CLI reads `GET /schemas?data.record=<kind>` and, for records
+  with status policies, `GET /policies?data.record.$in[0]=any&data.record.$in[1]=<kind>`.
+- **Every ledger has 12 schemas** (`$sch`), listed status, layout, access, labels,
+  schedule, processing, authentication, dtc (policy), rest (bridge),
+  oauth-client-credentials, key-pair, otp (signer-factor). Each is signed like the system
+  policies (bare `system` proof, then `system {luid, moment}`), dated with the ledger, no
+  status. `?data.record=symbol` → `[]` with the usual `page`.
+
 ## 2026-09-26 — L5: two-phase commit with a bridge
 
 Recorded with `conformance/scenarios/l5.ts`: a bridge (`conformance/bridge.ts`) reached

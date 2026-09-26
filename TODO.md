@@ -119,6 +119,22 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 ## L8 — event delivery, retries, `cancelled`
 ## L9 — cross-ledger
 
+## E2E — the official `minka` CLI
+
+- [x] `scripts/cli-e2e.sh`: connect, signer, ledger, symbol, wallets, issue, transfer, balances,
+      lists, filtered intent list, schema list — 19 steps, balances checked over HTTP; part of
+      `npm run check` (Postgres, ~16 s)
+- [x] `GET /api/v2` server info (`{handle, server, semver, status}`), `PUBLIC_URL`, `SERVER_HANDLE`
+- [x] Ledger create without a token (the CLI sends none; the proofs sign it)
+- [x] Schemas `$sch`: the 12 system schemas per ledger, full record surface; list filters
+      (`query.ts`, about-queries: `$eq $ne $gt $gte $lt $lte $in $nin $regex`, array fan-out,
+      index, `$plainTextQuery`)
+- [ ] User schemas enforce records (docs: once a schema for a kind exists, records must name
+      one and validate against it) — record the reference's errors first (?)
+- [ ] Record the CLI flow against the sandbox as a conformance level (shell scenario in run.sh;
+      `GET /api/v2` would be a divergence: handle, semver)
+- [ ] Unsupported filter fields: the docs say the reference answers an error — record (?)
+
 ## Tooling
 
 - [x] Coverage report `COVERAGE.md` (`npx tsx conformance/coverage.ts`, part of `npm run check`)

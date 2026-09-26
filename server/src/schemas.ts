@@ -57,6 +57,7 @@ const DATA = {
   signers: baseData,
   circles: baseData,
   policies: { allOf: [{ type: 'object', required: ['handle', 'schema', 'values'] }, baseData] },
+  schemas: { allOf: [{ type: 'object', required: ['record', 'format', 'schema'] }, baseData] },
   'circle-signers': { type: 'object', required: ['circle', 'signer'] },
   drop: { type: 'object', required: ['parent'] },
   bridges: {
