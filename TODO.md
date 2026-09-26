@@ -58,7 +58,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Signers (`$snr`), and the four server signers every ledger publishes
 - [x] Access rules per about-authorization: `signer` → proof signers (mutations only),
       `bearer` → token (claims, `$signer`), neither → everyone; record → ledger → server, additive
-- [x] Server rules configurable; default: `access`, `create ledger` (divergence from the sandbox's wallet grant)
+- [x] Server rules configurable; default: `access`, `read ledger`, `create ledger`
 - [x] `signer: {handle}`, `$circle`, `$record: owner`, `$ledger: owner` matchers (`server/src/access.ts`)
 - [x] Rule scope (ledger rule without `record` = ledger only) and the ledger `access` gate — recorded access2/3
 - [x] Circles, circle signers (`$crc`, `$csn`), policies (`$plc`); status policies with quorum (`server/src/status.ts`)
@@ -80,10 +80,15 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       `bearer.*` claims). Without it the intent waits after resolution and expires (access4 14/14)
 - [ ] (?) `destroy`: we require `destroy` on the symbol **and** `spend` on the source — not recorded
 - [ ] (?) Does the reference check claim permissions before or after limits? (we: before)
-- [ ] `POST /intents/{id}/proofs` — more signatures for a waiting intent (re-processing is ready:
-      resolved entries are rebuilt from the trail, `Core.process` just runs again)
 - [ ] (?) Record reference: drop of a funded wallet (our reason `record.drop-rejected`, wording ours)
-- [ ] `PUT /ledger`, `POST /ledger/proofs`, `/ledger/access/!check`, `GET /ledgers`
+- [x] `PUT /ledger`, `POST /ledger/proofs`, `/ledger/changes/{n}`, `/ledger/access/!check` (records2 52/52)
+- [x] Access check as recorded: check-request proofs for every action, rules without `signer`,
+      record rules named by kind, ledger rules first, server rules not listed
+- [x] System status policies `intent:status`, `access-policy:status`; status policy `filter`
+- [x] Intent changes per stage; `POST /intents/{id}/proofs` appends a signature
+- [ ] (?) What makes a waiting intent proceed once its missing signature arrives? A plain proof did
+      not (records2). Try a proof with `custom.status` (`pending`? `created`?) in a recording
+- [ ] `GET /ledgers` — lists every ledger on the sandbox; needs a comparison that ignores others
 ## L5 — 2PC with one external participant (bridge), idempotency by handle
 ## L6 — N participants, ordered prepare/commit/abort, timeouts, crashes
 ## L7 — expiry and thread abort

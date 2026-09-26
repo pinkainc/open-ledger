@@ -4,6 +4,36 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — Operations confirmed by `records2`
+
+Recorded with `conformance/scenarios/records2.ts` (52 exchanges, all reproduced).
+
+- **Access check, corrected.** The check evaluates rules against the **proofs of the
+  check request, for reads too**, and shows each granting rule **without `signer`**; a
+  record-level rule without `record` is shown with the record's kind. Ledger rules come
+  first, then the record's own; server rules were never listed. `{any, signer: A}` on
+  a symbol comes back as `{any, record: symbol}`. This overturns the earlier reading of
+  the `records` fixture (below): the `{action: any, record: wallet}` listed there was
+  alice's own rule, not a sandbox server rule — the divergence is gone (23/23).
+- **The ledger record** has the same lifecycle as other records: `PUT /ledger` (parent
+  hash, countersigned `{luid, moment}`), `POST /ledger/proofs` for status,
+  `GET /ledger/changes[/{n}]`, `POST /ledger/access/!check`.
+- **Every ledger has two status policies** (`$plc`), listed after user policies:
+  `intent:status` (record `intent`, quorum `[{handle: system}]`, statuses created …
+  expired) and `access-policy:status` (record `policy`, `filter: {schema: access}`,
+  statuses created/active/inactive, empty quorum). Each carries a bare self-proof by
+  `system` (no `custom`), then `system {luid, moment}`; no `meta.status`; `meta.moment`
+  is the ledger's.
+- **Intent changes:** one per saved stage — create (pending, 3 proofs), resolved
+  (pending), prepared, the same again with `meta.routed: true`, committed
+  (awaiting-clearance), committed (cleared), completed: seven for an issue.
+- **A further signature on an intent** (`POST /intents/{id}/proofs`, a proof without
+  status) is appended with `origin: key-pair`; owners and status stay. An intent
+  waiting for a `spend` signature was **not** processed again after the owner signed
+  it (still pending 60 s later). What does restart it is open.
+- Changes, updates and status proofs of symbols, signers, circles and policies behave
+  like wallets'.
+
 ## 2026-09-26 — Access (scenarios access, access2, access3, access4)
 
 - **Open ledgers are open.** A ledger rule `{action: any, record: any}` (what the CLI
@@ -77,10 +107,8 @@ Recorded with `conformance/scenarios/records.ts` (`fixtures/records.reference.js
 - **Access check** `POST /<kind>/<id>/access/!check` with `data: {action}` answers a
   list (no `page`) of the rules that grant it, each wrapped `{hash: sha256(rule), data:
   rule, meta: {proofs: [system], moment}}`. For `read` on a wallet it listed the ledger
-  rule and a server-level `{action: any, record: wallet}` — but **not** the wallet's own
-  `{action: any, signer: {public: <caller>}}`, which confirms the documented rule that
-  `signer` constraints apply to mutations only (reads are matched through `bearer`).
-  We do not copy the sandbox's server-wide wallet grant: `divergences.json`.
+  rule and `{action: any, record: wallet}`. *Read at the time as a sandbox server rule;
+  it is the wallet's own rule with `signer` removed — see records2 above.*
 
 ## 2026-09-26 — L3 and the questions L1 left open
 

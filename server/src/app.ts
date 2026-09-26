@@ -5,7 +5,7 @@ import { jwtVerify } from 'jose'
 import { customAlphabet } from 'nanoid'
 import { AccessControl, type Access, type Principal } from './access.js'
 import { Core } from './core.js'
-import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, verifyDigest, type KeyPair, type Proof } from './crypto.js'
+import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, signDigest, verifyDigest, type KeyPair, type Proof } from './crypto.js'
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
 import { validateBody, type ValidatedKind } from './schemas.js'
@@ -303,6 +303,50 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await addChange(ledger, 'signers', record, 'create')
   }
 
+  // Every ledger is created with two status policies of its own (records2): intents
+  // change status only by the ledger's `system` signer, and access policies move
+  // between created, active and inactive. Signed by `system` itself (a bare proof
+  // without custom), countersigned with the luid, dated with the ledger, no status.
+  const SYSTEM_POLICIES = [
+    {
+      handle: 'access-policy:status',
+      custom: { description: 'Defines available status for access policy records' },
+      values: [{ quorum: [], status: { $in: ['created', 'active', 'inactive'] } }],
+      record: 'policy',
+      filter: { schema: 'access' },
+      schema: 'status',
+    },
+    {
+      handle: 'intent:status',
+      custom: { description: 'Defines quorum for changing an intent status' },
+      values: [
+        {
+          quorum: [{ handle: 'system' }],
+          status: { $in: ['created', 'pending', 'prepared', 'committed', 'completed', 'failed', 'aborted', 'rejected', 'expired'] },
+        },
+      ],
+      record: 'intent',
+      schema: 'status',
+    },
+  ]
+
+  async function publishPolicies(ledger: StoredRecord, system: KeyPair) {
+    for (const data of SYSTEM_POLICIES) {
+      const hash = hashData(data)
+      const luid = newLuid('$plc')
+      const digest = digestFor(hash)
+      const self = { method: 'ed25519-v2', public: system.public, digest, result: signDigest(digest, system) }
+      const record: StoredRecord = {
+        hash,
+        data,
+        luid,
+        meta: { proofs: [self, serverProof(hash, { luid, moment: now() }, system, 'system')], moment: ledger.meta.moment, owners: [system.public] },
+      }
+      await store.insert(ledger.data.handle, 'policies', record)
+      await addChange(ledger.data.handle, 'policies', record, 'create')
+    }
+  }
+
   // ---- lists ---------------------------------------------------------------------
 
   // Pagination arrives as `?page.index=1&page.limit=2` (the SDK's encoding); the
@@ -348,27 +392,120 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       await store.putKey(handle, keys[name], name)
       await publishSigner(handle, name, keys[name], keys.system)
     }
+    await publishPolicies(record, keys.system)
     reply.status(201).send(record)
   })
 
-  app.get('/api/v2/ledger', async (req) => {
-    const who = await authenticate(req)
-    const ledger = await hostedLedger(req)
-    await acl.authorize('read', 'ledger', { who }, { ledger, record: ledger })
-    return ledger
-  })
+  // A record a route addresses: `/ledger` is the ledger record itself, stored at the
+  // server scope; `/<kind>/:id` is a record inside the ledger.
+  type Target = { ledger: StoredRecord; found: StoredRecord; scope: string; kind: Kind }
+  async function target(req: FastifyRequest, kind: Kind, id?: string): Promise<Target> {
+    if (kind === 'ledgers') {
+      const ledger = await hostedLedger(req)
+      return { ledger, found: ledger, scope: '', kind }
+    }
+    const { ledger, found } = await existing(req, kind, id!)
+    return { ledger, found, scope: ledger.data.handle, kind }
+  }
 
-  app.get('/api/v2/ledger/changes', async (req) => {
+  async function readable(req: FastifyRequest, kind: Kind, id?: string) {
     const who = await authenticate(req)
-    const ledger = await hostedLedger(req)
-    await acl.authorize('read', 'ledger', { who }, { ledger, record: ledger })
-    return changePage(req, '', 'ledgers', ledger.data.handle)
+    const t = await target(req, kind, id)
+    await acl.authorize('read', KINDS[kind].record, { who }, { ledger: t.ledger, record: t.found })
+    return t
+  }
+
+  async function changeOf(t: Target, n: string) {
+    const change = (await store.changes(t.scope, t.kind, keyOf(t.found))).find((c) => String(c.meta.change) === n)
+    if (!change) throw errors.changeNotFound()
+    return change
+  }
+
+  // Access check: the rules that grant an action on this record to the signers of the
+  // check request — for reads too. Answered as a list of signed rules without a page,
+  // ledger rules first, then the record's own. Observed (records, records2): a rule is
+  // shown without its `signer`, and a record rule without `record` names the record's
+  // kind (`{any, signer: A}` on a symbol comes back as `{any, record: symbol}`). Server
+  // rules were never listed.
+  async function accessCheck(req: FastifyRequest, t: Target) {
+    const who = await authenticate(req)
+    const record = KINDS[t.kind].record
+    await acl.authorize('read', record, { who }, { ledger: t.ledger, record: t.found })
+    const body = req.body as any
+    const action = body?.data?.action ?? 'read'
+    const matching = await acl.matching(action, record, { who, proofs: proofKeys(body) }, { ledger: t.ledger, record: t.found })
+    const shown = [...matching.filter(([, l]) => l === 'ledger'), ...matching.filter(([, l]) => l === 'record')].map(([rule, level]) => {
+      const { signer: _s, ...rest } = rule
+      return level === 'record' && rest.record === undefined ? { ...rest, record } : rest
+    })
+    return envelope(req.ledgerKey, shown.map((rule) => envelope(req.ledgerKey, rule)))
+  }
+
+  // Update: a new version whose data names the current hash as `parent`. The record
+  // keeps its luid, status and owners; the ledger countersigns with luid only.
+  async function update(req: FastifyRequest, t: Target) {
+    validateBody(t.kind as ValidatedKind, req.body)
+    const who = await authenticate(req)
+    const body = req.body as any
+    const keys = await impersonate(body, t.ledger.data.handle, who)
+    await acl.authorize('update', KINDS[t.kind].record, { who, proofs: keys }, { ledger: t.ledger, record: t.found })
+    if (body.data.parent !== t.found.hash) throw errors.parentHashInvalid()
+    const proofs = await annotate(t.ledger.data.handle, verifyProofs(body))
+    const updated: StoredRecord = {
+      hash: body.hash,
+      data: body.data,
+      luid: t.found.luid,
+      meta: { ...t.found.meta, proofs: [...proofs, serverProof(body.hash, { luid: t.found.luid, moment: now() }, req.ledgerKey!, 'system')], moment: now() },
+    }
+    await store.update(t.scope, t.kind, updated)
+    await addChange(t.scope, t.kind, updated, 'update')
+    return updated
+  }
+
+  // A proof on the current version. With `custom.status` it asks for a status change,
+  // which status policies may refuse or leave waiting for a quorum. The ledger appends
+  // the proof as sent and does not countersign. On an intent it is a further signature
+  // (action `sign`); observed (records2): it is appended, owners stay, and a waiting
+  // intent is not processed again.
+  async function addProof(req: FastifyRequest, t: Target) {
+    const who = await authenticate(req)
+    const record = KINDS[t.kind].record
+    // A proof without `public` is a template the token's signer is impersonated on.
+    const sent = req.body as any
+    const wrapped = { hash: t.found.hash, data: t.found.data, meta: { proofs: sent && !sent.public ? [sent] : [] } }
+    const keys = wrapped.meta.proofs.length ? await impersonate(wrapped, t.ledger.data.handle, who) : sent?.public ? [sent.public] : []
+    const proof: any = wrapped.meta.proofs.at(-1) ?? sent
+    await acl.authorize(t.kind === 'intents' ? 'sign' : 'update', record, { who, proofs: keys.filter(Boolean) }, { ledger: t.ledger, record: t.found })
+    if (!proof?.digest || !proof?.public || !proof?.result) throw errors.signatureMissing()
+    if (proof.digest !== digestFor(t.found.hash, proof.custom) || !verifyDigest(proof.digest, proof.public, proof.result))
+      throw errors.signatureInvalid(proof.public)
+    const [stored] = await annotate(t.ledger.data.handle, [proof])
+    // Intents are also written by the core; append under the ledger's lock.
+    return store.transaction(t.ledger.data.handle, async (tx) => {
+      const current = (await tx.get(t.scope, t.kind, keyOf(t.found))) ?? t.found
+      await applyStatus(tx, acl, t.ledger, record, current, stored)
+      await tx.update(t.scope, t.kind, current)
+      const n = (await tx.changes(t.scope, t.kind, keyOf(current))).length + 1
+      await tx.addChange(t.scope, t.kind, keyOf(current), snapshot(current, n, 'update', now()))
+      return current
+    })
+  }
+
+  app.get('/api/v2/ledger', async (req) => (await readable(req, 'ledgers')).found)
+  app.put('/api/v2/ledger', async (req) => update(req, await target(req, 'ledgers')))
+  app.post('/api/v2/ledger/proofs', async (req) => addProof(req, await target(req, 'ledgers')))
+  app.get('/api/v2/ledger/changes', async (req) => {
+    const t = await readable(req, 'ledgers')
+    return changePage(req, t.scope, t.kind, keyOf(t.found))
   })
+  app.get<{ Params: { change: string } }>('/api/v2/ledger/changes/:change', async (req) => changeOf(await readable(req, 'ledgers'), req.params.change))
+  app.post('/api/v2/ledger/access/!check', async (req) => accessCheck(req, await target(req, 'ledgers')))
 
   // ---- records -------------------------------------------------------------------
 
   for (const kind of TOP_LEVEL) {
     const record = KINDS[kind].record
+    type P = { Params: { id: string } }
 
     app.post(`/api/v2/${kind}`, async (req, reply) => {
       validateBody(kind as ValidatedKind, req.body)
@@ -386,90 +523,17 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       return listPage(req, await store.list(ledger.data.handle, kind))
     })
 
-    app.get<{ Params: { id: string } }>(`/api/v2/${kind}/:id`, async (req) => {
-      const who = await authenticate(req)
-      const { ledger, found } = await existing(req, kind, req.params.id)
-      await acl.authorize('read', record, { who }, { ledger, record: found })
-      return found
+    app.get<P>(`/api/v2/${kind}/:id`, async (req) => (await readable(req, kind, req.params.id)).found)
+    app.get<P>(`/api/v2/${kind}/:id/changes`, async (req) => {
+      const t = await readable(req, kind, req.params.id)
+      return changePage(req, t.scope, kind, keyOf(t.found))
     })
-
-    app.get<{ Params: { id: string } }>(`/api/v2/${kind}/:id/changes`, async (req) => {
-      const who = await authenticate(req)
-      const { ledger, found } = await existing(req, kind, req.params.id)
-      await acl.authorize('read', record, { who }, { ledger, record: found })
-      return changePage(req, ledger.data.handle, kind, keyOf(found))
-    })
-
-    app.get<{ Params: { id: string; change: string } }>(`/api/v2/${kind}/:id/changes/:change`, async (req) => {
-      const who = await authenticate(req)
-      const { ledger, found } = await existing(req, kind, req.params.id)
-      await acl.authorize('read', record, { who }, { ledger, record: found })
-      const all = await store.changes(ledger.data.handle, kind, keyOf(found))
-      const change = all.find((c) => String(c.meta.change) === req.params.change)
-      if (!change) throw errors.changeNotFound()
-      return change
-    })
-
-    // Access check: which rules grant the requested action on this record to the
-    // caller. Answered as a list of signed rules, without a page.
-    app.post<{ Params: { id: string } }>(`/api/v2/${kind}/:id/access/!check`, async (req) => {
-      const who = await authenticate(req)
-      const { ledger, found } = await existing(req, kind, req.params.id)
-      await acl.authorize('read', record, { who }, { ledger, record: found })
-      const body = req.body as any
-      const action = body?.data?.action ?? 'read'
-      const access: Access = { who, proofs: action === 'read' ? [] : proofKeys(body) }
-      const matching = await acl.matching(action, record, access, { ledger, record: found })
-      return envelope(req.ledgerKey, matching.map((rule) => envelope(req.ledgerKey, rule)))
-    })
-  }
-
-  for (const kind of MUTABLE) {
-    const record = KINDS[kind].record
-
-    // Update: a new version whose data names the current hash as `parent`. The
-    // record keeps its luid, status and owners; the ledger countersigns with luid only.
-    app.put<{ Params: { id: string } }>(`/api/v2/${kind}/:id`, async (req) => {
-      validateBody(kind as ValidatedKind, req.body)
-      const who = await authenticate(req)
-      const { ledger, found } = await existing(req, kind, req.params.id)
-      const body = req.body as any
-      const keys = await impersonate(req.body, ledger.data.handle, who)
-      await acl.authorize('update', record, { who, proofs: keys }, { ledger, record: found })
-      if (body.data.parent !== found.hash) throw errors.parentHashInvalid()
-      const proofs = await annotate(ledger.data.handle, verifyProofs(body))
-      const updated: StoredRecord = {
-        hash: body.hash,
-        data: body.data,
-        luid: found.luid,
-        meta: { ...found.meta, proofs: [...proofs, serverProof(body.hash, { luid: found.luid, moment: now() }, req.ledgerKey!, 'system')], moment: now() },
-      }
-      await store.update(ledger.data.handle, kind, updated)
-      await addChange(ledger.data.handle, kind, updated, 'update')
-      return updated
-    })
-
-    // A proof on the current version. With `custom.status` it asks for a status
-    // change, which status policies may refuse or leave waiting for a quorum. The
-    // ledger appends the proof as sent and does not countersign.
-    app.post<{ Params: { id: string } }>(`/api/v2/${kind}/:id/proofs`, async (req) => {
-      const who = await authenticate(req)
-      const { ledger, found } = await existing(req, kind, req.params.id)
-      // A proof without `public` is a template the token's signer is impersonated on.
-      const sent = req.body as any
-      const wrapped = { hash: found.hash, data: found.data, meta: { proofs: sent && !sent.public ? [sent] : [] } }
-      const keys = wrapped.meta.proofs.length ? await impersonate(wrapped, ledger.data.handle, who) : sent?.public ? [sent.public] : []
-      const proof: any = wrapped.meta.proofs.at(-1) ?? sent
-      await acl.authorize('update', record, { who, proofs: keys.filter(Boolean) }, { ledger, record: found })
-      if (!proof?.digest || !proof?.public || !proof?.result) throw errors.signatureMissing()
-      if (proof.digest !== digestFor(found.hash, proof.custom) || !verifyDigest(proof.digest, proof.public, proof.result))
-        throw errors.signatureInvalid(proof.public)
-      const [stored] = await annotate(ledger.data.handle, [proof])
-      await applyStatus(store, acl, ledger, record, found, stored)
-      await store.update(ledger.data.handle, kind, found)
-      await addChange(ledger.data.handle, kind, found, 'update', now())
-      return found
-    })
+    app.get<{ Params: { id: string; change: string } }>(`/api/v2/${kind}/:id/changes/:change`, async (req) =>
+      changeOf(await readable(req, kind, req.params.id), req.params.change),
+    )
+    app.post<P>(`/api/v2/${kind}/:id/access/!check`, async (req) => accessCheck(req, await target(req, kind, req.params.id)))
+    app.post<P>(`/api/v2/${kind}/:id/proofs`, async (req) => addProof(req, await target(req, kind, req.params.id)))
+    if ((MUTABLE as readonly string[]).includes(kind)) app.put<P>(`/api/v2/${kind}/:id`, async (req) => update(req, await target(req, kind, req.params.id)))
   }
 
   // ---- wallets -------------------------------------------------------------------

@@ -30,8 +30,7 @@ official SDK ──► recording proxy ──► open-ledger             → .re
 Where the reference is plainly defective we answer differently on purpose, and say so:
 `conformance/divergences.json` lists each case with what the reference does, what we do
 and why; the comparator reports those exchanges instead of failing on them. So far:
-two (an intent breaking `maxBalance` stays `committed` forever on the reference; the
-sandbox grants every caller any action on wallets server-wide).
+one (an intent breaking `maxBalance` stays `committed` forever on the reference).
 
 Documentation (the mirror in `../docs.minka.io`) is the specification for what the
 sandbox cannot show from outside: 2PC with banks, event delivery, expiry. Where docs
@@ -44,7 +43,7 @@ and sandbox disagree, the sandbox wins.
 | **L0** | ledger, symbol, wallet — records only, no money moves | 9 of 146 | **18/18** exchanges match |
 | **L1** | intents: issue, transfer, destroy; balances; async processing | 12 of 146 | **30/30** exchanges match |
 | **L3** | limits (`minBalance`, `maxBalance`), pagination, reads by luid | 13 of 146 | **39/41** match, 2 deliberately differ |
-| **L4** (part) | record lifecycle: update, status proofs, changes, drop, access check; signers | see `COVERAGE.md` | **22/23** match, 1 deliberately differs |
+| **L4** (part) | record lifecycle: update, status proofs, changes, drop, access check; signers, the ledger record, system policies | see `COVERAGE.md` | records **23/23**, records2 **52/52** |
 | **L4** access | rule scope, ledger gate, matchers, circles, status policies, token impersonation, claim permissions | see `COVERAGE.md` | access **35/35**, access2 **15/15**, access3 **16/16**, access4 **14/14** |
 | **L7** (part) | intent expiry | — | covered by access4 |
 

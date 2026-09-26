@@ -122,9 +122,10 @@ export class AccessControl {
     ]
   }
 
-  async matching(action: string, record: string, access: Access, scope: Scope) {
-    const out: any[] = []
-    for (const [r, level] of this.rules(scope)) if (await this.grants(r, action, record, access, scope, level)) out.push(r)
+  /** The rules that grant, each with the level it lives on. */
+  async matching(action: string, record: string, access: Access, scope: Scope): Promise<[any, Level][]> {
+    const out: [any, Level][] = []
+    for (const [r, level] of this.rules(scope)) if (await this.grants(r, action, record, access, scope, level)) out.push([r, level])
     return out
   }
 

@@ -95,6 +95,9 @@ export class Core {
       const now = clock()
       const sign = (custom: Record<string, unknown>) => serverProof(intent.hash, custom, system, 'system')
       const trail: Proof[] = []
+      // Each stage the reference saves separately is one change of the intent.
+      const stages: Stage[] = []
+      const stage = (status: string, routed = false) => stages.push({ proofs: trail.length, status, routed })
       const writes: BalanceRow[] = []
       const limitWrites: LimitRow[] = []
 
@@ -110,10 +113,10 @@ export class Core {
               sign({ amount: e.amount, handle: e.handle, inputs: [e.input], moment: t, schema: e.schema, status: 'resolved', symbol: e.symbol, wallet: e.wallet }),
             )
         }
+        if (trail.length) stage('pending')
         if (!(await this.permitted(tx, ledger, intent))) {
           // Waiting: nothing moves, no reservation is taken.
-          intent.meta.proofs.push(...trail)
-          await tx.update(ledger, 'intents', intent)
+          await save(tx, ledger, intent, trail, stages)
           return
         }
 
@@ -131,7 +134,10 @@ export class Core {
           }
         }
         trail.push(sign({ moment: now(), status: 'prepared' }))
+        stage('prepared')
+        stage('prepared', true)
         trail.push(sign({ detail: 'awaiting-clearance', moment: now(), status: 'committed' }))
+        stage('committed', true)
 
         const tc = now()
         for (const l of limits) {
@@ -149,15 +155,15 @@ export class Core {
         } else {
           trail.push(sign({ coreId: intent.data.handle, detail: 'cleared', moment: tc, status: 'committed' }))
         }
+        stage('committed', true)
         trail.push(sign({ moment: now(), status: 'completed' }))
+        stage('completed', true)
         writes.push(...books.changed())
         intent.meta.status = 'completed'
         intent.meta.routed = true
       } catch (e) {
         if (!(e instanceof Rejection)) throw e
-        trail.push(sign({ detail: e.detail, moment: now(), reason: e.reason, status: 'failed' }))
-        trail.push(sign({ moment: now(), status: 'aborted' }))
-        trail.push(sign({ moment: now(), status: 'rejected' }))
+        reject(trail, stage, sign, now, e.reason, e.detail)
         intent.meta.status = 'rejected'
       }
 
@@ -165,8 +171,7 @@ export class Core {
       // in the books and the memory store needs no rollback.
       for (const row of writes) await tx.putBalance(ledger, row)
       for (const row of limitWrites) await tx.putLimit(ledger, row)
-      intent.meta.proofs.push(...trail)
-      await tx.update(ledger, 'intents', intent)
+      await save(tx, ledger, intent, trail, stages)
     })
   }
 
@@ -185,13 +190,12 @@ export class Core {
           const system = (await tx.getKey(l.data.handle, 'system'))!
           const now = clock()
           const sign = (custom: Record<string, unknown>) => serverProof(intent.hash, custom, system, 'system')
-          intent.meta.proofs.push(
-            sign({ detail: `Intent ${intent.data.handle} expired`, moment: now(), reason: 'core.intent-expired', status: 'failed' }),
-            sign({ moment: now(), status: 'aborted' }),
-            sign({ moment: now(), status: 'rejected' }),
-          )
+          const trail: Proof[] = []
+          const stages: Stage[] = []
+          const stage = (status: string) => stages.push({ proofs: trail.length, status, routed: false })
+          reject(trail, stage, sign, now, 'core.intent-expired', `Intent ${intent.data.handle} expired`)
           intent.meta.status = 'rejected'
-          await tx.update(l.data.handle, 'intents', intent)
+          await save(tx, l.data.handle, intent, trail, stages)
         })
       }
     }
@@ -294,6 +298,36 @@ export class Core {
       }
     }
   }
+}
+
+type Stage = { proofs: number; status: string; routed: boolean }
+
+// failed {reason, detail} → aborted → rejected, each a change of its own. The statuses
+// of those changes are not recorded yet; the proof's status is used.
+function reject(trail: Proof[], stage: (s: string) => void, sign: (c: Record<string, unknown>) => Proof, now: () => string, reason: string, detail: string) {
+  trail.push(sign({ detail, moment: now(), reason, status: 'failed' }))
+  stage('failed')
+  trail.push(sign({ moment: now(), status: 'aborted' }))
+  stage('aborted')
+  trail.push(sign({ moment: now(), status: 'rejected' }))
+  stage('rejected')
+}
+
+// Appends the trail to the intent and records one change per stage: the intent as it
+// was after that stage, dated with the stage's last proof (records2: seven changes
+// for an issue, `routed` appearing on its own change after `prepared`).
+async function save(tx: Store, ledger: string, intent: StoredRecord, trail: Proof[], stages: Stage[]) {
+  const { routed: _r, ...before } = intent.meta
+  const earlier = intent.meta.proofs as Proof[]
+  let n = (await tx.changes(ledger, 'intents', intent.data.handle)).length
+  for (const st of stages) {
+    const proofs = [...earlier, ...trail.slice(0, st.proofs)]
+    const moment = proofs.at(-1)?.custom?.moment ?? intent.meta.moment
+    const meta = { ...before, proofs, status: st.status, ...(st.routed ? { routed: true } : {}), moment, change: ++n, action: 'update', labels: null }
+    await tx.addChange(ledger, 'intents', intent.data.handle, { ...intent, meta })
+  }
+  intent.meta.proofs.push(...trail)
+  await tx.update(ledger, 'intents', intent)
 }
 
 /** Permissions the claims need (about-authorization, access actions). */

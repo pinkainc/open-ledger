@@ -22,6 +22,11 @@ const statusMatches = (rule: any, target: unknown) => {
   return false
 }
 
+// A policy's `filter` names data fields the record must have, e.g. the ledger's own
+// `access-policy:status` applies to policies with `schema: access` only.
+const filtered = (filter: Record<string, unknown> | undefined, data: Record<string, unknown>) =>
+  !filter || Object.entries(filter).every(([k, v]) => statusMatches(v, data[k]))
+
 export async function applyStatus(store: Store, acl: AccessControl, ledger: StoredRecord, recordType: string, record: StoredRecord, proof: Proof) {
   const custom = proof.custom ?? {}
   if (!('status' in custom)) {
@@ -30,7 +35,11 @@ export async function applyStatus(store: Store, acl: AccessControl, ledger: Stor
   }
   const target = custom.status
   const policies = (await store.list(ledger.data.handle, 'policies')).filter(
-    (p) => p.data.schema === 'status' && (!p.data.record || p.data.record === recordType) && p.meta.status !== 'inactive',
+    (p) =>
+      p.data.schema === 'status' &&
+      (!p.data.record || p.data.record === recordType) &&
+      filtered(p.data.filter, record.data) &&
+      p.meta.status !== 'inactive',
   )
   const set = () => {
     if (target === null) delete record.meta.status

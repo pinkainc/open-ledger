@@ -91,13 +91,76 @@ for (const [storeName, makeStore] of STORES) {
       assert.equal(s.data.public, other.public)
     })
 
-    test('access check lists the rules that grant the action', async () => {
+    test('access check lists the granting rules for the check signers, without signer', async () => {
       const { sdk } = await newLedger(server.base, kp)
       await setupBooks(sdk, kp, ['alice'])
       const out: any = await raw((sdk.wallet as any).with('alice').access.check().data({ action: 'read' }).hash().sign([{ keyPair: kp }]).send())
-      // The owner's `{any, signer}` rule does not grant reads: signer rules are for mutations.
-      assert.deepEqual(out.data.map((r: any) => r.data), [{ action: 'any', record: 'any' }])
+      // Ledger rules first; the wallet's `{any, signer: kp}` is shown as `{any, record: wallet}`.
+      assert.deepEqual(out.data.map((r: any) => r.data), [{ action: 'any', record: 'any' }, { action: 'any', record: 'wallet' }])
       assert.equal(out.data[0].hash, hashData(out.data[0].data))
+      const stranger = await newKeyPair()
+      const other: any = await raw((sdk.wallet as any).with('alice').access.check().data({ action: 'read' }).hash().sign([{ keyPair: stranger }]).send())
+      assert.deepEqual(other.data.map((r: any) => r.data), [{ action: 'any', record: 'any' }])
+    })
+
+    test('the ledger record is updated, signed and checked like any record', async () => {
+      const { sdk } = await newLedger(server.base, kp)
+      const s: any = sdk
+      const v1 = await raw(s.ledger.read())
+      const v2 = await raw(s.ledger.from(v1).data({ custom: { region: 'eu' } }).hash().sign([{ keyPair: kp }]).send())
+      assert.deepEqual([v2.data.parent, v2.luid, v2.data.custom.region], [v1.hash, v1.luid, 'eu'])
+      const v3 = await raw(s.ledger.from(v2).sign([{ keyPair: kp, custom: { status: 'active' } }]).send())
+      assert.equal(v3.meta.status, 'active')
+      const changes = await raw(s.ledger.change.list())
+      assert.deepEqual(changes.data.map((c: any) => [c.meta.change, c.meta.action, c.meta.status]), [[3, 'update', 'active'], [2, 'update', 'created'], [1, 'create', 'created']])
+      assert.equal((await raw(s.ledger.change.read(1))).hash, v1.hash)
+      const check = await raw(s.ledger.access.check().data({ action: 'read' }).hash().sign([{ keyPair: kp }]).send())
+      assert.deepEqual(check.data.map((r: any) => r.data), [{ action: 'any', record: 'any' }])
+    })
+
+    test('every ledger has the intent and access-policy status policies', async () => {
+      const { sdk } = await newLedger(server.base, kp)
+      const list = await raw((sdk as any).policy.list())
+      assert.deepEqual(list.data.map((p: any) => p.data.handle), ['intent:status', 'access-policy:status'])
+      const p = list.data[0]
+      assert.equal(p.meta.status, undefined)
+      assert.deepEqual(Object.keys(p.meta.proofs[0]).sort(), ['digest', 'method', 'public', 'result'])
+      assert.equal(p.meta.owners[0], p.meta.proofs[1].public)
+      assert.equal(p.meta.moment, (await raw(sdk.ledger.read())).meta.moment)
+    })
+
+    test('a status policy with a filter applies only to matching records', async () => {
+      const { sdk } = await newLedger(server.base, kp)
+      const s: any = sdk
+      // `access-policy:status` filters on schema: access, so this status policy is free.
+      await s.policy.init().data({ handle: 'p', schema: 'status', record: 'wallet', values: [{ status: 'x' }] }).hash().sign([{ keyPair: kp }]).send()
+      const p = await raw(s.policy.read('p'))
+      assert.equal((await raw(s.policy.from(p).sign([{ keyPair: kp, custom: { status: 'whatever' } }]).send())).meta.status, 'whatever')
+    })
+
+    test('an intent is recorded as one change per stage', async () => {
+      const { sdk } = await newLedger(server.base, kp)
+      await setupBooks(sdk, kp, ['alice'])
+      const h = await sendIntent(sdk, kp, [{ action: 'issue', target: ref('alice'), symbol: ref('usd'), amount: 1 }])
+      await settle(sdk, h)
+      const changes = await raw((sdk.intent as any).with(h).change.list())
+      assert.deepEqual(
+        changes.data.reverse().map((c: any) => [c.meta.change, c.meta.status, c.meta.proofs.length, c.meta.routed ?? false]),
+        [[1, 'pending', 3, false], [2, 'pending', 4, false], [3, 'prepared', 5, false], [4, 'prepared', 5, true], [5, 'committed', 6, true], [6, 'committed', 7, true], [7, 'completed', 8, true]],
+      )
+    })
+
+    test('a further signature on an intent is appended; owners and status stay', async () => {
+      const { sdk } = await newLedger(server.base, kp)
+      await setupBooks(sdk, kp, ['alice'])
+      const h = await sendIntent(sdk, kp, [{ action: 'issue', target: ref('alice'), symbol: ref('usd'), amount: 1 }])
+      await settle(sdk, h)
+      const done = await raw(sdk.intent.read(h))
+      const other = await newKeyPair()
+      const out = await raw((sdk.intent as any).from(done).sign([{ keyPair: other }]).send())
+      assert.equal(out.meta.proofs.length, done.meta.proofs.length + 1)
+      assert.deepEqual([out.meta.status, out.meta.owners], [done.meta.status, done.meta.owners])
+      assert.equal(out.meta.proofs.at(-1).public, other.public)
     })
   })
 }
