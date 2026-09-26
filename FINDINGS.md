@@ -4,6 +4,32 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — L8: bridge event deliveries
+
+Recorded with `conformance/scenarios/events.ts` (23 client exchanges, 20 bridge calls).
+Delivery tracking is **on** on the sandbox (the docs call it alpha, behind two flags).
+All reproduced.
+
+- **Every call to a bridge is a delivery** `$evd`: `{hash, data: {handle: <17
+  characters>, bridge, effect: null, record: "intent", linked: <intent>}, luid, meta:
+  {status, replay, moment, output, proofs}}`. `hash` is of `data`; `output` is exactly
+  the body sent (signed entry, command, or the intent itself for a status PUT).
+- **One `system` proof per attempt**: `delivered {detail: {httpStatus}}`; `failed
+  {reason: delivery.target-rejected, detail: {httpStatus}}` — `detail.body` appeared
+  only for 501 (`"{}"` for an empty answer); `replay` counts attempts; `meta.moment`
+  follows the last proof. A 500 then 202: `failed, delivered`, replay 2.
+- **501**: `failed` then `cancelled {reason: delivery.permanent-failure}` (no detail),
+  replay 1, no more attempts. **The intent gets a `system` proof `{status: "error",
+  reason: "core.bridge-unreachable", detail: "Request failed with status code 501"}`**
+  and stays `pending`.
+- `GET /bridges/{id}/events` — newest first by creation, the usual filters
+  (`meta.status`, `$in`, `data.linked`); `GET …/events/{handle}` — the record itself;
+  unknown: 404 `Event delivery '<h>' not found on ledger '<l>'`.
+- `POST …/events/retry` (signed `{handle}` or `{maxAge}`) → **202, no body**. By handle
+  it resends a cancelled delivery (proofs `failed, cancelled, delivered`, replay 2); the
+  bridge's report then completed the intent. Unknown handle: 404 `Event '<h>' not found
+  on ledger '<l>'`.
+
 ## 2026-09-26 — Addresses and wallet routes
 
 Recorded with `conformance/scenarios/routes.ts` (62 client exchanges, 18 bridge calls;

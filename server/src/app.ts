@@ -614,6 +614,40 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await store.remove(ledger.data.handle, 'wallets', found.data.handle)
     reply.status(204).send()
   }
+  // ---- bridge event deliveries (inspect-event-deliveries; recorded in `events`) ------
+
+  // Every call to a bridge is a delivery record (`$evd`, core.ts). Listing needs
+  // `query-event` on the bridge, retrying `retry-event`; lists take the usual filters
+  // (`meta.status`, `data.linked`) and come newest first.
+  type E = { Params: { id: string; delivery: string } }
+  const deliveriesOf = async (t: Target) => (await store.list(t.scope, 'events')).filter((d) => d.data.bridge === t.found.data.handle)
+  app.get<{ Params: { id: string } }>('/api/v2/bridges/:id/events', async (req) => {
+    const who = await authenticate(req)
+    const t = await target(req, 'bridges', req.params.id)
+    await acl.authorize('query-event', 'bridge', { who }, { ledger: t.ledger, record: t.found })
+    return listPage(req, await deliveriesOf(t))
+  })
+  app.get<E>('/api/v2/bridges/:id/events/:delivery', async (req) => {
+    const who = await authenticate(req)
+    const t = await target(req, 'bridges', req.params.id)
+    await acl.authorize('query-event', 'bridge', { who }, { ledger: t.ledger, record: t.found })
+    const found = (await deliveriesOf(t)).find((d) => d.data.handle === req.params.delivery)
+    if (!found) throw new LedgerError(404, 'record.not-found', `Event delivery '${req.params.delivery}' not found on ledger '${t.scope}'`)
+    return found
+  })
+  // 202 with no body; the deliveries go out in the background.
+  app.post<{ Params: { id: string } }>('/api/v2/bridges/:id/events/retry', async (req, reply) => {
+    const who = await authenticate(req)
+    const t = await target(req, 'bridges', req.params.id)
+    verifyProofs(req.body)
+    await acl.authorize('retry-event', 'bridge', { who, proofs: proofKeys(req.body) }, { ledger: t.ledger, record: t.found })
+    const data = ((req.body as any)?.data ?? {}) as { handle?: string; maxAge?: number }
+    const by = data.handle !== undefined ? { handle: String(data.handle) } : { maxAge: typeof data.maxAge === 'number' ? data.maxAge : undefined }
+    if (!(await core.retryDeliveries(t.scope, t.found.data.handle, by)))
+      throw new LedgerError(404, 'record.not-found', `Event '${data.handle}' not found on ledger '${t.scope}'`)
+    reply.status(202).send()
+  })
+
   app.delete<{ Params: { id: string } }>('/api/v2/wallets/:id', dropWallet)
   app.post<{ Params: { id: string } }>('/api/v2/wallets/:id/drop', dropWallet)
 

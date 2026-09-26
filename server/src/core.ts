@@ -25,7 +25,7 @@ import { newLuid } from './ids.js'
 import type { BalanceRow, LimitRow, Store, StoredRecord } from './store.js'
 import { hashData } from './crypto.js'
 import type { AccessControl, Principal } from './access.js'
-import { Bridges, type BridgeCall, type BridgeOptions } from './bridges.js'
+import { Bridges, type BridgeCall, type BridgeOptions, type Outcome } from './bridges.js'
 import { createHash } from 'node:crypto'
 import { RoutingError, filterMatches, resolveAddress, route } from './routing.js'
 
@@ -90,21 +90,124 @@ export class Core {
   ) {
     this.minuteMs = minuteMs
     this.bridges = new Bridges(bridges)
+    this.bridges.onAttempt = (call, outcome) => this.recordAttempt(call, outcome)
   }
 
   /** Process an intent after the current request has been answered. */
-  schedule(ledger: string, handle: string, redrive = false) {
-    setImmediate(() => void this.process(ledger, handle, redrive).catch((e) => console.error(`intent ${ledger}/${handle}:`, e)))
+  schedule(ledger: string, handle: string) {
+    setImmediate(() => void this.process(ledger, handle).catch((e) => console.error(`intent ${ledger}/${handle}:`, e)))
   }
 
   /**
-   * Pick up intents a previous run left unfinished. Calls to bridges that were in
-   * flight are sent again; bridges treat a repeat as a no-op.
+   * Pick up what a previous run left unfinished: intents are moved on from their trail,
+   * and deliveries not yet accepted (pending or failed) are sent again, their output
+   * unchanged. Bridges treat a repeat as a no-op.
    */
   async resume() {
-    for (const l of await this.store.list('', 'ledgers'))
-      for (const i of await this.store.list(l.data.handle, 'intents'))
-        if (!FINAL.has(i.meta.status)) this.schedule(l.data.handle, i.data.handle, true)
+    for (const l of await this.store.list('', 'ledgers')) {
+      const ledger = l.data.handle
+      for (const i of await this.store.list(ledger, 'intents')) if (!FINAL.has(i.meta.status)) this.schedule(ledger, i.data.handle)
+      for (const d of await this.store.list(ledger, 'events'))
+        if (d.meta.status === 'pending' || d.meta.status === 'failed') {
+          const call = await this.callOf(ledger, d)
+          if (call) void this.bridges.deliver(call)
+        }
+    }
+  }
+
+  // ---- deliveries (inspect-event-deliveries) ----------------------------------------
+
+  // Each call becomes a delivery record `$evd`, written in the transaction of the step
+  // that caused it, so a call is never lost between the trail and the wire.
+  private async enqueue(tx: Store, ledger: string, call: BridgeCall, linked: string) {
+    const handle = entryId()
+    const data = { handle, bridge: call.bridge, effect: null, record: 'intent', linked }
+    const record: StoredRecord = {
+      hash: hashData(data),
+      data,
+      luid: newLuid('$evd'),
+      meta: { status: 'pending', replay: 0, moment: new Date().toISOString(), output: call.body, proofs: [] },
+    }
+    await tx.insert(ledger, 'events', record)
+    call.ledger = ledger
+    call.delivery = handle
+  }
+
+  /** Each attempt is signed into its delivery; `replay` counts the attempts. */
+  private async recordAttempt(call: BridgeCall, outcome: Outcome) {
+    if (!call.ledger || !call.delivery) return
+    const ledger = call.ledger
+    await this.store.transaction(ledger, async (tx) => {
+      const d = await tx.get(ledger, 'events', call.delivery!)
+      const key = await tx.getKey(ledger, 'system')
+      if (!d || !key) return
+      const moment = new Date().toISOString()
+      const { status, ...rest } = outcome
+      d.meta.proofs.push(serverProof(d.hash, { ...rest, moment, status }, key, 'system'))
+      if (status !== 'cancelled') d.meta.replay = (d.meta.replay ?? 0) + 1
+      d.meta.status = status
+      d.meta.moment = new Date(Date.parse(moment) + 1).toISOString()
+      await tx.update(ledger, 'events', d)
+      if (status === 'cancelled' && d.data.record === 'intent') await this.noteUnreachable(tx, ledger, d, key)
+    })
+  }
+
+  // A delivery the ledger gave up on is noted on its intent (recorded, events): a
+  // `system` proof with status `error` that changes nothing else — the intent keeps
+  // waiting, and a retry of the delivery can still complete it.
+  private async noteUnreachable(tx: Store, ledger: string, d: StoredRecord, key: KeyPair) {
+    const intent = await tx.get(ledger, 'intents', d.data.linked)
+    if (!intent || FINAL.has(intent.meta.status)) return
+    const httpStatus = [...d.meta.proofs].reverse().find((p: Proof) => p.custom?.status === 'failed')?.custom?.detail?.httpStatus
+    const detail = httpStatus ? `Request failed with status code ${httpStatus}` : 'Bridge unreachable'
+    const moment = new Date().toISOString()
+    intent.meta.proofs.push(serverProof(intent.hash, { detail, moment, reason: 'core.bridge-unreachable', status: 'error' }, key, 'system'))
+    const n = (await tx.changes(ledger, 'intents', intent.data.handle)).length
+    const { routed: _r, ...meta } = intent.meta
+    await tx.addChange(ledger, 'intents', intent.data.handle, { ...intent, meta: { ...meta, moment, change: n + 1, action: 'update', labels: null } })
+    await tx.update(ledger, 'intents', intent)
+  }
+
+  // A delivery's call, rebuilt from its output: a prepared entry (`schema`), a command
+  // (`action`) or the intent itself (a status notification).
+  private async callOf(ledger: string, d: StoredRecord): Promise<BridgeCall | undefined> {
+    const server = await this.server(this.store, ledger, d.data.bridge)
+    if (!server) return undefined
+    const out: any = d.meta.output
+    const x = out?.data ?? {}
+    const call = (method: 'POST' | 'PUT', path: string): BridgeCall => ({ bridge: d.data.bridge, server, method, path, body: out, ledger, delivery: d.data.handle })
+    if (x.action) return call('POST', `/${String(x.handle).startsWith('deb_') ? 'debits' : 'credits'}/${x.handle}/${x.action}`)
+    if (x.schema === 'debit' || x.schema === 'credit') return call('POST', `/${x.schema}s`)
+    return call('PUT', `/intents/${encodeURIComponent(x.handle)}`)
+  }
+
+  /**
+   * Sends deliveries of a bridge again (retry endpoint): one by handle, whatever its
+   * status; or every failed, cancelled or pending one whose last attempt is at most
+   * `maxAge` minutes old (0: any age). Returns false for an unknown handle.
+   */
+  async retryDeliveries(ledger: string, bridge: string, by: { handle?: string; maxAge?: number }) {
+    const all = (await this.store.list(ledger, 'events')).filter((d) => d.data.bridge === bridge)
+    let chosen: StoredRecord[]
+    if (by.handle !== undefined) {
+      chosen = all.filter((d) => d.data.handle === by.handle)
+      if (!chosen.length) return false
+    } else {
+      const minutes = Math.min(by.maxAge ?? 60, 48 * 60)
+      const since = Date.now() - minutes * 60_000
+      chosen = all.filter((d) => ['failed', 'cancelled', 'pending'].includes(d.meta.status) && (minutes === 0 || Date.parse(d.meta.moment) >= since))
+    }
+    for (const d of chosen) {
+      await this.store.transaction(ledger, async (tx) => {
+        const fresh = await tx.get(ledger, 'events', d.data.handle)
+        if (!fresh) return
+        fresh.meta.status = 'pending'
+        await tx.update(ledger, 'events', fresh)
+      })
+      const call = await this.callOf(ledger, d)
+      if (call) void this.bridges.deliver(call)
+    }
+    return true
   }
 
   close() {
@@ -117,7 +220,7 @@ export class Core {
    * its proof trail, so the next step is read from there: this runs again whenever a
    * bridge reports, and after a restart.
    */
-  async process(ledger: string, handle: string, redrive = false) {
+  async process(ledger: string, handle: string) {
     const calls: Delivery[] = []
     let spawned: string[] = []
     await this.store.transaction(ledger, async (tx) => {
@@ -126,14 +229,15 @@ export class Core {
       const run = new Run(tx, ledger, intent, (await tx.getKey(ledger, 'system'))!, (await tx.getKey(ledger, 'core'))!)
       spawned = run.spawned
       try {
-        if (intent.meta.status === 'pending') await this.advancePending(run, calls, redrive)
-        else if (intent.meta.status === 'committed') await this.advanceCommitted(run, calls, redrive)
-        else if (intent.meta.status === 'aborted') await this.advanceAborted(run, calls, redrive)
+        if (intent.meta.status === 'pending') await this.advancePending(run, calls)
+        else if (intent.meta.status === 'committed') await this.advanceCommitted(run, calls)
+        else if (intent.meta.status === 'aborted') await this.advanceAborted(run, calls)
       } catch (e) {
         if (!(e instanceof Rejection)) throw e
         reject(run.trail, run.stage, run.sign, run.now, e.reason, e.detail)
         intent.meta.status = 'rejected'
       }
+      for (const d of calls) for (const c of d.calls) await this.enqueue(tx, ledger, c, handle)
       await run.finish()
     })
     await this.deliver(calls)
@@ -142,7 +246,7 @@ export class Core {
 
   // pending: resolve, check permissions and limits, prepare. With bridged entries the
   // intent then waits for every bridge to report `prepared` (or one to report `failed`).
-  private async advancePending(run: Run, calls: Delivery[], redrive: boolean) {
+  private async advancePending(run: Run, calls: Delivery[]) {
     const { tx, ledger, intent, trail } = run
     const earlier = resolvedEntries(intent)
     const { entries, limits } = await this.resolve(tx, ledger, intent, earlier)
@@ -192,9 +296,6 @@ export class Core {
         calls.push({ order: 'parallel', calls: await this.entryCalls(run, debitParts.length ? debitParts : creditParts, resolved) })
         return
       }
-    } else if (redrive && parts.length) {
-      const waiting = sentParts(run, parts).filter((p) => !run.reported(p.handle, ['prepared', 'failed']))
-      calls.push({ order: 'parallel', calls: await this.entryCalls(run, waiting, run.snapshot('pending')) })
     }
 
     if (parts.length) {
@@ -282,12 +383,8 @@ export class Core {
     }
   }
 
-  private async advanceCommitted(run: Run, calls: Delivery[], redrive: boolean) {
+  private async advanceCommitted(run: Run, calls: Delivery[]) {
     const bridged = await partsOf(run, resolvedEntries(run.intent) ?? [])
-    if (redrive) {
-      const waiting = bridged.filter((e) => !run.reported(e.handle, ['committed']))
-      calls.push({ order: 'parallel', calls: await this.commandCalls(run, waiting, 'commit', run.snapshot('committed', true)) })
-    }
     if (bridged.every((e) => run.reported(e.handle, ['committed']))) await this.complete(run, calls, bridged)
   }
 
@@ -311,12 +408,8 @@ export class Core {
     else await this.rejectAborted(run, calls, bridged)
   }
 
-  private async advanceAborted(run: Run, calls: Delivery[], redrive: boolean) {
+  private async advanceAborted(run: Run, calls: Delivery[]) {
     const bridged = sentParts(run, await partsOf(run, resolvedEntries(run.intent) ?? []))
-    if (redrive) {
-      const waiting = bridged.filter((e) => !run.reported(e.handle, ['aborted']))
-      calls.push({ order: 'parallel', calls: await this.commandCalls(run, waiting, 'abort', run.snapshot('aborted')) })
-    }
     if (bridged.every((e) => run.reported(e.handle, ['aborted']))) await this.rejectAborted(run, calls, bridged)
   }
 
@@ -432,6 +525,7 @@ export class Core {
       const run = new Run(tx, ledger, intent, (await tx.getKey(ledger, 'system'))!, (await tx.getKey(ledger, 'core'))!)
       const bridged = run.corePrepared() ? sentParts(run, await partsOf(run, resolvedEntries(intent) ?? [])) : []
       await this.abort(run, calls, bridged, 'core.intent-expired', `Intent ${intent.data.handle} expired`)
+      for (const d of calls) for (const c of d.calls) await this.enqueue(tx, ledger, c, handle)
       await run.finish()
     })
     await this.deliver(calls)

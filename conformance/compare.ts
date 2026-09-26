@@ -34,6 +34,8 @@ function normaliser() {
     if (/^-[\w-]{16}$/.test(v)) return token('thread', v)
     if (/^\{\{ secret\.[a-z0-9]+ \}\}$/.test(v)) return token('secret', v)
     if (/^(deb|cre)_[A-Za-z0-9]{17}$/.test(v)) return token(`entry:${v.slice(0, 3)}`, v)
+    // Handles the ledger makes itself: event deliveries, intents of forward routes.
+    if (/^[A-Za-z0-9]{17}$/.test(v)) return token('id', v)
     if (/^[0-9a-f]{64}$/.test(v)) return '<hex64>'
     if (/^[A-Za-z0-9+/]{86}==$/.test(v)) return '<signature>'
     if (/^[A-Za-z0-9+/]{43}=$/.test(v)) return token('key', v)
@@ -143,6 +145,20 @@ function settleRaces(x: any): any {
   if (!x || typeof x !== 'object') return x
   const out: any = {}
   for (const [k, v] of Object.entries(x)) out[k] = settleRaces(v)
+  // Delivery lists (`$evd`, newest first): a status notification and a commit go out
+  // together, so their creation order is timing. Within an intent: final status,
+  // command, `prepared` status, prepare.
+  if (Array.isArray(out.data) && out.data.length && out.data.every((d: any) => String(d?.luid).startsWith('$evd.'))) {
+    const group = new Map<string, number>()
+    for (const d of out.data) if (!group.has(d.data.linked)) group.set(d.data.linked, group.size)
+    const rank = (d: any) => {
+      const o = d.meta?.output?.data ?? {}
+      if (o.action) return 1
+      if (o.schema === 'debit' || o.schema === 'credit') return 3
+      return d.meta?.output?.meta?.status === 'prepared' ? 2 : 0
+    }
+    out.data = out.data.map((d: any, i: number) => ({ d, i })).sort((a: any, b: any) => group.get(a.d.data.linked)! - group.get(b.d.data.linked)! || rank(a.d) - rank(b.d) || a.i - b.i).map((x: any) => x.d)
+  }
   if (Array.isArray(out.proofs)) {
     const external = (p: any) => p?.signer && !['system', 'core'].includes(p.signer) && p.custom?.handle
     const key = (p: any) => `${p.signer} ${String(p.custom.handle).slice(0, 3)}`

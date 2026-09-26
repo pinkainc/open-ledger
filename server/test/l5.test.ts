@@ -177,31 +177,46 @@ for (const [storeName, makeStore] of STORES) {
   })
 }
 
-test('after a restart, calls in flight are sent again with the same entry', async () => {
+test('after a restart, a delivery not yet accepted is sent again, unchanged', async () => {
   const { MemoryStore } = await import('../src/store.js')
   const store = new MemoryStore()
   const bridge = await testBridge()
   const kp = await newKeyPair()
-  const first = await startServer(store, new Core(store, { bridges: { retryMs: 20 } }))
-  const { handle, sdk } = await newLedger(first.base, kp)
-  const s: any = sdk
-  await s.bridge.init().data({ handle: 'bank', schema: 'rest', config: { server: bridge.url }, secure: [] }).hash().sign([{ keyPair: kp }]).send()
-  await s.symbol.init().data({ handle: 'usd', factor: 100 }).hash().sign([{ keyPair: kp }]).send()
-  await s.wallet.init().data({ handle: 'alice' }).hash().sign([{ keyPair: kp }]).send()
-  await s.wallet.init().data({ handle: 'acc', bridge: 'bank' }).hash().sign([{ keyPair: kp }]).send()
-  await s.intent.init().data({ handle: 'fund', claims: [{ action: 'issue', target: ref('alice'), symbol: ref('usd'), amount: 5 }] }).hash().sign([{ keyPair: kp }]).send()
-  await settle(s, 'fund')
-  await s.intent.init().data({ handle: 'out', claims: [{ action: 'transfer', source: ref('alice'), target: ref('acc'), symbol: ref('usd'), amount: 5 }] }).hash().sign([{ keyPair: kp }]).send()
-  const firstCall = await until(() => bridge.calls.find((c) => c.url === '/v2/credits'), 'first prepare')
-  first.core.close()
-
+  const first = await startServer(store, new Core(store, { bridges: { retryMs: 60_000 } }))
   const core = new Core(store, { bridges: { retryMs: 20 } })
-  await core.resume()
-  const again = await until(() => { const c = bridge.calls.filter((c) => c.url === '/v2/credits'); return c.length === 2 ? c[1] : undefined }, 'prepare again')
-  assert.equal(again.body.data.luid, firstCall.body.data.luid)
-  assert.equal(again.body.data.handle, firstCall.body.data.handle)
-  core.close()
-  await first.close()
-  await bridge.close()
-  void handle
+  try {
+    const { sdk } = await newLedger(first.base, kp)
+    const s: any = sdk
+    await s.bridge.init().data({ handle: 'bank', schema: 'rest', config: { server: bridge.url }, secure: [] }).hash().sign([{ keyPair: kp }]).send()
+    await s.symbol.init().data({ handle: 'usd', factor: 100 }).hash().sign([{ keyPair: kp }]).send()
+    await s.wallet.init().data({ handle: 'alice' }).hash().sign([{ keyPair: kp }]).send()
+    await s.wallet.init().data({ handle: 'acc', bridge: 'bank' }).hash().sign([{ keyPair: kp }]).send()
+    await s.intent.init().data({ handle: 'fund', claims: [{ action: 'issue', target: ref('alice'), symbol: ref('usd'), amount: 5 }] }).hash().sign([{ keyPair: kp }]).send()
+    await settle(s, 'fund')
+    // The bridge is down for the first attempt; the process dies while waiting to retry.
+    bridge.answerWith(() => 500)
+    await s.intent.init().data({ handle: 'out', claims: [{ action: 'transfer', source: ref('alice'), target: ref('acc'), symbol: ref('usd'), amount: 5 }] }).hash().sign([{ keyPair: kp }]).send()
+    const firstCall = await until(() => bridge.calls.find((c) => c.url === '/v2/credits'), 'first prepare')
+    const failed = await until(async () => {
+      const { response } = await s.bridge.with('bank').events.list()
+      return response.data.data.find((d: any) => d.meta.status === 'failed')
+    }, 'a failed delivery')
+    assert.equal(failed.meta.replay, 1)
+    first.core.close()
+
+    bridge.answerWith(() => 202)
+    await core.resume()
+    const again = await until(() => { const c = bridge.calls.filter((c) => c.url === '/v2/credits'); return c.length === 2 ? c[1] : undefined }, 'prepare again')
+    assert.deepEqual(again.body, firstCall.body, 'the output is replayed unchanged')
+    const delivered = await until(async () => {
+      const { response } = await s.bridge.with('bank').events.find(failed.data.handle)
+      return response.data.meta.status === 'delivered' ? response.data : undefined
+    }, 'delivered')
+    assert.deepEqual(delivered.meta.proofs.map((p: any) => p.custom.status), ['failed', 'delivered'])
+    assert.equal(delivered.meta.replay, 2)
+  } finally {
+    core.close()
+    await first.close()
+    await bridge.close()
+  }
 })

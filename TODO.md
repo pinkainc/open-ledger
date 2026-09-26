@@ -106,7 +106,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] A commit report that never comes: the intent stays `committed` (recorded, l6; same here)
 - [ ] Bridge proof authorisation: today any signer allowed to sign the intent may report
 - [x] Routes (`wallet.routes`), address resolution `schema:handle@parent` — see Routes below
-- [ ] `/bridges/{id}/events` (deliveries) — L8
+- [x] `/bridges/{id}/events` (deliveries) — L8
 ## Routes and addresses (recorded: `routes`, 62/62 + 18/18)
 
 - [x] Address hierarchy `schema:handle@parent → schema@parent → parent → schema` (`routing.ts`)
@@ -148,7 +148,21 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       conformance (run.sh sets 1000 ms)
 - [ ] Thread abort: every intent of the expired intent's thread (one intent per thread today)
 - [ ] Release reservations of an expired intent (none exist yet: waiting intents reserve nothing)
-## L8 — event delivery, retries, `cancelled`
+## L8 — event delivery, retries, `cancelled` (recorded: `events`, 23/23 + 20/20)
+
+- [x] Deliveries `$evd` as an outbox: written in the transaction of the step that makes the
+      call, attempted by `Bridges`, one signed proof per attempt, `replay`, `cancelled` on 501
+- [x] `resume` sends pending/failed deliveries with their output unchanged; the redrive that
+      recomputed calls from the trail is gone
+- [x] A cancelled delivery notes its intent (`error`, `core.bridge-unreachable`)
+- [x] `GET /bridges/{id}/events[/{handle}]`, `POST …/events/retry` (handle or `maxAge`),
+      access `query-event` / `retry-event`
+- [ ] Unreachable target (network error): `delivery.target-unreachable {message, code}` —
+      from the docs, not recorded
+- [ ] Retry cap (`delivery.retry-cap-exhausted`) — server-configurable on the reference; none here
+- [ ] (?) Does bulk retry include `cancelled`? (we: failed, cancelled, pending)
+- [ ] Effects (`/effects`, signals, webhooks) and their deliveries (`/effects/{id}/events`)
+- [ ] `minka bridge events list|show|retry` in the CLI end-to-end
 ## L9 — cross-ledger
 
 ## E2E — the official `minka` CLI
