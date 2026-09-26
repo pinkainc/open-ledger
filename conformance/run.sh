@@ -38,7 +38,8 @@ pids+=($!)
 wait_port $PROXY_PORT
 
 echo "==> $LEVEL against $target (run $RUN)"
-RUN=$RUN BASE=http://127.0.0.1:$PROXY_PORT/api/v2 npx tsx conformance/scenarios/$LEVEL.ts
+# DIRECT bypasses the proxy, for polling whose count would otherwise depend on timing.
+RUN=$RUN BASE=http://127.0.0.1:$PROXY_PORT/api/v2 DIRECT=$target/api/v2 npx tsx conformance/scenarios/$LEVEL.ts
 
 if [ "$MODE" = check ]; then
   echo "==> compare"

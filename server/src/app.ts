@@ -2,26 +2,24 @@
 // Ledger API as the official SDK and CLI use it; everything behind them is ours.
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import { jwtVerify } from 'jose'
-import { customAlphabet } from 'nanoid'
+import { Core } from './core.js'
 import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, verifyDigest, type KeyPair, type Proof } from './crypto.js'
 import { LedgerError, errors } from './errors.js'
+import { newLuid, newThread } from './ids.js'
+import { validateBody } from './schemas.js'
 import type { Store, StoredRecord } from './store.js'
 
-export type AppOptions = { store: Store }
+export type AppOptions = { store: Store; core?: Core }
 
-// Record kinds of L0: path segment, luid prefix, name used in error details, and the
-// data properties the reference ledger requires beyond `handle`.
+// Record kinds: path segment → luid prefix, name used in error details, and the
+// record type that access rules refer to.
 const KINDS = {
-  ledgers: { luid: '$ldg', name: 'Ledger', record: 'ledger', required: ['handle', 'signer'] },
-  symbols: { luid: '$sym', name: 'Symbol', record: 'symbol', required: ['handle', 'factor'] },
-  wallets: { luid: '$wlt', name: 'Wallet', record: 'wallet', required: ['handle'] },
+  ledgers: { luid: '$ldg', name: 'Ledger', record: 'ledger' },
+  symbols: { luid: '$sym', name: 'Symbol', record: 'symbol' },
+  wallets: { luid: '$wlt', name: 'Wallet', record: 'wallet' },
+  intents: { luid: '$int', name: 'Intent', record: 'intent' },
 } as const
 type Kind = keyof typeof KINDS
-
-// Same alphabet and length as reference luids ("$wlt.-2vcyddudkeQg6cbj"). They are
-// opaque to clients; only the prefix and shape are part of the contract.
-const luidBody = customAlphabet('-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz', 16)
-const newLuid = (prefix: string) => `${prefix}.-${luidBody()}`
 
 const PAGE_LIMIT = 20
 
@@ -32,7 +30,7 @@ declare module 'fastify' {
   }
 }
 
-export function buildApp({ store }: AppOptions) {
+export function buildApp({ store, core = new Core(store) }: AppOptions) {
   const app = Fastify({ logger: false })
   const now = () => new Date().toISOString()
 
@@ -47,13 +45,22 @@ export function buildApp({ store }: AppOptions) {
     return { hash, data, meta: { proofs, moment }, ...extra }
   }
 
-  app.setErrorHandler((err: any, req, reply) => {
-    const e =
-      err instanceof LedgerError
-        ? err
-        : err?.statusCode === 400 && err?.code === 'FST_ERR_CTP_EMPTY_JSON_BODY'
-          ? errors.missingProperty('', 'data')
-          : new LedgerError(500, 'api.internal-error', 'Internal error.')
+  function toLedgerError(err: any): LedgerError {
+    if (err instanceof LedgerError) return err
+    // An empty JSON body never reaches the handler; report it as the missing `data`.
+    if (err?.code === 'FST_ERR_CTP_EMPTY_JSON_BODY') {
+      try {
+        validateBody('wallets', {})
+      } catch (v) {
+        return v as LedgerError
+      }
+    }
+    console.error(err)
+    return new LedgerError(500, 'api.internal-error', 'Internal error.')
+  }
+
+  app.setErrorHandler((err, req, reply) => {
+    const e = toLedgerError(err)
     const data: Record<string, unknown> = { reason: e.reason, detail: e.detail }
     if (e.custom) data.custom = e.custom
     reply.status(e.status).send(envelope(req.ledgerKey, data))
@@ -70,7 +77,7 @@ export function buildApp({ store }: AppOptions) {
     if (typeof handle === 'string' && handle) req.ledgerKey = await store.getKey(handle)
   })
 
-  // ---- authentication ----------------------------------------------------------
+  // ---- authentication and access ------------------------------------------------
 
   // Bearer tokens are EdDSA JWTs signed by the caller; `kid` carries the raw public
   // key. A request without a token is anonymous — access rules decide what it may do.
@@ -122,12 +129,6 @@ export function buildApp({ store }: AppOptions) {
 
   // ---- record creation -----------------------------------------------------------
 
-  function validateBody(kind: Kind, body: any) {
-    if (!body || typeof body !== 'object') throw errors.missingProperty('', 'data')
-    if (!body.data || typeof body.data !== 'object') throw errors.missingProperty('', 'data')
-    for (const prop of KINDS[kind].required) if (!(prop in body.data)) throw errors.missingProperty('/data', prop)
-  }
-
   function verifyProofs(body: any): Proof[] {
     const proofs: Proof[] = body.meta?.proofs ?? []
     if (!proofs.length) throw errors.signatureMissing()
@@ -144,44 +145,60 @@ export function buildApp({ store }: AppOptions) {
     const proofs = verifyProofs(body)
     const luid = newLuid(KINDS[kind].luid)
     const moment = now()
+    const sign = (custom: Record<string, unknown>) => serverProof(body.hash, custom, key, 'system')
 
-    // Client proofs come back tagged with their origin; the ledger appends its own
-    // proof binding the luid it assigned.
+    // Client proofs come back tagged with their origin; the ledger appends its own.
     const clientProofs = proofs.map((p) => ({ ...p, origin: p.origin ?? 'key-pair' }))
-    const record: StoredRecord = {
-      hash: body.hash,
-      // The reference ledger materialises an absent ledger `config` as null after the
-      // client hashed the data, so the stored data no longer hashes to `hash`. Clients
-      // may depend on the field being present, so the quirk is reproduced.
-      data: kind === 'ledgers' ? { ...body.data, config: body.data.config ?? null } : body.data,
-      luid,
-      meta: {
-        proofs: [...clientProofs, serverProof(body.hash, { luid, moment: now(), status: 'created' }, key, 'system')],
-        status: 'created',
-        moment,
-        owners: [...new Set(proofs.map((p) => p.public))],
-      },
-    }
+    const owners = [...new Set(proofs.map((p) => p.public))]
+    const record: StoredRecord =
+      kind === 'intents'
+        ? {
+            hash: body.hash,
+            data: body.data,
+            luid,
+            // An intent is accepted as `pending` and processed after the response.
+            meta: {
+              proofs: [...clientProofs, sign({ moment, status: 'pending' }), sign({ luid, moment: now(), status: 'pending' })],
+              status: 'pending',
+              thread: newThread(),
+              domains: [],
+              moment,
+              owners,
+            },
+          }
+        : {
+            hash: body.hash,
+            // The reference ledger materialises an absent ledger `config` as null after
+            // the client hashed the data, so the stored data no longer hashes to `hash`.
+            // Clients may depend on the field, so the quirk is reproduced.
+            data: kind === 'ledgers' ? { ...body.data, config: body.data.config ?? null } : body.data,
+            luid,
+            meta: { proofs: [...clientProofs, sign({ luid, moment: now(), status: 'created' })], status: 'created', moment, owners },
+          }
     if (!(await store.insert(scope, kind, record))) throw errors.duplicated(KINDS[kind].name, body.data.handle)
+    if (kind === 'intents') core.schedule(scope, body.data.handle)
     reply.status(201).send(record)
   }
 
+  // Record lists come newest first (observed for intents) and carry no total.
   async function page(req: FastifyRequest, scope: string, kind: Kind) {
-    const all = await store.list(scope, kind)
-    // Record lists carry no total on the reference ledger; balance lists do.
+    const all = (await store.list(scope, kind)).reverse()
     return envelope(req.ledgerKey, all.slice(0, PAGE_LIMIT), { page: { index: 0, limit: PAGE_LIMIT } })
   }
 
   // ---- routes --------------------------------------------------------------------
 
   // Any authenticated signer may create a ledger, as on the public reference server.
+  // The ledger gets two signers of its own: `system` signs what the ledger says,
+  // `core` signs its part as a participant in moving balances.
   app.post('/api/v2/ledgers', async (req, reply) => {
     validateBody('ledgers', req.body)
     if (!(await authenticate(req))) throw errors.forbidden()
     const handle = (req.body as any).data.handle
-    const key = generateKeyPair()
-    await create('ledgers', '', key, req, reply)
-    await store.putKey(handle, key)
+    const system = generateKeyPair()
+    await create('ledgers', '', system, req, reply)
+    await store.putKey(handle, system, 'system')
+    await store.putKey(handle, generateKeyPair(), 'core')
   })
 
   app.get('/api/v2/ledger', async (req) => {
@@ -191,7 +208,7 @@ export function buildApp({ store }: AppOptions) {
     return ledger
   })
 
-  for (const kind of ['symbols', 'wallets'] as const) {
+  for (const kind of ['symbols', 'wallets', 'intents'] as const) {
     const record = KINDS[kind].record
 
     app.post(`/api/v2/${kind}`, async (req, reply) => {
@@ -224,8 +241,8 @@ export function buildApp({ store }: AppOptions) {
     const ledger = await hostedLedger(req)
     authorize(ledger.data.access, 'read', 'wallet', who)
     if (!(await store.get(ledger.data.handle, 'wallets', req.params.handle))) throw errors.notFound('Wallet')
-    // No money moves before L1, so every wallet is empty.
-    return envelope(req.ledgerKey, [], { page: { index: 0, limit: PAGE_LIMIT, total: 0 } })
+    const rows = await store.balances(ledger.data.handle, req.params.handle)
+    return envelope(req.ledgerKey, rows.slice(0, PAGE_LIMIT), { page: { index: 0, limit: PAGE_LIMIT, total: rows.length } })
   })
 
   return app

@@ -4,6 +4,67 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — L1
+
+Recorded with `conformance/scenarios/l1.ts`: issue, transfer, destroy, overdraw,
+unknown wallet and symbol, a two-claim intent whose second claim fails, and schema
+errors. Reference ledger answers in `conformance/fixtures/l1.reference.jsonl`.
+
+**Reference bug: a ledger created without `config` cannot move money.** `POST /ledgers`
+accepts a ledger without `config` (it is stored as `null`), but every intent on it then
+stops at `committed` with `core.unexpected-error "Ledger failed to commit intent"` and
+never completes; balances stay empty. The same scenario with
+`config: {"intent.expiryThresholdMinutes": 60, "access.strategy": "record-based"}` (what
+the official CLI always sends) works. Established by recording both. We do not
+reproduce the failure; the scenario sends a config like the CLI.
+
+**Intent lifecycle** (identical proof sequence in every recorded run):
+
+- `POST /intents` → **201** with `meta.status: "pending"` and three proofs: the client's
+  (`status: created`), `system {moment, status: pending}`, `system {luid, moment,
+  status: pending}`. `meta` also has `thread` (a `-`-prefixed 17-character id),
+  `domains: []`, `moment`, `owners`. Processing is **asynchronous**; the docs'
+  contradiction between `created` and `pending` resolves to `pending`.
+- Resolution: one `system` proof per entry, `{amount, handle: "deb_…"|"cre_…",
+  inputs: [claim index], moment, schema: debit|credit, status: resolved, symbol,
+  wallet}`; for each claim the debit comes before the credit. Issue has only a credit,
+  destroy only a debit.
+- Success: if the intent has any debit, a separate per-ledger **`core`** signer adds
+  `{handle, moment, schema, status: prepared}` for every entry; then `system prepared`;
+  `system committed "awaiting-clearance"`; then either one bare core proof per entry
+  (`{detail: cleared, handle, moment, schema, status: committed}`, **no `signer`, no
+  `origin`**) or, for an issue-only intent, `system {coreId: <intent handle>, detail:
+  cleared, status: committed}`; finally `system completed`. `meta.routed: true` appears
+  on completed intents only.
+- Failure: `system {detail, moment, reason, status: failed}`, `system aborted`,
+  `system rejected`. Resolution failures (unknown wallet or symbol) come before any
+  resolved entry; limit failures come after them.
+
+**Balances:**
+
+- Rows per wallet × symbol × schema, `schema` ∈ `available`, `reserved`. Shape:
+  `{hash: "", data: {wallet, symbol, schema, amount}, luid: "$wbl.…", meta: {moment}}` —
+  unsigned. A debit reserves (available −, reserved +) and clearing releases the
+  reservation, so after a debit a `reserved` row with amount 0 remains.
+- A row touched by a reservation serialises with `data.parent: ""` from then on;
+  credit-only rows do not have it. Reproduced.
+- The balance list has `page.total`; order is creation order (available first).
+
+**Limits:** available may not go below 0. The check sums the intent's debits per
+wallet and ignores its credits: in a two-claim intent crediting bob 100 and debiting him
+999999 from 2000, the reference reports `Amount -997999`. Error:
+`core.limit-exceeded`, `Amount <after> is less than minimum allowed amount 0 for wallet
+<w>, symbol <s>, schema available`. The docs name `core.insufficient-balance`; the
+reference never used it.
+
+**Other errors:** unknown target → `core.routing-failed`, `Target wallet not resolved for
+the address ghost - does not resolve to any existing wallet. Parent wallet: ghost`;
+unknown symbol → `core.symbol-invalid`, `Symbol eur not found.`; duplicate handle → 409
+`record.duplicated` `Intent with handle i-issue already exists.`; zero amount → 422 with
+Ajv's `oneOf` errors, one per claim branch (issue, transfer, destroy, limit).
+
+**Lists:** `GET /intents` is newest first, without `page.total`.
+
 ## 2026-09-26 — L0
 
 **Wire format** (verified on every recorded exchange with an independent script):

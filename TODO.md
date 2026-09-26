@@ -17,19 +17,29 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] Pagination query parameters (`page[index]`, `page[limit]`) — record reference first (?)
 - [ ] Verify the `hsh` token claim (needs the client-visible URL; `PUBLIC_URL` setting)
 
-## L1 — money moves (one transfer, the ledger is the only participant)
+## L1 — money moves (one ledger, the ledger is the only participant)
 
-- [ ] Extract intent/claim/balance semantics from docs (agent report → FINDINGS)
-- [ ] L1 scenario against the sandbox: issue, transfer, balances, insufficient funds (?)
-- [ ] Intents: create, read, list; claims `issue`, `transfer`, `destroy`
-- [ ] Balances computed from committed claims; per wallet × symbol
-- [ ] Invariant: sum of balances per symbol = issued − destroyed (property test)
-- [ ] Invariant: no balance below zero unless a limit allows it
-- [ ] Postgres store behind `Store`; memory store kept for unit tests
-- [ ] Concurrency test: N parallel transfers from one wallet never overdraw
+- [x] Intent/claim/balance semantics from docs (agent report) and from the sandbox (FINDINGS)
+- [x] L1 scenario recorded: issue, transfer, destroy, overdraw, unknown wallet/symbol, partial, schema errors
+- [x] Intents: create (async processing), read, list newest first
+- [x] Claims `issue`, `transfer`, `destroy`; proof trail identical to the reference (30/30)
+- [x] Balances: available / reserved rows, reservation on debit, clearance
+- [x] Ajv validation with the reference's error shape (all kinds, not only intents)
+- [x] Postgres store: records, balances, per-ledger signers; ledger-serialised transactions
+- [x] Tests: behaviour, model-based random sequence, conservation of supply, 50 concurrent
+      transfers, two processes on one Postgres, crash recovery, idempotent processing
+- [ ] (?) Wallet and symbol lists: assumed newest first like intents — record a 2-item list
+- [ ] (?) Mixed intent (issue + transfer): does the core participate? Assumed yes if any debit
+- [ ] (?) Unknown *source* wallet message: assumed "Source wallet not resolved …"
+- [ ] (?) Claim with both unknown symbol and unknown wallet: which is reported first
+- [ ] Claim authorisation: `spend` on source wallet, `issue`/`destroy` on symbol (L4 access)
+- [ ] Per-wallet locking instead of the ledger-wide advisory lock (throughput, not correctness)
+- [ ] Read intent by luid as well as handle
 
 ## L2 — multi-claim intents
-- [ ] All-or-nothing across claims; never a partial subset committed
+
+- [x] All-or-nothing across claims (reference `i-partial`, unit tests incl. two debits of one wallet)
+- [ ] (?) Multi-symbol intents (claims in two symbols) — record reference
 
 ## L3 — limits and reservations
 ## L4 — signatures, quorum, status policies, record-level access
@@ -42,4 +52,4 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 ## Tooling
 
 - [ ] Coverage report: implemented operations vs the 146 in Minka's spec
-- [ ] CI-style `npm test` that runs unit tests + conformance check for every level
+- [x] `npm run check`: typecheck, unit tests and every level's conformance, on memory and Postgres

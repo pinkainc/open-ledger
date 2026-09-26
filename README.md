@@ -36,10 +36,16 @@ and sandbox disagree, the sandbox wins.
 | Level | Scope | Minka operations | Conformance |
 | --- | --- | --- | --- |
 | **L0** | ledger, symbol, wallet — records only, no money moves | 9 of 146 | **18/18** exchanges match |
+| **L1** | intents: issue, transfer, destroy; balances; async processing | 12 of 146 | **30/30** exchanges match |
 
-The L0 scenario covers the happy path and nine failure paths: missing record,
-duplicate handle, unsigned mutation, schema violation, forged signature, tampered
-data, anonymous read, malformed token, unknown ledger.
+Both levels pass on the in-memory store and on Postgres. Beyond conformance, the unit
+tests (`server/test/`, 50 tests) check invariants the reference cannot show from
+outside: conservation of supply over a random intent sequence compared against a
+model, no overdraft under 50 concurrent transfers, two processes sharing one
+Postgres, and recovery of intents left pending by a crashed process.
+
+Work in progress is tracked in `TODO.md`; reference behaviour in `FINDINGS.md`.
+
 
 The level ladder (L0–L9) is in `../docs.minka.io/ssot/2026-08-08-state-machine-model.md`.
 
@@ -47,16 +53,18 @@ The level ladder (L0–L9) is in `../docs.minka.io/ssot/2026-08-08-state-machine
 
 ```bash
 npm install
-npm run conformance:check -- l0     # start our server, run the scenario, compare
-npm run conformance:record -- l0    # re-record the reference (creates one sandbox ledger)
-npm start                           # server on :4620
+npm run check                       # everything: typecheck, tests, conformance, both stores
+npm run conformance:check -- l1     # one level against our server
+npm run conformance:record -- l1    # re-record the reference (creates one sandbox ledger)
+scripts/dev-db.sh start             # project-local Postgres on :5439, prints DATABASE_URL
+DATABASE_URL=… npm start            # server on :4620 (memory store without DATABASE_URL)
 ```
 
 `record` leaves one ledger on the public sandbox per run; the sandbox cannot delete
 ledgers. Ledgers are named `open-ledger-conf-<run>` so they stay identifiable. Record
 only when a scenario changes.
 
-## Known gaps (L0)
+## Known gaps
 
 - **`hsh` claim is not verified.** It binds a token to method + absolute URL + body.
   Verifying it behind a reverse proxy needs the URL the client used (the same problem
@@ -64,8 +72,9 @@ only when a scenario changes.
   why the scenario sends tokens without `hsh`.
 - **Access rules are ledger-level only**, matched by public key. Record-level rules,
   signer-by-handle, circles and policies arrive with L4.
-- **In-memory store.** Postgres replaces it at L1, the first level where durability
-  and row locking decide correctness.
+- **Ledger-wide serialisation.** Intents of one ledger are processed one at a time
+  (advisory lock in Postgres). Correct, and far above the reference's ~100 intents/s,
+  but per-wallet locking would scale further.
 - **Pagination parameters are ignored**; every list returns page 0 with limit 20.
 
 ## Non-goals
