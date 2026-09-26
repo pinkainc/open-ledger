@@ -87,7 +87,6 @@ only when a scenario changes.
 - **Ledger-wide serialisation.** Intents of one ledger are processed one at a time
   (advisory lock in Postgres). Correct, and far above the reference's ~100 intents/s,
   but per-wallet locking would scale further.
-- **Pagination parameters are ignored**; every list returns page 0 with limit 20.
 
 ## Non-goals
 
