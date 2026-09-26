@@ -34,6 +34,14 @@ type LimitOp = { wallet: string; symbol: string; metric: string; amount: number 
 
 type Entry = { schema: 'debit' | 'credit'; handle: string; wallet: string; symbol: string; amount: number; input: number; bridge?: string }
 
+/**
+ * One bridge's share of an intent, which the bridge prepares, commits or aborts as a
+ * unit: an entry, or several entries grouped by the bridge's `debits|credits.claims.groupBy`
+ * (recorded, l6). A group of one keeps the entry's handle; a larger group gets a handle
+ * of its own.
+ */
+type Part = { handle: string; schema: 'debit' | 'credit'; bridge: string; entries: Entry[] }
+
 const FINAL = new Set(['completed', 'rejected'])
 
 /** Calls to make once a transaction has committed. */
@@ -154,7 +162,9 @@ export class Core {
     if (trail.length) run.stage('pending')
     if (!(await this.permitted(tx, ledger, intent))) return // waiting for signatures; nothing moves
 
-    const bridged = bridgedEntries(intent.data.claims, entries)
+    const parts = await partsOf(run, entries)
+    const debitParts = parts.filter((p) => p.schema === 'debit')
+    const creditParts = parts.filter((p) => p.schema === 'credit')
     const debits = entries.filter((e) => e.schema === 'debit')
     if (!run.corePrepared()) {
       // Bridges get the intent as it was resolved, before the core's own prepare.
@@ -169,30 +179,40 @@ export class Core {
           await run.books.move(e.wallet, e.symbol, 'reserved', +e.amount, tp, true)
         }
       }
-      if (bridged.length) {
+      // Prepare runs in two phases (recorded, l6): debits first; credits only once every
+      // debit has been prepared. Without bridged debits, credits go out at once.
+      if (parts.length) {
         run.stage('pending')
-        calls.push({ order: 'sequential', calls: await this.entryCalls(run, bridged, resolved) })
+        if (!debitParts.length) await run.tx.once(ledger, creditsKey(intent))
+        calls.push({ order: 'parallel', calls: await this.entryCalls(run, debitParts.length ? debitParts : creditParts, resolved) })
         return
       }
-    } else if (redrive && bridged.length) {
-      const waiting = bridged.filter((e) => !run.reported(e.handle, ['prepared', 'failed']))
-      calls.push({ order: 'sequential', calls: await this.entryCalls(run, waiting, run.snapshot('pending')) })
+    } else if (redrive && parts.length) {
+      const waiting = sentParts(run, parts).filter((p) => !run.reported(p.handle, ['prepared', 'failed']))
+      calls.push({ order: 'parallel', calls: await this.entryCalls(run, waiting, run.snapshot('pending')) })
     }
 
-    if (bridged.length) {
-      const failed = bridged.filter((e) => run.reported(e.handle, ['failed']))
+    if (parts.length) {
+      const failed = parts.filter((p) => run.reported(p.handle, ['failed']))
       if (failed.length) {
-        const names = [...new Set(failed.map((e) => e.bridge!))].join(', ')
-        return this.abort(run, calls, bridged, 'core.bridge-prepare-failed', `Bridge(s) failed to process intent: ${names}`)
+        const names = [...new Set(failed.map((p) => p.bridge))].join(', ')
+        return this.abort(run, calls, sentParts(run, parts), 'core.bridge-prepare-failed', `Bridge(s) failed to process intent: ${names}`)
       }
-      if (!bridged.every((e) => run.reported(e.handle, ['prepared']))) return
+      if (!debitParts.every((p) => run.reported(p.handle, ['prepared']))) return
+      // Credits carry the intent as it is now, with the debits' reports (recorded).
+      // Two reports can arrive together; the mark keeps the credits from going twice.
+      if (creditParts.length && (await run.tx.once(ledger, creditsKey(intent)))) {
+        calls.push({ order: 'parallel', calls: await this.entryCalls(run, creditParts, run.snapshot('pending', false, true)) })
+        return
+      }
+      if (!creditParts.every((p) => run.reported(p.handle, ['prepared']))) return
     }
-    await this.commit(run, calls, entries, limits, bridged)
+    await this.commit(run, calls, entries, limits, parts)
   }
 
   // prepared → committed: the ledger commits its own part at once; bridges are told to
   // commit and the intent completes when each has reported `committed`.
-  private async commit(run: Run, calls: Delivery[], entries: Entry[], limits: LimitOp[], bridged: Entry[]) {
+  private async commit(run: Run, calls: Delivery[], entries: Entry[], limits: LimitOp[], bridged: Part[]) {
     const { tx, ledger, intent, trail } = run
     trail.push(run.sign({ moment: run.now(), status: 'prepared' }))
     run.stage('prepared')
@@ -226,7 +246,7 @@ export class Core {
   }
 
   private async advanceCommitted(run: Run, calls: Delivery[], redrive: boolean) {
-    const bridged = bridgedEntries(run.intent.data.claims, resolvedEntries(run.intent) ?? [])
+    const bridged = await partsOf(run, resolvedEntries(run.intent) ?? [])
     if (redrive) {
       const waiting = bridged.filter((e) => !run.reported(e.handle, ['committed']))
       calls.push({ order: 'parallel', calls: await this.commandCalls(run, waiting, 'commit', run.snapshot('committed', true)) })
@@ -234,36 +254,36 @@ export class Core {
     if (bridged.every((e) => run.reported(e.handle, ['committed']))) await this.complete(run, calls, bridged)
   }
 
-  private async complete(run: Run, calls: Delivery[], bridged: Entry[]) {
+  private async complete(run: Run, calls: Delivery[], bridged: Part[]) {
     run.trail.push(run.sign({ moment: run.now(), status: 'completed' }))
     run.stage('completed', true)
     run.intent.meta.status = 'completed'
     if (bridged.length) calls.push({ order: 'parallel', calls: await this.statusCalls(run, bridged, run.snapshot('completed', true)) })
   }
 
-  // failed → aborted: bridges are told to abort (every bridged entry, the failing one
-  // too, in reverse order) and the intent is rejected once each has reported `aborted`;
-  // then the core releases its reservations.
-  private async abort(run: Run, calls: Delivery[], bridged: Entry[], reason: string, detail: string) {
+  // failed → aborted: every part that was asked to prepare is told to abort (the
+  // failing one too; a credit whose prepare never went out is not), and the intent is
+  // rejected once each has reported `aborted`; then the core releases its reservations.
+  private async abort(run: Run, calls: Delivery[], bridged: Part[], reason: string, detail: string) {
     run.trail.push(run.sign({ detail, moment: run.now(), reason, status: 'failed' }))
     run.stage('failed')
     run.trail.push(run.sign({ moment: run.now(), status: 'aborted' }))
     run.stage('aborted')
     run.intent.meta.status = 'aborted'
-    if (bridged.length) calls.push({ order: 'sequential', calls: await this.commandCalls(run, [...bridged].reverse(), 'abort', run.snapshot('aborted')) })
+    if (bridged.length) calls.push({ order: 'parallel', calls: await this.commandCalls(run, bridged, 'abort', run.snapshot('aborted')) })
     else await this.rejectAborted(run, calls, bridged)
   }
 
   private async advanceAborted(run: Run, calls: Delivery[], redrive: boolean) {
-    const bridged = bridgedEntries(run.intent.data.claims, resolvedEntries(run.intent) ?? [])
+    const bridged = sentParts(run, await partsOf(run, resolvedEntries(run.intent) ?? []))
     if (redrive) {
-      const waiting = bridged.filter((e) => !run.reported(e.handle, ['aborted'])).reverse()
-      calls.push({ order: 'sequential', calls: await this.commandCalls(run, waiting, 'abort', run.snapshot('aborted')) })
+      const waiting = bridged.filter((e) => !run.reported(e.handle, ['aborted']))
+      calls.push({ order: 'parallel', calls: await this.commandCalls(run, waiting, 'abort', run.snapshot('aborted')) })
     }
     if (bridged.every((e) => run.reported(e.handle, ['aborted']))) await this.rejectAborted(run, calls, bridged)
   }
 
-  private async rejectAborted(run: Run, calls: Delivery[], bridged: Entry[]) {
+  private async rejectAborted(run: Run, calls: Delivery[], bridged: Part[]) {
     const entries = resolvedEntries(run.intent) ?? []
     if (run.corePrepared()) {
       const ta = run.now()
@@ -290,46 +310,53 @@ export class Core {
     return { hash, data, meta: { proofs: [serverProof(hash, { moment: run.now() }, run.system, 'system')] } }
   }
 
-  // Prepare: the entry as a signed record, debits before credits. Observed: both
-  // `source` and `target` of the claim, the claim index as `inputs`, and a `$ben` luid
-  // that stays the same when the call is retried.
-  private async entryCalls(run: Run, entries: Entry[], intent: unknown): Promise<BridgeCall[]> {
+  // Prepare: the part as a signed record. Observed: both `source` and `target` of the
+  // claim, the claim index as `inputs`, and a `$ben` luid that stays the same when the
+  // call is retried. A group sums its entries, lists every claim in `inputs` and sends
+  // `null` for the side it does not group (l6).
+  private async entryCalls(run: Run, parts: Part[], intent: unknown): Promise<BridgeCall[]> {
     const out: BridgeCall[] = []
     const claims: any[] = run.intent.data.claims
-    for (const e of [...entries].sort((a, b) => (a.schema === b.schema ? 0 : a.schema === 'debit' ? -1 : 1))) {
-      const server = await this.server(run.tx, run.ledger, e.bridge!)
+    for (const p of parts) {
+      const server = await this.server(run.tx, run.ledger, p.bridge)
       if (!server) continue
-      const c = claims[e.input]
+      const c = claims[p.entries[0].input]
+      const sides =
+        p.entries.length === 1
+          ? { ...(c.source ? { source: c.source } : {}), ...(c.target ? { target: c.target } : {}) }
+          : p.schema === 'debit'
+            ? { source: c.source, target: null }
+            : { source: null, target: c.target }
       const data = {
-        handle: e.handle,
-        luid: entryLuid(run.ledger, e.handle),
-        schema: e.schema,
-        ...(c.source ? { source: c.source } : {}),
-        ...(c.target ? { target: c.target } : {}),
+        handle: p.handle,
+        luid: entryLuid(run.ledger, p.handle),
+        schema: p.schema,
+        ...sides,
         symbol: c.symbol,
-        amount: e.amount,
-        inputs: [e.input],
+        amount: p.entries.reduce((n, e) => n + e.amount, 0),
+        inputs: p.entries.map((e) => e.input),
         intent,
       }
-      out.push({ bridge: e.bridge!, server, method: 'POST', path: `/${e.schema}s`, body: this.signed(run, data) })
+      out.push({ bridge: p.bridge, server, method: 'POST', path: `/${p.schema}s`, body: this.signed(run, data) })
     }
     return out
   }
 
-  private async commandCalls(run: Run, entries: Entry[], action: 'commit' | 'abort', intent: unknown): Promise<BridgeCall[]> {
+  private async commandCalls(run: Run, entries: Part[], action: 'commit' | 'abort', intent: unknown): Promise<BridgeCall[]> {
     const out: BridgeCall[] = []
     for (const e of entries) {
-      const server = await this.server(run.tx, run.ledger, e.bridge!)
-      if (server) out.push({ bridge: e.bridge!, server, method: 'POST', path: `/${e.schema}s/${e.handle}/${action}`, body: this.signed(run, { handle: e.handle, action, intent }) })
+      const server = await this.server(run.tx, run.ledger, e.bridge)
+      if (server) out.push({ bridge: e.bridge, server, method: 'POST', path: `/${e.schema}s/${e.handle}/${action}`, body: this.signed(run, { handle: e.handle, action, intent }) })
     }
     return out
   }
 
-  // Status notifications go once to each bridge of the intent: on `prepared` and on the
-  // final status (recorded; a rejected intent that never prepared gets only the last).
-  private async statusCalls(run: Run, entries: Entry[], intent: any): Promise<BridgeCall[]> {
+  // Status notifications go once to each bridge of the intent that was asked to prepare:
+  // on `prepared` and on the final status (recorded; a rejected intent that never
+  // prepared gets only the last, and a bridge whose credit never went out, none — l6).
+  private async statusCalls(run: Run, parts: Part[], intent: any): Promise<BridgeCall[]> {
     const out: BridgeCall[] = []
-    for (const bridge of new Set(entries.map((e) => e.bridge!))) {
+    for (const bridge of new Set(parts.map((p) => p.bridge))) {
       const server = await this.server(run.tx, run.ledger, bridge)
       if (server) out.push({ bridge, server, method: 'PUT', path: `/intents/${encodeURIComponent(run.intent.data.handle)}`, body: intent })
     }
@@ -366,7 +393,7 @@ export class Core {
       const intent = await tx.get(ledger, 'intents', handle)
       if (!intent || intent.meta.status !== 'pending') return
       const run = new Run(tx, ledger, intent, (await tx.getKey(ledger, 'system'))!, (await tx.getKey(ledger, 'core'))!)
-      const bridged = run.corePrepared() ? bridgedEntries(intent.data.claims, resolvedEntries(intent) ?? []) : []
+      const bridged = run.corePrepared() ? sentParts(run, await partsOf(run, resolvedEntries(intent) ?? [])) : []
       await this.abort(run, calls, bridged, 'core.intent-expired', `Intent ${intent.data.handle} expired`)
       await run.finish()
     })
@@ -513,6 +540,49 @@ function bridgedEntries(claims: any[], entries: Entry[]) {
   return entries.filter((e) => e.bridge && claims[e.input]?.action === 'transfer')
 }
 
+// Parts per bridge, in the order of their first entry. Grouping keys (about-bridges):
+// `address` — the claim's source (debits) or target (credits) as written; `wallet` —
+// the resolved wallet. A symbol is never summed with another.
+async function partsOf(run: Run, entries: Entry[]): Promise<Part[]> {
+  const claims: any[] = run.intent.data.claims
+  const config = new Map<string, Record<string, unknown>>()
+  const groups = new Map<string, Entry[]>()
+  for (const e of bridgedEntries(claims, entries)) {
+    if (!config.has(e.bridge!)) config.set(e.bridge!, (await run.tx.get(run.ledger, 'bridges', e.bridge!))?.data.config ?? {})
+    const by = config.get(e.bridge!)![`${e.schema}s.claims.groupBy`]
+    const c = claims[e.input]
+    const address = (e.schema === 'debit' ? c.source : c.target)?.handle
+    const key = by === 'address' ? `address ${address}` : by === 'wallet' ? `wallet ${e.wallet}` : `entry ${e.handle}`
+    const k = [e.bridge, e.schema, e.symbol, key].join('\u0000')
+    groups.set(k, [...(groups.get(k) ?? []), e])
+  }
+  return [...groups].map(([k, es]) => ({
+    handle: es.length === 1 ? es[0].handle : groupHandle(run.ledger, run.intent.data.handle, k, es[0].schema),
+    schema: es[0].schema,
+    bridge: es[0].bridge!,
+    entries: es,
+  }))
+}
+
+// Parts that were asked to prepare: every debit, and the credits once all debits were
+// prepared (or at once, without bridged debits).
+function sentParts(run: Run, parts: Part[]) {
+  const debits = parts.filter((p) => p.schema === 'debit')
+  const creditsSent = debits.every((p) => run.reported(p.handle, ['prepared']))
+  return parts.filter((p) => p.schema === 'debit' || creditsSent)
+}
+
+const creditsKey = (intent: StoredRecord) => `intent ${intent.luid} credits prepared`
+
+// A group's handle, derived so that every pass (and a restart) names it the same.
+const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+function groupHandle(ledger: string, intent: string, key: string, schema: 'debit' | 'credit') {
+  const bytes = createHash('sha256').update(`${ledger}\u0000${intent}\u0000${key}`).digest()
+  let id = ''
+  for (let i = 0; i < 17; i++) id += BASE62[bytes[i] % 62]
+  return `${schema === 'debit' ? 'deb' : 'cre'}_${id}`
+}
+
 // The `$ben` luid an entry is sent with; derived, so a retry after a restart repeats it.
 const LUID_ALPHABET = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz'
 function entryLuid(ledger: string, handle: string) {
@@ -555,10 +625,18 @@ class Run {
     return this.proofs.some((p) => p.custom?.handle === entry && !SERVER_SIGNERS.has(p.signer ?? '') && p.origin && statuses.includes(p.custom.status as string))
   }
 
-  /** The intent as bridges see it now: without `domains` (recorded). */
-  snapshot(status: string, routed = false) {
-    const { domains: _d, routed: _r, proofs: _p, status: _s, ...meta } = this.intent.meta
-    return { hash: this.intent.hash, data: this.intent.data, luid: this.intent.luid, meta: { proofs: this.proofs, status, ...meta, ...(routed ? { routed: true } : {}) } }
+  /**
+   * The intent as bridges see it now: without `domains` (recorded) — except in the
+   * second prepare phase, whose credits carry `domains: []` after the other fields (l6).
+   */
+  snapshot(status: string, routed = false, domains = false) {
+    const { domains: d, routed: _r, proofs: _p, status: _s, ...meta } = this.intent.meta
+    return {
+      hash: this.intent.hash,
+      data: this.intent.data,
+      luid: this.intent.luid,
+      meta: { proofs: this.proofs, status, ...meta, ...(routed ? { routed: true } : {}), ...(domains ? { domains: d ?? [] } : {}) },
+    }
   }
 
   // Nothing is written until the pass is over, so a rejection leaves no trace in the

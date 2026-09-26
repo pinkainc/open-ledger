@@ -10,8 +10,23 @@ import { createServer, type IncomingMessage } from 'node:http'
 import { appendFileSync } from 'node:fs'
 import { LedgerSdk } from '@minka/ledger-sdk'
 
-/** What the bridge answers to a prepare: sign `prepared`, sign `failed`, or fail the HTTP call first. */
-export type Decision = { status: 'prepared' } | { status: 'failed'; reason: string; detail: string } | { httpFirst: number; then: Decision }
+/** What the bridge answers to a prepare: sign `prepared`, sign `failed`, fail the HTTP call first, or accept and never report. */
+export type Decision =
+  | { status: 'prepared' }
+  | { status: 'failed'; reason: string; detail: string }
+  | { httpFirst: number; then: Decision }
+  | { silent: true }
+
+export type BridgeSpec = {
+  handle: string
+  keyPair: any
+  /** Mount point on the shared port, e.g. `/bank1` (calls then arrive at /bank1/v2/…); '' for one bridge. */
+  prefix?: string
+  /** Decides the answer to a prepare call, by entry. */
+  decide: (entry: any) => Decision
+  /** Whether to report a commit or abort; default: report. */
+  report?: (entry: string, action: 'commit' | 'abort', intent: any) => boolean
+}
 
 export type BridgeOptions = {
   port: number
@@ -19,11 +34,7 @@ export type BridgeOptions = {
   ledger: string
   /** Where proofs are sent: the ledger without the recording proxy. */
   server: string
-  handle: string
-  keyPair: any
-  /** Decides the answer to a prepare call, by entry. */
-  decide: (entry: any) => Decision
-}
+} & Omit<BridgeSpec, 'prefix'>
 
 const read = (req: IncomingMessage) =>
   new Promise<string>((resolve) => {
@@ -33,26 +44,40 @@ const read = (req: IncomingMessage) =>
   })
 
 export async function startBridge(o: BridgeOptions) {
+  return startBridges({ ...o, bridges: [{ handle: o.handle, keyPair: o.keyPair, decide: o.decide, report: o.report }] })
+}
+
+/**
+ * Several bridges on one port, told apart by path prefix. With more than one, every
+ * log line names the bridge it belongs to.
+ */
+export async function startBridges(o: { port: number; out: string; ledger: string; server: string; bridges: BridgeSpec[] }) {
   let seq = 0
-  const log = (x: unknown) => appendFileSync(o.out, JSON.stringify({ seq: seq++, ...(x as object) }) + '\n')
-  const sdk: any = new LedgerSdk({
-    server: o.server,
-    ledger: o.ledger,
-    secure: { iss: o.handle, sub: `bridge:${o.handle}`, aud: o.ledger, exp: 3600, createHsh: false, kid: o.keyPair.public, keyPair: o.keyPair } as any,
-  })
+  const many = o.bridges.length > 1
+  const log = (b: BridgeSpec, x: unknown) => appendFileSync(o.out, JSON.stringify({ seq: seq++, ...(many ? { bridge: b.handle } : {}), ...(x as object) }) + '\n')
+  const sdks = new Map(
+    o.bridges.map((b) => [
+      b.handle,
+      new LedgerSdk({
+        server: o.server,
+        ledger: o.ledger,
+        secure: { iss: b.handle, sub: `bridge:${b.handle}`, aud: o.ledger, exp: 3600, createHsh: false, kid: b.keyPair.public, keyPair: b.keyPair } as any,
+      }) as any,
+    ]),
+  )
   const failedOnce = new Set<string>()
   // Core ids numbered in order of first use, so they compare across runs.
   const coreIds = new Map<string, string>()
   const coreId = (handle: string) => coreIds.get(handle) ?? (coreIds.set(handle, `core-${coreIds.size + 1}`), coreIds.get(handle)!)
 
-  async function sign(intent: any, custom: Record<string, unknown>) {
+  async function sign(b: BridgeSpec, intent: any, custom: Record<string, unknown>) {
     await new Promise((r) => setTimeout(r, 200))
     try {
-      const res = await sdk.intent.from(intent).sign([{ keyPair: o.keyPair, custom: { ...custom, moment: new Date().toISOString() } }]).send()
-      log({ proof: custom, answer: res.response.status })
+      const res = await sdks.get(b.handle).intent.from(intent).sign([{ keyPair: b.keyPair, custom: { ...custom, moment: new Date().toISOString() } }]).send()
+      log(b, { proof: custom, answer: res.response.status })
     } catch (e: any) {
       const res = e?.custom?.causedBy?.response
-      log({ proof: custom, answer: res?.status, error: res?.data?.data ?? e?.message })
+      log(b, { proof: custom, answer: res?.status, error: res?.data?.data ?? e?.message })
     }
   }
 
@@ -65,8 +90,10 @@ export async function startBridge(o: BridgeOptions) {
       body = text
     }
     const url = req.url ?? ''
+    const b = o.bridges.find((x) => url.startsWith(`${x.prefix ?? ''}/v2/`)) ?? o.bridges[0]
+    const path = url.slice((b.prefix ?? '').length)
     // `{server}` ends in /v2; the SDK mounts /credits, /debits and /intents under it.
-    const m = url.match(/^\/v2\/(debits|credits)(?:\/([^/]+)\/(commit|abort))?$/)
+    const m = path.match(/^\/v2\/(debits|credits)(?:\/([^/]+)\/(commit|abort))?$/)
     let status = 404
     let after: (() => Promise<void>) | undefined
     if (m && req.method === 'POST') {
@@ -75,7 +102,7 @@ export async function startBridge(o: BridgeOptions) {
       const intent = entry?.intent
       status = 202
       if (!action) {
-        let d = o.decide(entry)
+        let d = b.decide(entry)
         if ('httpFirst' in d) {
           if (!failedOnce.has(entry.handle)) {
             failedOnce.add(entry.handle)
@@ -84,16 +111,16 @@ export async function startBridge(o: BridgeOptions) {
           d = d.then
         }
         const decision = d as Exclude<Decision, { httpFirst: number }>
-        if (status === 202)
+        if (status === 202 && !('silent' in decision))
           after = () =>
-            sign(intent, decision.status === 'prepared' ? { handle: entry.handle, status: 'prepared', coreId: coreId(entry.handle) } : { handle: entry.handle, ...decision })
-      } else {
-        after = () => sign(intent, { handle, status: action === 'commit' ? 'committed' : 'aborted', coreId: coreId(handle) })
+            sign(b, intent, decision.status === 'prepared' ? { handle: entry.handle, status: 'prepared', coreId: coreId(entry.handle) } : { handle: entry.handle, ...decision })
+      } else if (b.report?.(handle, action as 'commit' | 'abort', intent) ?? true) {
+        after = () => sign(b, intent, { handle, status: action === 'commit' ? 'committed' : 'aborted', coreId: coreId(handle) })
       }
-    } else if (req.method === 'PUT' && url.startsWith('/v2/intents/')) {
+    } else if (req.method === 'PUT' && path.startsWith('/v2/intents/')) {
       status = 200
     }
-    log({ req: { method: req.method, url, headers: req.headers, body }, res: { status } })
+    log(b, { req: { method: req.method, url, headers: req.headers, body }, res: { status } })
     res.statusCode = status
     res.end()
     if (after) void after()

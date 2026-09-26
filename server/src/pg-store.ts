@@ -49,6 +49,11 @@ create table if not exists limits (
   row    jsonb not null,
   unique (ledger, wallet, symbol, metric)
 );
+create table if not exists marks (
+  ledger text not null,
+  key    text not null,
+  primary key (ledger, key)
+);
 `
 
 type Queryable = pg.Pool | pg.PoolClient
@@ -168,6 +173,11 @@ export class PgStore implements Store {
 
   // One Postgres transaction per call, holding a ledger-wide advisory lock until
   // commit, so money-moving work on a ledger is serialised across processes too.
+  async once(ledger: string, key: string) {
+    const { rowCount } = await this.db.query('insert into marks (ledger, key) values ($1, $2) on conflict do nothing', [ledger, key])
+    return rowCount === 1
+  }
+
   async transaction<T>(ledger: string, fn: (tx: Store) => Promise<T>): Promise<T> {
     if (this.db !== this.pool) return fn(this) // already inside one
     const client = await this.pool.connect()

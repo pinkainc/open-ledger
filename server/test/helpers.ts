@@ -7,6 +7,7 @@ import { Core } from '../src/core.js'
 import { MemoryStore } from '../src/store.js'
 import { PgStore } from '../src/pg-store.js'
 import type { Store } from '../src/store.js'
+import { createServer } from 'node:http'
 
 export type KeyPair = Awaited<ReturnType<typeof createKeyPair>>
 
@@ -105,4 +106,40 @@ export async function balanceOf(sdk: any, wallet: string, symbol = 'usd') {
     if (d.symbol === symbol) out[d.schema] = d.amount
   }
   return out
+}
+
+export type Call = { method: string; url: string; body: any }
+
+/** A bridge that records calls, answers 202 (or what `answer` says) and reports when told. */
+export async function testBridge() {
+  const calls: Call[] = []
+  let answer = (_c: Call) => 202
+  const server = createServer((req, res) => {
+    let s = ''
+    req.on('data', (c) => (s += c))
+    req.on('end', () => {
+      const call = { method: req.method!, url: req.url!, body: s ? JSON.parse(s) : undefined }
+      calls.push(call)
+      res.statusCode = answer(call)
+      res.end()
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+  const { port } = server.address() as { port: number }
+  return {
+    url: `http://127.0.0.1:${port}/v2`,
+    calls,
+    answerWith: (f: (c: Call) => number) => (answer = f),
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  }
+}
+
+export async function until<T>(f: () => T | undefined | Promise<T | undefined>, what: string, ms = 5_000): Promise<T> {
+  const end = Date.now() + ms
+  for (;;) {
+    const v = await f()
+    if (v) return v
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`)
+    await new Promise((r) => setTimeout(r, 10))
+  }
 }

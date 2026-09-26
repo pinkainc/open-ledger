@@ -2,45 +2,8 @@
 // a bridge report delivered N times has the effect of one.
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
 import { Core } from '../src/core.js'
-import { STORES, balanceOf, failure, newKeyPair, newLedger, ref, sdkFor, settle, startServer, type KeyPair } from './helpers.js'
-
-type Call = { method: string; url: string; body: any }
-
-/** A bridge that records calls, answers 202 (or what `answer` says) and reports when told. */
-async function testBridge() {
-  const calls: Call[] = []
-  let answer = (_c: Call) => 202
-  const server = createServer((req, res) => {
-    let s = ''
-    req.on('data', (c) => (s += c))
-    req.on('end', () => {
-      const call = { method: req.method!, url: req.url!, body: s ? JSON.parse(s) : undefined }
-      calls.push(call)
-      res.statusCode = answer(call)
-      res.end()
-    })
-  })
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
-  const { port } = server.address() as { port: number }
-  return {
-    url: `http://127.0.0.1:${port}/v2`,
-    calls,
-    answerWith: (f: (c: Call) => number) => (answer = f),
-    close: () => new Promise<void>((r) => server.close(() => r())),
-  }
-}
-
-async function until<T>(f: () => T | undefined | Promise<T | undefined>, what: string, ms = 5_000): Promise<T> {
-  const end = Date.now() + ms
-  for (;;) {
-    const v = await f()
-    if (v) return v
-    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`)
-    await new Promise((r) => setTimeout(r, 10))
-  }
-}
+import { STORES, balanceOf, failure, newKeyPair, newLedger, ref, sdkFor, settle, startServer, testBridge, until, type KeyPair } from './helpers.js'
 
 for (const [storeName, makeStore] of STORES) {
   describe(`L5 bridges on ${storeName}`, () => {

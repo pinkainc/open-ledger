@@ -102,12 +102,28 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Expiry of an intent waiting for a bridge aborts the bridge and releases the reservation
 - [ ] `secure` rules: `header` and `oauth2` (needs secret references → a secret store)
 - [ ] `traits` (a bridge without `statuses` gets no PUT; filters)
-- [ ] (?) Debit and credit on the same bridge in one intent — order, grouping (`claims.groupBy`)
-- [ ] (?) What the ledger does when a commit report never comes (commit cannot fail)
+- [x] Debit and credit on the same bridge in one intent; grouping (`claims.groupBy`) — l6
+- [x] A commit report that never comes: the intent stays `committed` (recorded, l6; same here)
 - [ ] Bridge proof authorisation: today any signer allowed to sign the intent may report
 - [ ] Routes (`wallet.routes`), address resolution `schema:handle@parent`
 - [ ] `/bridges/{id}/events` (deliveries) — L8
 ## L6 — N participants, ordered prepare/commit/abort, timeouts, crashes
+
+- [x] Scenario `l6` with two bridges behind one tunnel (`startBridges`, path prefix per
+      bridge), recorded: 34/34 client exchanges, 75/75 bridge calls
+- [x] Parts (`Part` in core.ts): an entry, or a `groupBy` group with a derived handle
+- [x] Two-phase prepare: debits, then credits once all debits are prepared (current intent,
+      `domains: []`); the credit phase is marked with `Store.once`, so it goes out once
+      however many passes follow (test fails without the mark)
+- [x] Abort and status notifications only to parts asked to prepare; aborts in parallel
+- [x] A silent prepare: the intent expires and the part is aborted (recorded)
+- [x] Comparator: adjacent same-status reports of several bridges in canonical order
+- [ ] (?) What if a bridge reports `prepared` for a part after the intent was aborted (our
+      bridge test sends it; the reference's answer to a late report is not recorded)
+- [ ] (?) A debit on one bridge failing while another bridge's debit is still pending
+- [ ] Crash in the middle of the credit phase: redrive re-sends the credits (mark set);
+      covered by `resume`, not by a test yet
+- [ ] (?) Commit never confirmed: is there any reconciliation on the reference (none seen)?
 ## L7 — expiry and thread abort
 
 - [x] Expiry job (`Core.startExpiry`): pending intents older than `intent.expiryThresholdMinutes`

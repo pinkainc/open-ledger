@@ -48,6 +48,7 @@ a bank are recorded too (`fixtures/*.bridge.jsonl`).
 | **L4** (part) | record lifecycle: update, status proofs, changes, drop, access check; signers, the ledger record, system policies | see `COVERAGE.md` | records **23/23**, records2 **52/52** |
 | **L4** access | rule scope, ledger gate, matchers, circles, status policies, token impersonation, claim permissions | see `COVERAGE.md` | access **35/35**, access2 **15/15**, access3 **16/16**, access4 **14/14** |
 | **L5** | 2PC with one bridge: prepare/commit/abort calls, status notifications, retries, restart | bridges 8/14 | **21/21** client exchanges, **24/24** bridge calls |
+| **L6** | several bridges in one intent: two-phase prepare, grouping (`claims.groupBy`), aborts only to prepared parts, silent bridges | — | **34/34** client exchanges, **75/75** bridge calls |
 | **L7** (part) | intent expiry (also of intents waiting for a bridge) | — | covered by access4 |
 
 (L2, multi-claim atomicity, is covered by the L1 and L3 scenarios.)
@@ -57,7 +58,7 @@ symbol, wallets, issue, transfer, balances, filtered lists — in `scripts/cli-e
 part of `npm run check`.
 
 Every level passes on the in-memory store and on Postgres. Beyond conformance, the unit
-tests (`server/test/`, 148 with Postgres) check invariants the reference cannot show from
+tests (`server/test/`, 199 with Postgres) check invariants the reference cannot show from
 outside: conservation of supply over a random intent sequence compared against a
 model, no overdraft under 50 concurrent transfers, two processes sharing one
 Postgres, and recovery of intents left pending by a crashed process.

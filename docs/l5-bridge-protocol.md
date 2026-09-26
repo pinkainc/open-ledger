@@ -91,10 +91,17 @@ call, JWT `iss: <bridge handle>`, `sub: "bridge:<handle>"`, `aud: <ledger>`.
 
 1. Headers the ledger sends to a bridge — **none beyond content type and tracing** with
    `secure: []`.
-2. Abort order: reverse sequence or parallel — open (one bridged entry recorded).
+2. Abort order — **parallel, only to parts that were asked to prepare** (l6: a debit
+   abort arrived before the credit abort; a credit never prepared gets no abort).
 3. Entry `luid` — **`$ben.…`, stable across a retry**.
 4. `source` on credit entries — **both `source` and `target` of the claim are sent**.
-5. Prepare timeout; which intent statuses allow abort — open.
+5. Prepare timeout — **none of its own: the intent expires** (l6, 92 s at a one-minute
+   threshold) and the silent part is aborted. Commit never times out: without the
+   bridge's `committed` the intent stays `committed`.
+8. Prepare order across bridges — **two phases** (l6): debits, then credits once every
+   debit is prepared, carrying the current intent with `domains: []`.
+9. `claims.groupBy` — **a group of ≥ 2 is a new entry** (own handle, summed amount, all
+   `inputs`, `null` for the other side); a group of one is the plain entry (l6).
 6. Whether bridged wallets get ledger balance rows — **yes: the core prepares, reserves
    and clears them like any wallet**.
 7. Issue/destroy — **an issue to a bridged wallet does not call the bridge**.

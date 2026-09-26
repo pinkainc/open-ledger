@@ -13,7 +13,7 @@
 //   tsx conformance/compare.ts <reference.jsonl> <candidate.jsonl>
 import { readFileSync } from 'node:fs'
 
-type Exchange = { seq: number; req: any; res: { status: number; headers: Record<string, string>; body: any }; proof?: any; answer?: number; error?: unknown }
+type Exchange = { seq: number; req: any; res: { status: number; headers: Record<string, string>; body: any }; proof?: any; answer?: number; error?: unknown; bridge?: string }
 
 const load = (f: string): Exchange[] =>
   readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
@@ -39,8 +39,10 @@ function normaliser() {
     if (/^[A-Za-z0-9+/]{43}=$/.test(v)) return token('key', v)
     // A token subject naming a key, as `bearer.sub` carries it on impersonated proofs.
     if (/^signer:[A-Za-z0-9+/]{43}=$/.test(v)) return `signer:${token('key', v.slice(7))}`
-    // The bridge's address: a quick tunnel for the reference, localhost for us.
-    if (/^(https:\/\/[a-z0-9-]+\.trycloudflare\.com|http:\/\/127\.0\.0\.1:\d+)\/v2$/.test(v)) return '<bridge-url>'
+    // The bridge's address: a quick tunnel for the reference, localhost for us; with
+    // several bridges on one port, a path prefix per bridge that is kept.
+    const bridgeUrl = v.match(/^(?:https:\/\/[a-z0-9-]+\.trycloudflare\.com|http:\/\/127\.0\.0\.1:\d+)((?:\/[a-z0-9]+)?)\/v2$/)
+    if (bridgeUrl) return `<bridge-url>${bridgeUrl[1]}`
     const lh = v.match(ledgerHandle)
     if (lh) v = v.replace(lh[0], '<ledger>')
     // Entry handles inside paths, e.g. /v2/credits/cre_…/commit.
@@ -97,13 +99,19 @@ function canonical(log: Exchange[]): Exchange[] {
     if (x.req.method === 'PUT') return x.req.body?.meta?.status === 'prepared' ? 2 : 5
     return x.req.body?.data?.action ? 3 : 0
   }
+  // With several bridges, calls of one phase go out in parallel: bridge, then the
+  // entry's schema, then the action break the tie before arrival order does.
+  const tie = (x: any): string =>
+    x.proof
+      ? `${x.bridge ?? ''} ${String(x.proof.handle).slice(0, 3)} ${x.proof.status}`
+      : `${x.bridge ?? ''} ${String(x.req.url).replace(/(deb|cre)_[A-Za-z0-9]{17}/g, '$1')}`
   const order = new Map<string, number>()
   const keyed = log.map((x, i) => {
     const intent = intentOf(x)
     if (!order.has(intent)) order.set(intent, order.size)
-    return { x, i, k: [order.get(intent)!, rank(x)] }
+    return { x, i, k: [order.get(intent)!, rank(x)], t: x.bridge ? tie(x) : '' }
   })
-  return keyed.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.i - b.i).map((e) => e.x)
+  return keyed.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.t.localeCompare(b.t) || a.i - b.i).map((e) => e.x)
 }
 const bridgeFile = refFile.endsWith('.bridge.jsonl')
 const ref = bridgeFile ? canonical(load(refFile)) : load(refFile)
@@ -124,8 +132,31 @@ const nr = normaliser(), nc = normaliser()
 // proofs the bridge sent back; what is compared there is the ledger's request.
 const bridgeLog = bridgeFile
 const subject = (x: any) =>
-  !bridgeLog ? x.res.body : x.proof ? { proof: x.proof, answer: x.answer, error: x.error } : { method: x.req.method, url: x.req.url, body: x.req.body, status: x.res.status }
-const title = (x: any, n: (v: any) => any) => (x.proof ? `proof ${x.proof.status}` : `${x.req.method} ${n(x.req.url)}`)
+  !bridgeLog ? x.res.body : x.proof ? { proof: x.proof, answer: x.answer, error: x.error, bridge: x.bridge } : { method: x.req.method, url: x.req.url, body: x.req.body, status: x.res.status }
+const title = (x: any, n: (v: any) => any) => (x.proof ? `proof ${x.bridge ? `${x.bridge} ` : ''}${x.proof.status}` : `${x.req.method} ${n(x.req.url)}`)
+
+// Reports of several bridges race: adjacent proofs by participants other than the
+// ledger, with the same status, arrive in timing order on the reference as here.
+// Sorted by signer, then entry kind, before comparing.
+function settleRaces(x: any): any {
+  if (Array.isArray(x)) return x.map(settleRaces)
+  if (!x || typeof x !== 'object') return x
+  const out: any = {}
+  for (const [k, v] of Object.entries(x)) out[k] = settleRaces(v)
+  if (Array.isArray(out.proofs)) {
+    const external = (p: any) => p?.signer && !['system', 'core'].includes(p.signer) && p.custom?.handle
+    const key = (p: any) => `${p.signer} ${String(p.custom.handle).slice(0, 3)}`
+    const ps = [...out.proofs]
+    for (let i = 0; i < ps.length; ) {
+      let j = i
+      while (j < ps.length && external(ps[j]) && ps[j].custom.status === ps[i].custom?.status) j++
+      if (j - i > 1) ps.splice(i, j - i, ...ps.slice(i, j).sort((a, b) => key(a).localeCompare(key(b))))
+      i = Math.max(j, i + 1)
+    }
+    out.proofs = ps
+  }
+  return out
+}
 
 let pass = 0
 let diverged = 0
@@ -137,7 +168,7 @@ for (let i = 0; i < n; i++) {
     console.log(`FAIL  #${i} ${label}: only in ${r ? 'reference' : 'candidate'}`)
     continue
   }
-  const rb = nr(subject(r)), cb = nc(subject(c))
+  const rb = nr(settleRaces(subject(r))), cb = nc(settleRaces(subject(c)))
   // `detail` is human text: a wording difference is reported but does not fail.
   const soft: string[] = []
   // Keys and hashes embedded in the text differ per run; compare the wording around them.

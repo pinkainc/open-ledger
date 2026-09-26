@@ -4,6 +4,40 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — L6: several bridges in one intent
+
+Recorded with `conformance/scenarios/l6.ts`: two bridges on one port behind one tunnel
+(`bank1` without grouping; `bank2` with `debits.claims.groupBy: address`,
+`credits.claims.groupBy: wallet`), 34 client exchanges and 75 bridge calls. All
+reproduced.
+
+- **Prepare runs in two phases.** Debit prepares go out first; credit prepares only once
+  every debit part has reported `prepared` (`a1 → b2`: debit, bank1 prepared, then the
+  credit to bank2). Without bridged debits the credits go at once. First-phase calls
+  carry the intent as resolved (no `domains`); **second-phase credits carry the current
+  intent** — core `prepared` proofs and the debit reports — with `meta.domains: []`.
+- **A failed debit ends the intent before any credit is prepared**: the abort goes only
+  to the debit, and only its bridge gets the final status (`PUT … rejected`); the credit's
+  bridge hears nothing at all.
+- **A failed credit after a prepared debit** aborts both (debit and credit, each on its
+  bridge, arriving debit first — not in reverse). Aborts and commits behave as parallel.
+- **Debit and credit on the same bridge** (`a1 → a1b`, both bank1): two separate
+  entries, two prepares (debit, then credit after its report), two commits; one status
+  notification per bridge.
+- **Grouping** (`claims.groupBy`): resolution proofs stay one per claim. The bridge call
+  for a group of two or more is a new entry with a handle of its own (`deb_…`/`cre_…`,
+  not among the resolved ones), `amount` summed, `inputs` listing every claim, and `null`
+  for the side it does not group (`target: null` on a grouped debit, `source: null` on a
+  grouped credit). A group of one is the plain entry (its resolved handle, both sides).
+  Reports, commits and aborts use the group's handle.
+- **A bridge that accepts a prepare and never reports**: the intent waits and expires
+  (one-minute threshold: failed `core.intent-expired` after 92 s), then abort to that
+  part, bank aborted, core aborted per entry, rejected. No `prepared` notification.
+- **A bridge that never reports `committed`**: the intent stays `committed` for good;
+  the commit call (answered 202) is not repeated.
+- **Racing reports**: proofs of several bridges land in the trail in arrival order; the
+  comparator sorts adjacent same-status reports of external signers before comparing.
+
 ## 2026-09-26 — What the `minka` CLI needs (end to end, and the sandbox read directly)
 
 Found by running `minka` 2.45.1 against our server (`scripts/cli-e2e.sh`), each answer

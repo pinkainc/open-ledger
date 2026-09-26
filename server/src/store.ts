@@ -54,6 +54,12 @@ export interface Store {
   limits(ledger: string, wallet: string): Promise<LimitRow[]>
   /** Inserts, or replaces the row for the same wallet × symbol × metric. */
   putLimit(ledger: string, row: LimitRow): Promise<void>
+  /**
+   * Marks a step as taken: true the first time a key is seen in a ledger, false after.
+   * For the few decisions a proof trail cannot record without changing what clients
+   * read, e.g. that the credit prepares of an intent went out (core.ts).
+   */
+  once(ledger: string, key: string): Promise<boolean>
   transaction<T>(ledger: string, fn: (tx: Store) => Promise<T>): Promise<T>
 }
 
@@ -69,6 +75,7 @@ export class MemoryStore implements Store {
   private lims = new Map<string, LimitRow[]>()
   private hist = new Map<string, StoredRecord[]>()
   private locks = new Map<string, Promise<unknown>>()
+  private marks = new Set<string>()
 
   private bucket<T>(map: Map<string, T[]>, key: string) {
     let b = map.get(key)
@@ -148,6 +155,13 @@ export class MemoryStore implements Store {
     const i = b.findIndex(same)
     if (i < 0) b.push(clone(row))
     else b[i] = clone(row)
+  }
+
+  async once(ledger: string, key: string) {
+    const k = `${ledger}\u0000${key}`
+    if (this.marks.has(k)) return false
+    this.marks.add(k)
+    return true
   }
 
   // Chains every transaction of a ledger behind the previous one. The callback gets
