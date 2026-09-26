@@ -73,9 +73,20 @@ const show = (v: any) => JSON.stringify(v)?.slice(0, 80)
 
 const [refFile, candFile] = process.argv.slice(2)
 const ref = load(refFile), cand = load(candFile)
+
+// Deliberate divergences: exchanges where we answer differently on purpose, each with
+// the reason. They are reported, never counted as passes, and must still be listed
+// here to not fail the run.
+const fixtureName = refFile.split('/').pop()!.replace(/\.reference\.jsonl$/, '')
+const divergences: { fixture: string; exchanges: number[]; what: string }[] = JSON.parse(
+  readFileSync(new URL('./divergences.json', import.meta.url), 'utf8'),
+)
+const deliberate = new Map<number, string>()
+for (const d of divergences) if (d.fixture === fixtureName) for (const i of d.exchanges) deliberate.set(i, d.what)
 const nr = normaliser(), nc = normaliser()
 
 let pass = 0
+let diverged = 0
 const n = Math.max(ref.length, cand.length)
 for (let i = 0; i < n; i++) {
   const r = ref[i], c = cand[i]
@@ -100,7 +111,10 @@ for (let i = 0; i < n; i++) {
     ...(r.res.status !== c.res.status ? [`status: ${r.res.status} ≠ ${c.res.status}`] : []),
     ...diff(rb, cb),
   ]
-  if (hard.length) {
+  if (hard.length && deliberate.has(i)) {
+    diverged++
+    console.log(`diff  #${i} ${label} — deliberate: ${deliberate.get(i)}`)
+  } else if (hard.length) {
     console.log(`FAIL  #${i} ${label} (${r.res.status})`)
     for (const d of hard) console.log(`        ${d}`)
   } else {
@@ -109,5 +123,6 @@ for (let i = 0; i < n; i++) {
   }
   for (const s of soft) console.log(`        ~ ${s}`)
 }
-console.log(`\n${pass}/${n} exchanges match the reference`)
-process.exit(pass === n ? 0 : 1)
+const note = diverged ? `, ${diverged} deliberately differ (conformance/divergences.json)` : ''
+console.log(`\n${pass}/${n} exchanges match the reference${note}`)
+process.exit(pass + diverged === n ? 0 : 1)

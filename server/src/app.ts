@@ -180,11 +180,27 @@ export function buildApp({ store, core = new Core(store) }: AppOptions) {
     reply.status(201).send(record)
   }
 
-  // Record lists come newest first (observed for intents) and carry no total.
+  // Pagination arrives as `?page.index=1&page.limit=2` (the SDK's encoding); the
+  // bracket form is accepted too. The page object echoes what was applied.
+  function pageParams(req: FastifyRequest) {
+    const q = req.query as Record<string, string | undefined>
+    const num = (v: string | undefined, d: number) => (v !== undefined && /^\d+$/.test(v) ? Number(v) : d)
+    const index = num(q['page.index'] ?? q['page[index]'], 0)
+    const limit = Math.max(1, num(q['page.limit'] ?? q['page[limit]'], PAGE_LIMIT))
+    return { index, limit }
+  }
+  const slice = <T>(rows: T[], p: { index: number; limit: number }) => rows.slice(p.index * p.limit, (p.index + 1) * p.limit)
+
+  // Record lists come newest first and carry no total.
   async function page(req: FastifyRequest, scope: string, kind: Kind) {
     const all = (await store.list(scope, kind)).reverse()
-    return envelope(req.ledgerKey, all.slice(0, PAGE_LIMIT), { page: { index: 0, limit: PAGE_LIMIT } })
+    const p = pageParams(req)
+    return envelope(req.ledgerKey, slice(all, p), { page: p })
   }
+
+  // A path id is either a handle or, when it has the kind's luid prefix, a luid.
+  const find = (scope: string, kind: Kind, id: string) =>
+    id.startsWith(`${KINDS[kind].luid}.`) ? store.getByLuid(scope, kind, id) : store.get(scope, kind, id)
 
   // ---- routes --------------------------------------------------------------------
 
@@ -230,7 +246,7 @@ export function buildApp({ store, core = new Core(store) }: AppOptions) {
       const who = await authenticate(req)
       const ledger = await hostedLedger(req)
       authorize(ledger.data.access, 'read', record, who)
-      const found = await store.get(ledger.data.handle, kind, req.params.handle)
+      const found = await find(ledger.data.handle, kind, req.params.handle)
       if (!found) throw errors.notFound(KINDS[kind].name)
       return found
     })
@@ -241,8 +257,23 @@ export function buildApp({ store, core = new Core(store) }: AppOptions) {
     const ledger = await hostedLedger(req)
     authorize(ledger.data.access, 'read', 'wallet', who)
     if (!(await store.get(ledger.data.handle, 'wallets', req.params.handle))) throw errors.notFound('Wallet')
-    const rows = await store.balances(ledger.data.handle, req.params.handle)
-    return envelope(req.ledgerKey, rows.slice(0, PAGE_LIMIT), { page: { index: 0, limit: PAGE_LIMIT, total: rows.length } })
+    // Ordered by symbol, then schema — not by creation (a eur row created after the
+    // usd rows is listed first on the reference).
+    const rows = (await store.balances(ledger.data.handle, req.params.handle)).sort(
+      (a, b) => a.data.symbol.localeCompare(b.data.symbol) || a.data.schema.localeCompare(b.data.schema),
+    )
+    const p = pageParams(req)
+    return envelope(req.ledgerKey, slice(rows, p), { page: { ...p, total: rows.length } })
+  })
+
+  app.get<{ Params: { handle: string } }>('/api/v2/wallets/:handle/limits', async (req) => {
+    const who = await authenticate(req)
+    const ledger = await hostedLedger(req)
+    authorize(ledger.data.access, 'read', 'wallet', who)
+    if (!(await store.get(ledger.data.handle, 'wallets', req.params.handle))) throw errors.notFound('Wallet')
+    const rows = await store.limits(ledger.data.handle, req.params.handle)
+    const p = pageParams(req)
+    return envelope(req.ledgerKey, slice(rows, p), { page: { ...p, total: rows.length } })
   })
 
   return app

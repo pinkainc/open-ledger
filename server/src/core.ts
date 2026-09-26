@@ -15,9 +15,12 @@
 import { customAlphabet } from 'nanoid'
 import { serverProof, type KeyPair, type Proof } from './crypto.js'
 import { newLuid } from './ids.js'
-import type { BalanceRow, Store, StoredRecord } from './store.js'
+import type { BalanceRow, LimitRow, Store, StoredRecord } from './store.js'
+import { hashData } from './crypto.js'
 
 const entryId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 17)
+
+type LimitOp = { wallet: string; symbol: string; metric: string; amount: number }
 
 type Entry = { schema: 'debit' | 'credit'; handle: string; wallet: string; symbol: string; amount: number; input: number }
 
@@ -66,9 +69,10 @@ export class Core {
       const sign = (custom: Record<string, unknown>) => serverProof(intent.hash, custom, system, 'system')
       const trail: Proof[] = []
       const writes: BalanceRow[] = []
+      const limitWrites: LimitRow[] = []
 
       try {
-        const entries = await this.resolve(tx, ledger, intent)
+        const { entries, limits } = await this.resolve(tx, ledger, intent)
         const t = now()
         for (const e of entries)
           trail.push(
@@ -76,7 +80,7 @@ export class Core {
           )
 
         const books = new Books(tx, ledger)
-        await this.checkLimits(books, entries)
+        await this.checkLimits(tx, ledger, books, entries)
 
         const debits = entries.filter((e) => e.schema === 'debit')
         // The ledger core takes part as a participant only when balances are spent.
@@ -92,6 +96,10 @@ export class Core {
         trail.push(sign({ detail: 'awaiting-clearance', moment: now(), status: 'committed' }))
 
         const tc = now()
+        for (const l of limits) {
+          limitWrites.push(await this.limitRow(tx, ledger, l, system, tc))
+          await books.touch(l.wallet, l.symbol, tc)
+        }
         for (const e of debits) await books.move(e.wallet, e.symbol, 'reserved', -e.amount, tc, true)
         for (const e of entries.filter((e) => e.schema === 'credit')) await books.move(e.wallet, e.symbol, 'available', +e.amount, tc, false)
         if (debits.length) {
@@ -118,18 +126,21 @@ export class Core {
       // Nothing is written until the outcome is known, so a rejection leaves no trace
       // in the books and the memory store needs no rollback.
       for (const row of writes) await tx.putBalance(ledger, row)
+      for (const row of limitWrites) await tx.putLimit(ledger, row)
       intent.meta.proofs.push(...trail)
       await tx.update(ledger, 'intents', intent)
     })
   }
 
-  private async resolve(tx: Store, ledger: string, intent: StoredRecord): Promise<Entry[]> {
+  // Resolution checks each claim's wallets before its symbol (source, then target):
+  // with both unknown the reference reports the wallet.
+  private async resolve(tx: Store, ledger: string, intent: StoredRecord): Promise<{ entries: Entry[]; limits: LimitOp[] }> {
     const entries: Entry[] = []
+    const limits: LimitOp[] = []
     const claims: any[] = intent.data.claims
     for (const [i, c] of claims.entries()) {
-      const symbol = c.symbol.handle
-      if (!(await tx.get(ledger, 'symbols', symbol))) throw new Rejection('core.symbol-invalid', `Symbol ${symbol} not found.`)
-      for (const [side, ref] of [['Source', c.source], ['Target', c.target]] as const) {
+      const sides = c.action === 'limit' ? ([['Wallet', c.wallet]] as const) : ([['Source', c.source], ['Target', c.target]] as const)
+      for (const [side, ref] of sides) {
         if (!ref) continue
         if (!(await tx.get(ledger, 'wallets', ref.handle)))
           throw new Rejection(
@@ -137,27 +148,59 @@ export class Core {
             `${side} wallet not resolved for the address ${ref.handle} - does not resolve to any existing wallet. Parent wallet: ${ref.handle}`,
           )
       }
+      const symbol = c.symbol.handle
+      if (!(await tx.get(ledger, 'symbols', symbol))) throw new Rejection('core.symbol-invalid', `Symbol ${symbol} not found.`)
+
+      if (c.action === 'limit') {
+        limits.push({ wallet: c.wallet.handle, symbol, metric: c.metric, amount: c.amount })
+        continue
+      }
       if (c.source) entries.push({ schema: 'debit', handle: `deb_${entryId()}`, wallet: c.source.handle, symbol, amount: c.amount, input: i })
       if (c.target) entries.push({ schema: 'credit', handle: `cre_${entryId()}`, wallet: c.target.handle, symbol, amount: c.amount, input: i })
     }
-    return entries
+    return { entries, limits }
   }
 
-  // Available balance may not fall below zero. Credits of the same intent are not
-  // counted towards it: the reference reports bob at 2000 − 999999 in a two-claim
-  // intent that also credits bob 100.
-  private async checkLimits(books: Books, entries: Entry[]) {
-    const spent = new Map<string, number>()
-    for (const e of entries.filter((e) => e.schema === 'debit')) {
-      const key = `${e.wallet}\u0000${e.symbol}`
-      const total = (spent.get(key) ?? 0) + e.amount
-      spent.set(key, total)
-      const after = (await books.amount(e.wallet, e.symbol, 'available')) - total
-      if (after < 0)
-        throw new Rejection(
-          'core.limit-exceeded',
-          `Amount ${after} is less than minimum allowed amount 0 for wallet ${e.wallet}, symbol ${e.symbol}, schema available`,
-        )
+  // A limit row is signed by the ledger like any record, and keeps its luid when a
+  // later limit claim replaces its amount.
+  private async limitRow(tx: Store, ledger: string, l: LimitOp, system: KeyPair, moment: string): Promise<LimitRow> {
+    const existing = (await tx.limits(ledger, l.wallet)).find((r) => r.data.symbol === l.symbol && r.data.metric === l.metric)
+    const data = { wallet: l.wallet, symbol: l.symbol, metric: l.metric, amount: l.amount }
+    const hash = hashData(data)
+    return { hash, data, luid: existing?.luid ?? newLuid('$wbl'), meta: { proofs: [serverProof(hash, { moment }, system, 'system')], moment } }
+  }
+
+  // Limits per wallet × symbol: `minBalance` (default 0) against the intent's debits,
+  // `maxBalance` (default none) against its credits. Credits never offset debits and
+  // debits never offset credits — the reference rejects an intent that issues 100 to
+  // alice and moves the same 100 on, although the docs say it would pass.
+  //
+  // The reference checks `maxBalance` only after commit, and an intent that breaks it
+  // stays `committed` forever with the credit unapplied. We check it here and reject;
+  // that divergence is deliberate and listed in conformance/divergences.json.
+  private async checkLimits(tx: Store, ledger: string, books: Books, entries: Entry[]) {
+    const limit = async (wallet: string, symbol: string, metric: string) =>
+      (await tx.limits(ledger, wallet)).find((r) => r.data.symbol === symbol && r.data.metric === metric)?.data.amount
+
+    for (const schema of ['debit', 'credit'] as const) {
+      const moved = new Map<string, number>()
+      for (const e of entries.filter((e) => e.schema === schema)) {
+        const key = `${e.wallet}\u0000${e.symbol}`
+        const total = (moved.get(key) ?? 0) + e.amount
+        moved.set(key, total)
+        const available = await books.amount(e.wallet, e.symbol, 'available')
+        const where = `for wallet ${e.wallet}, symbol ${e.symbol}, schema available`
+        if (schema === 'debit') {
+          const min = (await limit(e.wallet, e.symbol, 'minBalance')) ?? 0
+          const after = available - total
+          if (after < min) throw new Rejection('core.limit-exceeded', `Amount ${after} is less than minimum allowed amount ${min} ${where}`)
+        } else {
+          const max = await limit(e.wallet, e.symbol, 'maxBalance')
+          const after = available + total
+          if (max !== undefined && after > max)
+            throw new Rejection('core.limit-exceeded', `Amount ${after} is greater than maximum allowed amount ${max} ${where}`)
+        }
+      }
     }
   }
 }
@@ -196,6 +239,19 @@ class Books {
     }
     if (reservation && row.data.parent === undefined) row.data = { parent: '', ...row.data }
     row.data.amount += delta
+    row.meta.moment = moment
+    this.dirty.add(key)
+  }
+
+  // Setting a limit re-saves an existing available row the way a reservation does
+  // (`parent: ""`, new moment) without changing its amount. Observed on the reference:
+  // the row's moment equals the limit's. A wallet without a row gets none.
+  async touch(wallet: string, symbol: string, moment: string) {
+    await this.load(wallet)
+    const key = `${wallet}\u0000${symbol}\u0000available`
+    const row = this.rows.get(key)
+    if (!row) return
+    if (row.data.parent === undefined) row.data = { parent: '', ...row.data }
     row.meta.moment = moment
     this.dirty.add(key)
   }

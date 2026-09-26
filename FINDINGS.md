@@ -4,6 +4,44 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — L3 and the questions L1 left open
+
+Recorded with `conformance/scenarios/l3.ts` (`fixtures/l3.reference.jsonl`, 41 exchanges).
+
+**Credits never offset debits — the docs are wrong here.** `wallet-limits.md` says a
+claim that takes a wallet below its limit passes if another claim in the same intent
+brings it back. The reference rejects `[issue alice 100, transfer alice→bob 100]` with
+`Amount -100 is less than minimum allowed amount 0`, and a swap between two wallets
+at zero the same way. Debits are summed per wallet and checked against `minBalance`;
+credits are checked separately against `maxBalance`.
+
+**Reference bug: `maxBalance` is checked after commit.** An issue that would take bob
+from 15010 above his `maxBalance` of 20000 gets `prepared` and `committed
+"awaiting-clearance"`, then a proof `{reason: core.limit-exceeded, detail: "Amount 25010
+is greater than maximum allowed amount 20000 …", status: "committed"}` — and stays
+`committed` for good; the credit is never applied. We reject such an intent before
+preparing (same reason and detail). Listed in `conformance/divergences.json`.
+
+**Limits:** a `limit` claim resolves no entries and follows the issue-only trail
+(`prepared`, `committed awaiting-clearance`, `system {coreId, cleared}`, `completed`).
+`GET /wallets/{id}/limits` serves rows `{hash, data: {wallet, symbol, metric, amount},
+luid: "$wbl.…", meta: {proofs: [system], moment}}` — unlike balances they are hashed
+(sha256 of `data`) and signed. `minBalance` messages carry the actual limit:
+`Amount -21000 is less than minimum allowed amount -20000 …`. Setting a limit re-saves
+the wallet's existing available row (`parent: ""`, new moment, same amount).
+
+**Resolution order:** per claim, source wallet, target wallet, then symbol — with an
+unknown source and an unknown symbol the reference reports the wallet. Unknown source:
+`Source wallet not resolved for the address ghost - does not resolve to any existing
+wallet. Parent wallet: ghost`.
+
+**Core participation:** an intent with any debit gets `core` prepared/cleared proofs for
+*every* entry, including an issue's credit (`[issue eur, transfer usd]`).
+
+**Lists and pages:** symbols, wallets and intents are all newest first. Pagination is
+`?page.index=1&page.limit=2`, echoed as `page: {index, limit}`. Balances sort by symbol
+then schema, not by creation. `GET /intents/<luid>` works like `GET /intents/<handle>`.
+
 ## 2026-09-26 — L1
 
 Recorded with `conformance/scenarios/l1.ts`: issue, transfer, destroy, overdraw,

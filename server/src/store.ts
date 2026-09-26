@@ -21,8 +21,17 @@ export type BalanceRow = {
   meta: { moment: string }
 }
 
+/** A wallet limit as the reference serves it: signed, luid prefix `$wbl` like balances. */
+export type LimitRow = {
+  hash: string
+  data: { wallet: string; symbol: string; metric: string; amount: number }
+  luid: string
+  meta: { proofs: unknown[]; moment: string }
+}
+
 export interface Store {
   get(ledger: string, kind: string, handle: string): Promise<StoredRecord | undefined>
+  getByLuid(ledger: string, kind: string, luid: string): Promise<StoredRecord | undefined>
   /** Returns false when a record with this handle already exists. */
   insert(ledger: string, kind: string, record: StoredRecord): Promise<boolean>
   /** Replaces the stored record with the same handle. */
@@ -35,6 +44,10 @@ export interface Store {
   /** Balance rows of one wallet, in creation order. */
   balances(ledger: string, wallet: string): Promise<BalanceRow[]>
   putBalance(ledger: string, row: BalanceRow): Promise<void>
+  /** Limit rows of one wallet, in creation order. */
+  limits(ledger: string, wallet: string): Promise<LimitRow[]>
+  /** Inserts, or replaces the row for the same wallet × symbol × metric. */
+  putLimit(ledger: string, row: LimitRow): Promise<void>
   transaction<T>(ledger: string, fn: (tx: Store) => Promise<T>): Promise<T>
 }
 
@@ -44,6 +57,7 @@ export class MemoryStore implements Store {
   private rows = new Map<string, StoredRecord[]>()
   private keys = new Map<string, KeyPair>()
   private bals = new Map<string, BalanceRow[]>()
+  private lims = new Map<string, LimitRow[]>()
   private locks = new Map<string, Promise<unknown>>()
 
   private bucket<T>(map: Map<string, T[]>, key: string) {
@@ -55,6 +69,11 @@ export class MemoryStore implements Store {
 
   async get(ledger: string, kind: string, handle: string) {
     const r = this.records(ledger, kind).find((r) => r.data.handle === handle)
+    return r && clone(r)
+  }
+
+  async getByLuid(ledger: string, kind: string, luid: string) {
+    const r = this.records(ledger, kind).find((r) => r.luid === luid)
     return r && clone(r)
   }
 
@@ -91,6 +110,18 @@ export class MemoryStore implements Store {
   async putBalance(ledger: string, row: BalanceRow) {
     const b = this.bucket(this.bals, ledger)
     const i = b.findIndex((r) => r.luid === row.luid)
+    if (i < 0) b.push(clone(row))
+    else b[i] = clone(row)
+  }
+
+  async limits(ledger: string, wallet: string) {
+    return clone(this.bucket(this.lims, ledger).filter((r) => r.data.wallet === wallet))
+  }
+
+  async putLimit(ledger: string, row: LimitRow) {
+    const b = this.bucket(this.lims, ledger)
+    const same = (r: LimitRow) => r.data.wallet === row.data.wallet && r.data.symbol === row.data.symbol && r.data.metric === row.data.metric
+    const i = b.findIndex(same)
     if (i < 0) b.push(clone(row))
     else b[i] = clone(row)
   }

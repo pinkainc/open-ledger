@@ -1,0 +1,10 @@
+[
+  {
+    "fixture": "l3",
+    "exchanges": [35, 40],
+    "what": "An issue that would take bob above his maxBalance limit.",
+    "reference": "Checks maxBalance only after commit: the intent stays `committed` forever with a core.limit-exceeded proof and the credit is never applied.",
+    "ours": "Checks maxBalance with the other limits before preparing and rejects the intent: failed (same reason and detail) → aborted → rejected.",
+    "why": "An intent that can never reach a final status is a defect, not a contract. Clients waiting for completed/rejected would wait forever."
+  }
+]

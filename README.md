@@ -27,6 +27,11 @@ official SDK ──► recording proxy ──► open-ledger             → .re
    signatures) are replaced by placeholders numbered by first appearance — so identity
    is still checked. Error `detail` wording is compared but only reported.
 
+Where the reference is plainly defective we answer differently on purpose, and say so:
+`conformance/divergences.json` lists each case with what the reference does, what we do
+and why; the comparator reports those exchanges instead of failing on them. So far:
+one (an intent breaking `maxBalance` stays `committed` forever on the reference).
+
 Documentation (the mirror in `../docs.minka.io`) is the specification for what the
 sandbox cannot show from outside: 2PC with banks, event delivery, expiry. Where docs
 and sandbox disagree, the sandbox wins.
@@ -37,9 +42,12 @@ and sandbox disagree, the sandbox wins.
 | --- | --- | --- | --- |
 | **L0** | ledger, symbol, wallet — records only, no money moves | 9 of 146 | **18/18** exchanges match |
 | **L1** | intents: issue, transfer, destroy; balances; async processing | 12 of 146 | **30/30** exchanges match |
+| **L3** | limits (`minBalance`, `maxBalance`), pagination, reads by luid | 13 of 146 | **39/41** match, 2 deliberately differ |
 
-Both levels pass on the in-memory store and on Postgres. Beyond conformance, the unit
-tests (`server/test/`, 50 tests) check invariants the reference cannot show from
+(L2, multi-claim atomicity, is covered by the L1 and L3 scenarios.)
+
+Every level passes on the in-memory store and on Postgres. Beyond conformance, the unit
+tests (`server/test/`, 66 tests) check invariants the reference cannot show from
 outside: conservation of supply over a random intent sequence compared against a
 model, no overdraft under 50 concurrent transfers, two processes sharing one
 Postgres, and recovery of intents left pending by a crashed process.

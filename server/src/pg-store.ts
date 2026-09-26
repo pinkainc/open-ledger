@@ -2,7 +2,7 @@
 // for identity and ordering. Handles are unique per (ledger, kind), luids globally.
 import pg from 'pg'
 import type { KeyPair } from './crypto.js'
-import type { BalanceRow, Store, StoredRecord } from './store.js'
+import type { BalanceRow, LimitRow, Store, StoredRecord } from './store.js'
 
 const SCHEMA = `
 create table if not exists records (
@@ -31,6 +31,15 @@ create table if not exists balances (
   schema text  not null,
   row    jsonb not null,
   unique (ledger, wallet, symbol, schema)
+);
+create table if not exists limits (
+  seq    bigserial primary key,
+  ledger text  not null,
+  wallet text  not null,
+  symbol text  not null,
+  metric text  not null,
+  row    jsonb not null,
+  unique (ledger, wallet, symbol, metric)
 );
 `
 
@@ -64,6 +73,11 @@ export class PgStore implements Store {
 
   async get(ledger: string, kind: string, handle: string) {
     const { rows } = await this.db.query('select * from records where ledger=$1 and kind=$2 and handle=$3', [ledger, kind, handle])
+    return rows[0] && this.row(rows[0])
+  }
+
+  async getByLuid(ledger: string, kind: string, luid: string) {
+    const { rows } = await this.db.query('select * from records where ledger=$1 and kind=$2 and luid=$3', [ledger, kind, luid])
     return rows[0] && this.row(rows[0])
   }
 
@@ -115,6 +129,19 @@ export class PgStore implements Store {
       `insert into balances (ledger, luid, wallet, symbol, schema, row) values ($1,$2,$3,$4,$5,$6)
        on conflict (luid) do update set row=excluded.row`,
       [ledger, b.luid, b.data.wallet, b.data.symbol, b.data.schema, b],
+    )
+  }
+
+  async limits(ledger: string, wallet: string) {
+    const { rows } = await this.db.query('select row from limits where ledger=$1 and wallet=$2 order by seq', [ledger, wallet])
+    return rows.map((r) => r.row as LimitRow)
+  }
+
+  async putLimit(ledger: string, l: LimitRow) {
+    await this.db.query(
+      `insert into limits (ledger, wallet, symbol, metric, row) values ($1,$2,$3,$4,$5)
+       on conflict (ledger, wallet, symbol, metric) do update set row=excluded.row`,
+      [ledger, l.data.wallet, l.data.symbol, l.data.metric, l],
     )
   }
 
