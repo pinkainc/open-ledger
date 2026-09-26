@@ -40,14 +40,18 @@ async function settle(handle: string) {
     try {
       const r: any = await direct.intent.read(handle)
       if (['completed', 'rejected'].includes(r?.meta?.status)) return r.meta.status
-    } catch {}
+    } catch (e: any) {
+      // A read the caller may not make, or of an intent that was never created, will
+      // not change by waiting.
+      if (e?.reason === 'record.not-found' || e?.reason === 'auth.forbidden') return e.reason
+    }
     await new Promise((r) => setTimeout(r, 500))
   }
   return 'timeout'
 }
 async function intent(name: string, handle: string, claims: unknown[], who: LedgerSdk, keys: any[]) {
-  await step(`intent.create ${name}`, () => who.intent.init().data({ handle, claims } as any).hash().sign(keys.map((k) => ({ keyPair: k }))).send())
-  console.log(`      settled: ${await settle(handle)}`)
+  const sent = await step(`intent.create ${name}`, () => who.intent.init().data({ handle, claims } as any).hash().sign(keys.map((k) => ({ keyPair: k }))).send())
+  if (sent) console.log(`      settled: ${await settle(handle)}`)
   await step(`intent.read ${name}`, () => asA.intent.read(handle))
 }
 const usd = ref('usd')

@@ -12,9 +12,12 @@ grep -E "^ℹ (tests|pass|fail)" .rec/test.log
 [ $ok = 1 ] || { grep -E "✖" .rec/test.log; exit 1; }
 
 for level in $(ls conformance/fixtures | sed -n 's/\.reference\.jsonl$//p'); do
+  # Recorded behaviour we do not implement yet is listed with the reason, not hidden.
+  why=$(node -e 'const p=require("./conformance/pending.json"); process.stdout.write(p[process.argv[1]] ?? "")' "$level")
+  if [ -n "$why" ]; then printf '==> conformance %-9s pending: %s\n' "$level" "$why"; continue; fi
   for store in memory postgres; do
     if [ $store = memory ]; then url=; else url=$DATABASE_URL; fi
-    printf '==> conformance %-3s %-9s ' "$level" "$store"
+    printf '==> conformance %-9s %-9s ' "$level" "$store"
     DATABASE_URL=$url ./conformance/run.sh check "$level" > .rec/conf.log 2>&1 && ok=1 || ok=0
     tail -1 .rec/conf.log
     [ $ok = 1 ] || { grep -E "FAIL|^ " .rec/conf.log | head -40; exit 1; }

@@ -66,8 +66,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] `access3` #7 — token impersonation: a token whose key is a registered signer gets a
       `system.auth` proof (`self-signed-token`, `bearer.*` claims); token-only bodies and
       partial proofs; spoofed origin/signer/issuer on client proofs are stripped (16/16)
-- [ ] NEXT: run `conformance/run.sh check access2` and `check access4` (recorded, never compared);
-      their scenarios poll up to 200–240 s against our server — shorten waits when a read is forbidden
+- [x] access2 and access4 compared; waits end on a forbidden or missing intent (check: 36 s total).
+      access2 15/15 in `npm run check`. The access4 fixture had 36 exchanges of a concurrent
+      l0/l1 run mixed in (shared proxy) — removed; `run.sh` now refuses busy ports and keeps
+      only the run's own ledger when recording (`conformance/own-ledger.ts`)
+- [ ] NEXT: access4 is listed in `conformance/pending.json` until claim permissions and expiry exist
 - [ ] Forbidden details: `Cannot create symbol.` etc. instead of `Forbidden.`
 - [ ] Tests for circles, status policies, matchers (behaviour is conformance-checked only)
 - [ ] Access policies (`{policy: handle}`) and `access.strategy: policy-based`

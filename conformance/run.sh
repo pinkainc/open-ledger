@@ -16,8 +16,21 @@ RUN=${RUN:-$(date -u +%Y%m%d%H%M%S | tr -d '\n')$(printf '%s' $RANDOM | tail -c 
 mkdir -p .rec conformance/fixtures
 
 pids=()
-cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
+# Waits for the ports to close, so the next run does not take them for another run's.
+cleanup() {
+  for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
+  for _ in $(seq 50); do
+    nc -z 127.0.0.1 $PROXY_PORT 2>/dev/null || nc -z 127.0.0.1 $SERVER_PORT 2>/dev/null || return 0
+    sleep 0.1
+  done
+}
 trap cleanup EXIT
+
+# Record and check share these ports; a second run would record through the first
+# one's proxy and mix two scenarios into one fixture (it happened to access4).
+for port in $PROXY_PORT $SERVER_PORT; do
+  if nc -z 127.0.0.1 $port 2>/dev/null; then echo "port $port is in use: another conformance run?" >&2; exit 1; fi
+done
 
 wait_port() { for _ in $(seq 50); do nc -z 127.0.0.1 "$1" 2>/dev/null && return; sleep 0.1; done; echo "port $1 never opened" >&2; exit 1; }
 
@@ -40,6 +53,10 @@ wait_port $PROXY_PORT
 echo "==> $LEVEL against $target (run $RUN)"
 # DIRECT bypasses the proxy, for polling whose count would otherwise depend on timing.
 RUN=$RUN BASE=http://127.0.0.1:$PROXY_PORT/api/v2 DIRECT=$target/api/v2 npx tsx conformance/scenarios/$LEVEL.ts
+
+if [ "$MODE" = record ]; then
+  npx tsx conformance/own-ledger.ts "$out" "$RUN"
+fi
 
 if [ "$MODE" = check ]; then
   echo "==> compare"
