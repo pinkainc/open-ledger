@@ -38,7 +38,8 @@ if [ "$MODE" = record ]; then
   target=$REFERENCE
   out=conformance/fixtures/$LEVEL.reference.jsonl
 else
-  PORT=$SERVER_PORT npx tsx server/src/main.ts 2>.rec/server.log &
+  # A recorded one-minute expiry takes a second here; see OPEN_LEDGER_MINUTE_MS in main.ts.
+  PORT=$SERVER_PORT OPEN_LEDGER_MINUTE_MS=${OPEN_LEDGER_MINUTE_MS:-1000} npx tsx server/src/main.ts 2>.rec/server.log &
   pids+=($!)
   wait_port $SERVER_PORT
   target=http://127.0.0.1:$SERVER_PORT

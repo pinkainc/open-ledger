@@ -32,7 +32,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Mixed intent: core participates for every entry when any debit exists (recorded)
 - [x] Unknown source message (recorded; the guess was right)
 - [x] Unknown wallet is reported before unknown symbol (recorded; order fixed)
-- [ ] Claim authorisation: `spend` on source wallet, `issue`/`destroy` on symbol (L4 access)
+- [x] Claim authorisation: see L4
 - [ ] Per-wallet locking instead of the ledger-wide advisory lock (throughput, not correctness)
 - [x] Read by luid as well as handle (all record kinds)
 
@@ -70,20 +70,30 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       access2 15/15 in `npm run check`. The access4 fixture had 36 exchanges of a concurrent
       l0/l1 run mixed in (shared proxy) — removed; `run.sh` now refuses busy ports and keeps
       only the run's own ledger when recording (`conformance/own-ledger.ts`)
-- [ ] NEXT: access4 is listed in `conformance/pending.json` until claim permissions and expiry exist
 - [x] Forbidden details: `Cannot <action> <record>.` — no soft `detail` difference left at any level
 - [x] Tests for scope, gate, 403 details, bearer and signer matchers, circles, status policies (`access.test.ts`)
 - [ ] Access policies (`{policy: handle}`) and `access.strategy: policy-based`
 - [ ] Status policies: allowed transitions, quorum (`record.status-policy-violation`, quorum-not-met)
 - [ ] Circles and circle signers (`/circles`, `/circles/{id}/signers`)
-- [ ] Claim authorisation: `spend` on source wallet, `issue`/`destroy` on symbol, `limit`.
-      Recorded (access4): the intent stays pending and expires, `core.intent-expired`,
-      `Intent <handle> expired`. Needs the expiry job (L7) first
+- [x] Claim authorisation: `spend` on the source, `issue`/`destroy` on the symbol, `limit` on the
+      wallet, by the intent's signers (impersonated proofs count as the token's signer, with its
+      `bearer.*` claims). Without it the intent waits after resolution and expires (access4 14/14)
+- [ ] (?) `destroy`: we require `destroy` on the symbol **and** `spend` on the source — not recorded
+- [ ] (?) Does the reference check claim permissions before or after limits? (we: before)
+- [ ] `POST /intents/{id}/proofs` — more signatures for a waiting intent (re-processing is ready:
+      resolved entries are rebuilt from the trail, `Core.process` just runs again)
 - [ ] (?) Record reference: drop of a funded wallet (our reason `record.drop-rejected`, wording ours)
 - [ ] `PUT /ledger`, `POST /ledger/proofs`, `/ledger/access/!check`, `GET /ledgers`
 ## L5 — 2PC with one external participant (bridge), idempotency by handle
 ## L6 — N participants, ordered prepare/commit/abort, timeouts, crashes
 ## L7 — expiry and thread abort
+
+- [x] Expiry job (`Core.startExpiry`): pending intents older than `intent.expiryThresholdMinutes`
+      (from the client's `created` proof) get failed `core.intent-expired` → aborted → rejected.
+      No threshold in the ledger config → no expiry. `OPEN_LEDGER_MINUTE_MS` shortens it for
+      conformance (run.sh sets 1000 ms)
+- [ ] Thread abort: every intent of the expired intent's thread (one intent per thread today)
+- [ ] Release reservations of an expired intent (none exist yet: waiting intents reserve nothing)
 ## L8 — event delivery, retries, `cancelled`
 ## L9 — cross-ledger
 

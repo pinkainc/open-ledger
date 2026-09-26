@@ -3,6 +3,7 @@
 import { LedgerSdk } from '@minka/ledger-sdk'
 import { createKeyPair } from '@minka/ledger-sdk/crypto'
 import { buildApp } from '../src/app.js'
+import { Core } from '../src/core.js'
 import { MemoryStore } from '../src/store.js'
 import { PgStore } from '../src/pg-store.js'
 import type { Store } from '../src/store.js'
@@ -13,12 +14,13 @@ export type KeyPair = Awaited<ReturnType<typeof createKeyPair>>
 export const STORES: [string, () => Promise<Store & { close?: () => Promise<void> }>][] = [['memory', async () => new MemoryStore()]]
 if (process.env.DATABASE_URL) STORES.push(['postgres', () => PgStore.connect(process.env.DATABASE_URL!)])
 
-export async function startServer(store: Store & { close?: () => Promise<void> } = new MemoryStore()) {
-  const app = buildApp({ store })
+export async function startServer(store: Store & { close?: () => Promise<void> } = new MemoryStore(), core = new Core(store)) {
+  const app = buildApp({ store, core })
   await app.listen({ port: 0, host: '127.0.0.1' })
   const { port } = app.server.address() as { port: number }
   return {
     app,
+    core,
     base: `http://127.0.0.1:${port}/api/v2`,
     close: async () => {
       await app.close()
@@ -40,12 +42,12 @@ export function sdkFor(base: string, ledger: string | undefined, keyPair?: KeyPa
 }
 
 let counter = 0
-export async function newLedger(base: string, keyPair: KeyPair, access: unknown[] = [{ action: 'any', record: 'any' }]) {
+export async function newLedger(base: string, keyPair: KeyPair, access: unknown[] = [{ action: 'any', record: 'any' }], config?: Record<string, unknown>) {
   const handle = `test-${process.pid}-${++counter}`
   // The SDK refuses to create a ledger while one is active, so no `ledger` here.
   await sdkFor(base, undefined, keyPair, handle)
     .ledger.init()
-    .data({ handle, signer: 'system', access } as any)
+    .data({ handle, signer: 'system', access, ...(config ? { config } : {}) } as any)
     .hash()
     .sign([{ keyPair }])
     .send()

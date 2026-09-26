@@ -20,8 +20,13 @@ established. Newest first.
 - **Registration is irrelevant:** registering A as a signer record changed nothing.
 - **Claim permissions** (`access4`, B passes the gate, has nothing on A's wallet or
   symbol): `POST /intents` succeeds (201), the intent stays pending, and the expiry job
-  rejects it with `core.intent-expired` / `Intent <handle> expired` — as the docs say.
-  Not implemented yet (needs expiry, L7).
+  rejects it with `core.intent-expired` / `Intent <handle> expired`. The trail: the
+  `resolved` entries right away, nothing else (no `prepared`, no reservation), then
+  `failed {reason, detail}`, `aborted`, `rejected` — final status `rejected`, not the
+  `aborted` the docs (intent-expiry) describe. With a one-minute threshold the
+  rejection came after 81 s and 118 s: the job runs periodically. Reproduced.
+- **access4 fixture repaired:** the recording had 36 exchanges of a concurrent l0/l1
+  run (other ledgers) mixed in through the shared proxy; they were removed.
 - **Signer annotation:** a proof whose key belongs to a signer record comes back with
   `signer: <handle>`.
 - **Status policies** behave as documented: a proof outside the quorum is stored with

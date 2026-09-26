@@ -8,6 +8,13 @@
 //
 // or, on failure, … → failed {reason, detail} → aborted → rejected.
 //
+// Claims need permissions (about-intents, "Intent signatures"): `spend` on a debited
+// wallet, `issue` / `destroy` on the symbol, `limit` on a limited wallet, granted to
+// the intent's signers by the access rules. They are checked after resolution. An
+// intent whose signers lack one is not refused: it stays `pending` after its resolved
+// entries (recorded, access4) until more signatures arrive or it expires — the expiry
+// job then rejects it with `core.intent-expired`.
+//
 // How we get there is ours. The reference runs these steps as separate asynchronous
 // stages with intermediate states visible to readers; here one intent is processed in
 // a single transaction that serialises the ledger, so balances can never be observed
@@ -17,6 +24,7 @@ import { serverProof, type KeyPair, type Proof } from './crypto.js'
 import { newLuid } from './ids.js'
 import type { BalanceRow, LimitRow, Store, StoredRecord } from './store.js'
 import { hashData } from './crypto.js'
+import type { AccessControl, Principal } from './access.js'
 
 const entryId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 17)
 
@@ -41,10 +49,29 @@ function clock() {
   }
 }
 
-export class Core {
-  private queue = new Map<string, Promise<void>>()
+export type CoreOptions = {
+  /**
+   * Length of one minute of intent expiry, in ms. Only conformance runs change it, so
+   * that a one-minute expiry recorded on the reference does not take a minute here.
+   */
+  minuteMs?: number
+}
 
-  constructor(private readonly store: Store) {}
+/** A claim permission: an action on one wallet or symbol. */
+type Need = { action: string; record: 'wallet' | 'symbol'; handle: string }
+
+export class Core {
+  /** Access rules for claim permissions; set by the app that owns the rules. */
+  access?: AccessControl
+  private readonly minuteMs: number
+  private expiryTimer?: NodeJS.Timeout
+
+  constructor(
+    private readonly store: Store,
+    { minuteMs = 60_000 }: CoreOptions = {},
+  ) {
+    this.minuteMs = minuteMs
+  }
 
   /** Process an intent after the current request has been answered. */
   schedule(ledger: string, handle: string) {
@@ -72,12 +99,23 @@ export class Core {
       const limitWrites: LimitRow[] = []
 
       try {
-        const { entries, limits } = await this.resolve(tx, ledger, intent)
-        const t = now()
-        for (const e of entries)
-          trail.push(
-            sign({ amount: e.amount, handle: e.handle, inputs: [e.input], moment: t, schema: e.schema, status: 'resolved', symbol: e.symbol, wallet: e.wallet }),
-          )
+        // An intent that waited for signatures was resolved before; its entries are
+        // in its trail and are not resolved twice.
+        const earlier = resolvedEntries(intent)
+        const { entries, limits } = await this.resolve(tx, ledger, intent, earlier)
+        if (!earlier) {
+          const t = now()
+          for (const e of entries)
+            trail.push(
+              sign({ amount: e.amount, handle: e.handle, inputs: [e.input], moment: t, schema: e.schema, status: 'resolved', symbol: e.symbol, wallet: e.wallet }),
+            )
+        }
+        if (!(await this.permitted(tx, ledger, intent))) {
+          // Waiting: nothing moves, no reservation is taken.
+          intent.meta.proofs.push(...trail)
+          await tx.update(ledger, 'intents', intent)
+          return
+        }
 
         const books = new Books(tx, ledger)
         await this.checkLimits(tx, ledger, books, entries)
@@ -132,9 +170,61 @@ export class Core {
     })
   }
 
+  /** Rejects pending intents older than their ledger's expiry threshold. */
+  async expire() {
+    const nowMs = Date.now()
+    for (const l of await this.store.list('', 'ledgers')) {
+      const minutes = Number(l.data.config?.['intent.expiryThresholdMinutes'])
+      if (!(minutes > 0)) continue
+      for (const i of await this.store.list(l.data.handle, 'intents')) {
+        const created = createdMoment(i)
+        if (i.meta.status !== 'pending' || created === undefined || nowMs - created <= minutes * this.minuteMs) continue
+        await this.store.transaction(l.data.handle, async (tx) => {
+          const intent = await tx.get(l.data.handle, 'intents', i.data.handle)
+          if (!intent || intent.meta.status !== 'pending') return
+          const system = (await tx.getKey(l.data.handle, 'system'))!
+          const now = clock()
+          const sign = (custom: Record<string, unknown>) => serverProof(intent.hash, custom, system, 'system')
+          intent.meta.proofs.push(
+            sign({ detail: `Intent ${intent.data.handle} expired`, moment: now(), reason: 'core.intent-expired', status: 'failed' }),
+            sign({ moment: now(), status: 'aborted' }),
+            sign({ moment: now(), status: 'rejected' }),
+          )
+          intent.meta.status = 'rejected'
+          await tx.update(l.data.handle, 'intents', intent)
+        })
+      }
+    }
+  }
+
+  /** Runs `expire` periodically; the reference's job is not immediate either. */
+  startExpiry(everyMs = Math.min(5_000, this.minuteMs / 4)) {
+    this.stopExpiry()
+    this.expiryTimer = setInterval(() => void this.expire().catch((e) => console.error('expiry:', e)), everyMs)
+    this.expiryTimer.unref()
+  }
+
+  stopExpiry() {
+    if (this.expiryTimer) clearInterval(this.expiryTimer)
+  }
+
+  // Every claim needs its permission from at least one of the intent's signers.
+  private async permitted(tx: Store, ledger: string, intent: StoredRecord) {
+    if (!this.access) return true
+    const ledgerRecord = await tx.get('', 'ledgers', ledger)
+    if (!ledgerRecord) return false
+    const { keys, who } = await signersOf(tx, ledger, intent)
+    for (const need of needsOf(intent.data.claims)) {
+      const record = await tx.get(ledger, need.record === 'wallet' ? 'wallets' : 'symbols', need.handle)
+      if (!record) return false
+      if (!(await this.access.allowed(need.action, need.record, { who, proofs: keys }, { ledger: ledgerRecord, record }))) return false
+    }
+    return true
+  }
+
   // Resolution checks each claim's wallets before its symbol (source, then target):
   // with both unknown the reference reports the wallet.
-  private async resolve(tx: Store, ledger: string, intent: StoredRecord): Promise<{ entries: Entry[]; limits: LimitOp[] }> {
+  private async resolve(tx: Store, ledger: string, intent: StoredRecord, earlier?: Entry[]): Promise<{ entries: Entry[]; limits: LimitOp[] }> {
     const entries: Entry[] = []
     const limits: LimitOp[] = []
     const claims: any[] = intent.data.claims
@@ -155,10 +245,11 @@ export class Core {
         limits.push({ wallet: c.wallet.handle, symbol, metric: c.metric, amount: c.amount })
         continue
       }
+      if (earlier) continue
       if (c.source) entries.push({ schema: 'debit', handle: `deb_${entryId()}`, wallet: c.source.handle, symbol, amount: c.amount, input: i })
       if (c.target) entries.push({ schema: 'credit', handle: `cre_${entryId()}`, wallet: c.target.handle, symbol, amount: c.amount, input: i })
     }
-    return { entries, limits }
+    return { entries: earlier ?? entries, limits }
   }
 
   // A limit row is signed by the ledger like any record, and keeps its luid when a
@@ -203,6 +294,56 @@ export class Core {
       }
     }
   }
+}
+
+/** Permissions the claims need (about-authorization, access actions). */
+function needsOf(claims: any[]): Need[] {
+  const needs: Need[] = []
+  for (const c of claims) {
+    if (c.action === 'issue') needs.push({ action: 'issue', record: 'symbol', handle: c.symbol.handle })
+    if (c.action === 'destroy') needs.push({ action: 'destroy', record: 'symbol', handle: c.symbol.handle })
+    if (c.source) needs.push({ action: 'spend', record: 'wallet', handle: c.source.handle })
+    if (c.action === 'limit') needs.push({ action: 'limit', record: 'wallet', handle: c.wallet.handle })
+  }
+  return needs
+}
+
+const SERVER_SIGNERS = new Set(['system', 'core'])
+
+// The keys an intent is signed with, as access rules see them. A proof `system.auth`
+// made on a token's behalf counts as the impersonated signer's key, and its `bearer.*`
+// claims stand in for the token, which is gone by the time the intent is processed.
+async function signersOf(tx: Store, ledger: string, intent: StoredRecord): Promise<{ keys: string[]; who?: Principal }> {
+  const keys: string[] = []
+  let who: Principal | undefined
+  for (const p of intent.meta.proofs as Proof[]) {
+    if (p.signer && SERVER_SIGNERS.has(p.signer) && p.origin === 'key-pair') continue
+    if (!p.origin) continue // bare core clearance proofs
+    if (p.origin === 'self-signed-token' && p.signer) {
+      const signer = await tx.get(ledger, 'signers', p.signer)
+      if (!signer) continue
+      keys.push(signer.data.public)
+      const claims = Object.fromEntries(Object.entries(p.custom ?? {}).filter(([k]) => k.startsWith('bearer.')).map(([k, v]) => [k.slice(7), v]))
+      who = { public: signer.data.public, claims }
+      continue
+    }
+    keys.push(p.public)
+  }
+  return { keys: [...new Set(keys)], who }
+}
+
+/** Entries of an intent resolved earlier, rebuilt from its `resolved` proofs. */
+function resolvedEntries(intent: StoredRecord): Entry[] | undefined {
+  const resolved = (intent.meta.proofs as Proof[]).filter((p) => p.signer === 'system' && p.custom?.status === 'resolved')
+  if (!resolved.length) return undefined
+  return resolved.map(({ custom: c }: any) => ({ schema: c.schema, handle: c.handle, wallet: c.wallet, symbol: c.symbol, amount: c.amount, input: c.inputs[0] }))
+}
+
+/** When the client created the intent: the moment of its `created` proof. */
+function createdMoment(intent: StoredRecord): number | undefined {
+  const p = (intent.meta.proofs as Proof[]).find((p) => p.custom?.status === 'created' && p.signer !== 'system')
+  const m = p?.custom?.moment
+  return typeof m === 'string' ? Date.parse(m) : undefined
 }
 
 /** Balance rows touched by one intent, read once and written back at the end. */

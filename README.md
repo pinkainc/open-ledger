@@ -45,11 +45,13 @@ and sandbox disagree, the sandbox wins.
 | **L1** | intents: issue, transfer, destroy; balances; async processing | 12 of 146 | **30/30** exchanges match |
 | **L3** | limits (`minBalance`, `maxBalance`), pagination, reads by luid | 13 of 146 | **39/41** match, 2 deliberately differ |
 | **L4** (part) | record lifecycle: update, status proofs, changes, drop, access check; signers | see `COVERAGE.md` | **22/23** match, 1 deliberately differs |
+| **L4** access | rule scope, ledger gate, matchers, circles, status policies, token impersonation, claim permissions | see `COVERAGE.md` | access **35/35**, access2 **15/15**, access3 **16/16**, access4 **14/14** |
+| **L7** (part) | intent expiry | — | covered by access4 |
 
 (L2, multi-claim atomicity, is covered by the L1 and L3 scenarios.)
 
 Every level passes on the in-memory store and on Postgres. Beyond conformance, the unit
-tests (`server/test/`, 80 tests) check invariants the reference cannot show from
+tests (`server/test/`, 148 with Postgres) check invariants the reference cannot show from
 outside: conservation of supply over a random intent sequence compared against a
 model, no overdraft under 50 concurrent transfers, two processes sharing one
 Postgres, and recovery of intents left pending by a crashed process.
@@ -80,9 +82,8 @@ only when a scenario changes.
   Verifying it behind a reverse proxy needs the URL the client used (the same problem
   as `Host` in S3 SigV4 signatures). The recording proxy has the same issue, which is
   why the scenario sends tokens without `hsh`.
-- **Access rules** cover record, ledger and server levels with `signer` (by public
-  key) and `bearer` matchers. Signer-by-handle, `$circle`, `$record`, access policies,
-  status policies and claim-level permissions (`spend`, `issue`) are open in `TODO.md`.
+- **Access policies** (`{policy: handle}`, `access.strategy: policy-based`) are not
+  evaluated; a rule naming a policy grants nothing.
 - **Ledger-wide serialisation.** Intents of one ledger are processed one at a time
   (advisory lock in Postgres). Correct, and far above the reference's ~100 intents/s,
   but per-wallet locking would scale further.

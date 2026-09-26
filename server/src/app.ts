@@ -59,6 +59,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   const app = Fastify({ logger: false })
   if (onRoute) app.addHook('onRoute', (r) => [r.method].flat().forEach((m) => onRoute(m, r.url)))
   const acl = new AccessControl(store, serverRules)
+  core.access ??= acl
   const now = () => new Date().toISOString()
 
   // Each ledger gets its own `system` signer when it is created, and everything the
