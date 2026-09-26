@@ -4,7 +4,7 @@
 import { LedgerSdk } from '@minka/ledger-sdk'
 import { createKeyPair } from '@minka/ledger-sdk/crypto'
 
-export async function scenario() {
+export async function scenario(opts: { expiryMinutes?: number; settleSeconds?: number; skipLedger?: boolean } = {}) {
   const BASE = process.env.BASE ?? 'http://localhost:4610/api/v2'
   const DIRECT = process.env.DIRECT ?? BASE
   const RUN = process.env.RUN ?? new Date().toISOString().replace(/\D/g, '').slice(0, 14)
@@ -24,13 +24,13 @@ export async function scenario() {
     }
   }
 
-  await step('ledger.create', () =>
+  if (!opts.skipLedger) await step('ledger.create', () =>
     new LedgerSdk({ server: BASE, secure })
       .ledger.init()
       .data({
         handle: LEDGER,
         signer: 'system',
-        config: { 'intent.expiryThresholdMinutes': 60, 'access.strategy': 'record-based' },
+        config: { 'intent.expiryThresholdMinutes': opts.expiryMinutes ?? 60, 'access.strategy': 'record-based' },
         access: [{ action: 'any', record: 'any' }],
       } as any)
       .hash()
@@ -44,7 +44,7 @@ export async function scenario() {
     step(`${client}.create ${data.handle}`, () => (sdk as any)[client].init().data({ access: mine, ...data }).hash().sign([{ keyPair }]).send())
 
   async function settle(handle: string) {
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < (opts.settleSeconds ?? 30) * 2; i++) {
       try {
         const r: any = await direct.intent.read(handle)
         if (r?.meta?.status === 'completed' || r?.meta?.status === 'rejected') return r.meta.status
@@ -55,13 +55,15 @@ export async function scenario() {
   }
 
   /** Create an intent, wait for it off the record, then read it on the record. */
-  async function intent(name: string, handle: string, claims: unknown[]) {
-    await step(`intent.create ${name}`, () => sdk.intent.init().data({ handle, claims, access: mine } as any).hash().sign([{ keyPair }]).send())
+  async function intent(name: string, handle: string, claims: unknown[], signers = [keyPair]) {
+    await step(`intent.create ${name}`, () =>
+      sdk.intent.init().data({ handle, claims, access: mine } as any).hash().sign(signers.map((k) => ({ keyPair: k }))).send(),
+    )
     console.log(`      settled: ${await settle(handle)}`)
     return step(`intent.read ${name}`, () => sdk.intent.read(handle))
   }
 
-  return { sdk, keyPair, mine, step, create, intent, LEDGER }
+  return { sdk, keyPair, mine, step, create, intent, LEDGER, BASE, secure }
 }
 
 export const ref = (handle: string) => ({ handle })

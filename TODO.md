@@ -59,14 +59,22 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Access rules per about-authorization: `signer` → proof signers (mutations only),
       `bearer` → token (claims, `$signer`), neither → everyone; record → ledger → server, additive
 - [x] Server rules configurable; default: `access`, `create ledger` (divergence from the sandbox's wallet grant)
-- [ ] `signer: {handle}` and `$circle` matchers (need signer lookup and circles)
-- [ ] `$record: owner`, `$ledger: owner` matchers (docs disagree: `owner` vs `creator` — record reference)
+- [x] `signer: {handle}`, `$circle`, `$record: owner`, `$ledger: owner` matchers (`server/src/access.ts`)
+- [x] Rule scope (ledger rule without `record` = ledger only) and the ledger `access` gate — recorded access2/3
+- [x] Circles, circle signers (`$crc`, `$csn`), policies (`$plc`); status policies with quorum (`server/src/status.ts`)
+- [x] Proofs by registered signers annotated with `signer: <handle>`
+- [ ] NEXT: `access3` #7 — token impersonation: `system.auth` adds a proof with
+      `custom["bearer.aud"]` and becomes a second owner when an intent is sent with a token
+- [ ] NEXT: run `conformance/run.sh check access2` and `check access4` (recorded, never compared);
+      their scenarios poll up to 200–240 s against our server — shorten waits when a read is forbidden
+- [ ] Forbidden details: `Cannot create symbol.` etc. instead of `Forbidden.`
+- [ ] Tests for circles, status policies, matchers (behaviour is conformance-checked only)
 - [ ] Access policies (`{policy: handle}`) and `access.strategy: policy-based`
 - [ ] Status policies: allowed transitions, quorum (`record.status-policy-violation`, quorum-not-met)
 - [ ] Circles and circle signers (`/circles`, `/circles/{id}/signers`)
-- [ ] Claim authorisation: `spend` on source wallet, `issue`/`destroy` on symbol, `limit`;
-      per docs a missing permission leaves the intent pending until expiry (no 403) — record
-- [ ] (?) Record reference: read with a token on a ledger whose rules are signer-only
+- [ ] Claim authorisation: `spend` on source wallet, `issue`/`destroy` on symbol, `limit`.
+      Recorded (access4): the intent stays pending and expires, `core.intent-expired`,
+      `Intent <handle> expired`. Needs the expiry job (L7) first
 - [ ] (?) Record reference: drop of a funded wallet (our reason `record.drop-rejected`, wording ours)
 - [ ] `PUT /ledger`, `POST /ledger/proofs`, `/ledger/access/!check`, `GET /ledgers`
 ## L5 — 2PC with one external participant (bridge), idempotency by handle

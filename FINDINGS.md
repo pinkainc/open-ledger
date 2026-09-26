@@ -4,6 +4,37 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-09-26 — Access (scenarios access, access2, access3, access4)
+
+- **Open ledgers are open.** A ledger rule `{action: any, record: any}` (what the CLI
+  creates) grants every caller every action, including `spend` on any wallet and
+  `issue` on any symbol: in `access`, signer B moved alice's money and issued A's
+  symbol. Levels are additive, so record rules cannot restrict it.
+- **Scope:** a ledger-level rule without `record` covers the ledger record only. With
+  `{any, signer: A}` alone, A could not create a symbol (`access2`, `access3`); it takes
+  `record: any`. `{action: read}` without `record` makes the ledger record readable,
+  nothing else.
+- **Gate:** a mutation needs `access` on the ledger from the ledger's rules. With
+  `{create, record: intent}` open to all, B (no `access`) was still refused 403;
+  A (who has `any` on the ledger) was not.
+- **Registration is irrelevant:** registering A as a signer record changed nothing.
+- **Claim permissions** (`access4`, B passes the gate, has nothing on A's wallet or
+  symbol): `POST /intents` succeeds (201), the intent stays pending, and the expiry job
+  rejects it with `core.intent-expired` / `Intent <handle> expired` — as the docs say.
+  Not implemented yet (needs expiry, L7).
+- **Signer annotation:** a proof whose key belongs to a signer record comes back with
+  `signer: <handle>`.
+- **Status policies** behave as documented: a proof outside the quorum is stored with
+  no effect; a status no value allows is 422 `record.status-policy-violation`,
+  `Cannot set wallet status to blocked. No values correspond to the target status.`
+- **Circles** `$crc`, circle signers `$csn` (created with 200, client proof without
+  `origin`, no `meta.status`), policies `$plc`.
+- **Forbidden details** name the operation: `Cannot create symbol.`, `Cannot create
+  wallet.` (we say `Forbidden.`).
+- **Open:** in `access3` an intent created with a token carries an extra proof with
+  `custom["bearer.aud"]` and a second owner — token impersonation by `system.auth`
+  (docs: about-authentication). Not reproduced yet.
+
 ## 2026-09-26 — Record lifecycle, signers, access check
 
 Recorded with `conformance/scenarios/records.ts` (`fixtures/records.reference.jsonl`).

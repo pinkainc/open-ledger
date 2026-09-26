@@ -2,7 +2,7 @@
 // for identity and ordering. Handles are unique per (ledger, kind), luids globally.
 import pg from 'pg'
 import type { KeyPair } from './crypto.js'
-import type { BalanceRow, LimitRow, Store, StoredRecord } from './store.js'
+import { keyOf, type BalanceRow, type LimitRow, type Store, type StoredRecord } from './store.js'
 
 const SCHEMA = `
 create table if not exists records (
@@ -93,7 +93,7 @@ export class PgStore implements Store {
     const { rowCount } = await this.db.query(
       `insert into records (ledger, kind, handle, luid, hash, data, meta) values ($1,$2,$3,$4,$5,$6,$7)
        on conflict (ledger, kind, handle) do nothing`,
-      [ledger, kind, r.data.handle, r.luid, r.hash, r.data, r.meta],
+      [ledger, kind, keyOf(r), r.luid, r.hash, r.data, r.meta],
     )
     return rowCount === 1
   }
@@ -102,12 +102,12 @@ export class PgStore implements Store {
     const { rowCount } = await this.db.query('update records set hash=$4, data=$5, meta=$6 where ledger=$1 and kind=$2 and handle=$3', [
       ledger,
       kind,
-      r.data.handle,
+      keyOf(r),
       r.hash,
       r.data,
       r.meta,
     ])
-    if (rowCount !== 1) throw new Error(`update of missing ${kind} ${r.data.handle}`)
+    if (rowCount !== 1) throw new Error(`update of missing ${kind} ${keyOf(r)}`)
   }
 
   async remove(ledger: string, kind: string, handle: string) {

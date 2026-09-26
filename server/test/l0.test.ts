@@ -52,23 +52,37 @@ test('unknown ledger is an unsigned 404 api.route-not-found', async () => {
 })
 
 // A `signer` rule is matched against proof signers, so it grants mutations only;
-// reads are granted by `bearer` rules, matched against the token.
-test('an open rule lets anonymous reads through; bearer rules gate reads by token', async () => {
+// reads are granted by `bearer` rules, matched against the token. A ledger rule
+// without `record` covers the ledger alone, hence `record: any` below.
+test('bearer rules gate reads by token; the ledger record itself stays readable', async () => {
   const open = await newLedger(server.base, kp)
   await sdkFor(server.base, open.handle).ledger.read()
 
   const closed = await newLedger(server.base, kp, [
-    { action: 'any', signer: { public: kp.public } },
-    { action: 'read', bearer: { $signer: { public: kp.public } } },
+    { action: 'any', record: 'any', signer: { public: kp.public } },
+    { action: 'read', record: 'any', bearer: { $signer: { public: kp.public } } },
   ])
-  const e = await failure(sdkFor(server.base, closed.handle).ledger.read())
-  assert.equal(e.status, 403)
-  assert.equal(e.reason, 'auth.forbidden')
+  await wallet(closed.sdk, 'w', kp)
+  await sdkFor(server.base, closed.handle).ledger.read()
 
+  const anon = await failure(sdkFor(server.base, closed.handle).wallet.read('w'))
+  assert.deepEqual([anon.status, anon.reason], [403, 'auth.forbidden'])
   const stranger = await newKeyPair()
-  const e2 = await failure(sdkFor(server.base, closed.handle, stranger).ledger.read())
-  assert.equal(e2.status, 403)
-  await closed.sdk.ledger.read()
+  assert.equal((await failure(sdkFor(server.base, closed.handle, stranger).wallet.read('w'))).status, 403)
+  await closed.sdk.wallet.read('w')
+})
+
+test('a ledger rule without `record` covers the ledger only', async () => {
+  const { sdk } = await newLedger(server.base, kp, [{ action: 'any', signer: { public: kp.public } }])
+  const e = await failure(wallet(sdk, 'w', kp))
+  assert.deepEqual([e.status, e.reason], [403, 'auth.forbidden'])
+})
+
+test('mutations need `access` on the ledger even where a rule grants the action', async () => {
+  const other = await newKeyPair()
+  const { handle } = await newLedger(server.base, kp, [{ action: 'any', record: 'any', signer: { public: kp.public } }, { action: 'create', record: 'wallet' }])
+  const e = await failure(wallet(sdkFor(server.base, handle, other), 'x', other))
+  assert.deepEqual([e.status, e.reason], [403, 'auth.forbidden'])
 })
 
 test('a mutation without proofs is 422 crypto.signature-missing', async () => {

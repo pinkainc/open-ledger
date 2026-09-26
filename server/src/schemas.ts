@@ -55,6 +55,9 @@ const DATA = {
   wallets: baseData,
   intents: { allOf: [{ type: 'object', required: ['handle', 'claims'], properties: { claims } }, baseData] },
   signers: baseData,
+  circles: baseData,
+  policies: { allOf: [{ type: 'object', required: ['handle', 'schema', 'values'] }, baseData] },
+  'circle-signers': { type: 'object', required: ['circle', 'signer'] },
   drop: { type: 'object', required: ['parent'] },
 } as const
 

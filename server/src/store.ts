@@ -59,6 +59,9 @@ export interface Store {
 
 const clone = <T>(v: T): T => structuredClone(v)
 
+/** A record's key within its kind: its handle, or its luid for records without one (circle signers). */
+export const keyOf = (r: StoredRecord): string => r.data.handle ?? r.luid
+
 export class MemoryStore implements Store {
   private rows = new Map<string, StoredRecord[]>()
   private keys = new Map<string, KeyPair>()
@@ -75,7 +78,7 @@ export class MemoryStore implements Store {
   private records = (ledger: string, kind: string) => this.bucket(this.rows, `${ledger}\u0000${kind}`)
 
   async get(ledger: string, kind: string, handle: string) {
-    const r = this.records(ledger, kind).find((r) => r.data.handle === handle)
+    const r = this.records(ledger, kind).find((r) => keyOf(r) === handle)
     return r && clone(r)
   }
 
@@ -86,15 +89,15 @@ export class MemoryStore implements Store {
 
   async insert(ledger: string, kind: string, record: StoredRecord) {
     const b = this.records(ledger, kind)
-    if (b.some((r) => r.data.handle === record.data.handle)) return false
+    if (b.some((r) => keyOf(r) === keyOf(record))) return false
     b.push(clone(record))
     return true
   }
 
   async update(ledger: string, kind: string, record: StoredRecord) {
     const b = this.records(ledger, kind)
-    const i = b.findIndex((r) => r.data.handle === record.data.handle)
-    if (i < 0) throw new Error(`update of missing ${kind} ${record.data.handle}`)
+    const i = b.findIndex((r) => keyOf(r) === keyOf(record))
+    if (i < 0) throw new Error(`update of missing ${kind} ${keyOf(record)}`)
     b[i] = clone(record)
   }
 
@@ -104,7 +107,7 @@ export class MemoryStore implements Store {
 
   async remove(ledger: string, kind: string, handle: string) {
     const b = this.records(ledger, kind)
-    const i = b.findIndex((r) => r.data.handle === handle)
+    const i = b.findIndex((r) => keyOf(r) === handle)
     if (i >= 0) b.splice(i, 1)
   }
 
