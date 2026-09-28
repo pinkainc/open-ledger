@@ -93,6 +93,34 @@ sequenceDiagram
 5. **`GET /schemas` sandboxa** vraća sheme istim redom kao policy liste (najnovije prve),
    pa se sistemske sheme upisuju obrnutim redom.
 
+## Gdje smo: koliko je gotovo i za što je uporabljivo (2026-09-28)
+
+| Mjera | Stanje |
+| --- | --- |
+| Operacije API-ja | 82/146 (56 %), od toga 60 potvrđeno snimkom (41 %) |
+| Ljestvica L0–L9 | L0–L6 gotovo; rute gotove; L7 djelomično (istek, bez aborta threada); L8 za bridgeove (bez effecta); L9 ništa |
+| Resursi s 0 operacija | anchors, domains, effects, reports, oauth, system |
+
+Procjena: jezgra kretanja novca (ono po čemu je ledger ledger) je oko dvije trećine
+gotova; cijela površina API-ja nešto iznad pola.
+
+**Uporabljivo danas** — kao lokalna zamjena za Minku u razvoju i CI-ju aplikacija koje
+govore `@minka/ledger-sdk` ili `minka` CLI: ledgeri, simboli, walleti, intenti (issue,
+transfer, destroy, limit), salda i rezervacije, limiti, signeri, circles, pravila
+pristupa, status policy, bridgeovi s 2PC-om (i više banaka u jednom intentu), adrese i
+rute, isporuke prema bridgeovima s retryjem. Ponašanje je potvrđeno usporedbom sa
+sandboxom, ne pretpostavljeno.
+
+**Nije uporabljivo za produkciju:**
+
+- bridge `secure` (header, oauth2) nije implementiran — prava banka s autentikacijom
+  se ne može spojiti;
+- nema effecta (webhooka), anchora, domena, reporta, access policyja, korisničkih shema,
+  aborta threada, provjere `hsh` claima;
+- ključevi ledgera stoje u bazi nešifrirani; nema HA, backupa, nadzora ni sigurnosnog
+  pregleda; obrada serijalizira cijeli ledger;
+- licenca, AML/KYC i pristup shemama plaćanja su izvan opsega (non-goal iz README-a).
+
 ## Otvoreno (detalji u TODO.md)
 
 - Snimiti CLI tok na sandboxu kao conformance razinu (`GET /api/v2` bi bio divergencija).
