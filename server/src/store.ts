@@ -62,6 +62,9 @@ export interface Store {
   once(ledger: string, key: string): Promise<boolean>
   /** Whether `once` has seen a key. */
   marked(ledger: string, key: string): Promise<boolean>
+  /** Sealed secrets (secrets.ts), by a name such as `bridge/<handle>/<secret>`. */
+  getSecret(ledger: string, name: string): Promise<string | undefined>
+  putSecret(ledger: string, name: string, sealed: string): Promise<void>
   transaction<T>(ledger: string, fn: (tx: Store) => Promise<T>): Promise<T>
 }
 
@@ -78,6 +81,7 @@ export class MemoryStore implements Store {
   private hist = new Map<string, StoredRecord[]>()
   private locks = new Map<string, Promise<unknown>>()
   private marks = new Set<string>()
+  private secrets = new Map<string, string>()
 
   private bucket<T>(map: Map<string, T[]>, key: string) {
     let b = map.get(key)
@@ -164,6 +168,14 @@ export class MemoryStore implements Store {
     if (this.marks.has(k)) return false
     this.marks.add(k)
     return true
+  }
+
+  async getSecret(ledger: string, name: string) {
+    return this.secrets.get(`${ledger}\u0000${name}`)
+  }
+
+  async putSecret(ledger: string, name: string, sealed: string) {
+    this.secrets.set(`${ledger}\u0000${name}`, sealed)
   }
 
   async marked(ledger: string, key: string) {

@@ -12,6 +12,7 @@ import { matches, parseQuery } from './query.js'
 import { validateBody, type ValidatedKind } from './schemas.js'
 import { keyOf, type Store, type StoredRecord } from './store.js'
 import { applyStatus } from './status.js'
+import { secretRefs } from './secrets.js'
 import { SYSTEM_SCHEMAS } from './system-schemas.js'
 
 export type AppOptions = {
@@ -244,11 +245,36 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await store.addChange(scope, kind, keyOf(r), snapshot(r, n, action, moment))
   }
 
+  // ---- secrets (secrets.ts; recorded, secure) -----------------------------------------
+
+  // Every `{{ secret.<name> }}` in a record's data needs its value in `meta.secret` —
+  // unless an earlier version already referred to it. Checked before anything is
+  // written; the values are sealed only once the record is.
+  function secretsOf(data: unknown, meta: any, previous?: StoredRecord): [string, string][] {
+    const given = meta?.secret ?? {}
+    const kept = previous ? secretRefs(previous.data) : new Set<string>()
+    const out: [string, string][] = []
+    for (const name of secretRefs(data)) {
+      if (typeof given[name] === 'string') out.push([name, given[name]])
+      else if (!kept.has(name))
+        throw new LedgerError(422, 'record.invalid', `Record data has a secret reference to new secret '${name}' but no secret value was provided in 'meta.secret.${name}'`)
+    }
+    return out
+  }
+
+  async function keepSecrets(scope: string, kind: Kind, handle: string, values: [string, string][]) {
+    for (const [name, value] of values) {
+      const at = `${KINDS[kind].record}/${handle}/${name}`
+      await store.putSecret(scope, at, core.secrets.seal(value, `${scope}/${at}`))
+    }
+  }
+
   // Stores a new record and returns it; the caller answers only after everything the
   // record depends on is written, so a client's next request never outruns it.
   async function create(kind: Kind, scope: string, key: KeyPair, req: FastifyRequest) {
     const body = req.body as any
     const proofs = verifyProofs(body)
+    const secrets = kind === 'intents' ? [] : secretsOf(body.data, body.meta)
     const luid = newLuid(KINDS[kind].luid)
     const moment = now()
     const sign = (custom: Record<string, unknown>) => serverProof(body.hash, custom, key, 'system')
@@ -290,6 +316,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
         },
       }
     if (!(await store.insert(scope, kind, record))) throw errors.duplicated(KINDS[kind].name, body.data.handle)
+    await keepSecrets(scope, kind, keyOf(record), secrets)
     await addChange(scope, kind, record, 'create')
     if (kind === 'intents') core.schedule(scope, body.data.handle)
     return record
@@ -502,6 +529,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (body.data.parent !== t.found.hash) throw errors.parentHashInvalid()
     if (t.kind !== 'ledgers') await related(t.kind, t.scope, body.data)
     const proofs = await annotate(t.ledger.data.handle, verifyProofs(body))
+    const secrets = secretsOf(body.data, body.meta, t.found)
     const updated: StoredRecord = {
       hash: body.hash,
       data: body.data,
@@ -509,6 +537,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       meta: { ...t.found.meta, proofs: [...proofs, serverProof(body.hash, { luid: t.found.luid, moment: now() }, req.ledgerKey!, 'system')], moment: now() },
     }
     await store.update(t.scope, t.kind, updated)
+    await keepSecrets(t.scope, t.kind, keyOf(updated), secrets)
     await addChange(t.scope, t.kind, updated, 'update')
     return updated
   }
@@ -645,6 +674,18 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const by = data.handle !== undefined ? { handle: String(data.handle) } : { maxAge: typeof data.maxAge === 'number' ? data.maxAge : undefined }
     if (!(await core.retryDeliveries(t.scope, t.found.data.handle, by)))
       throw new LedgerError(404, 'record.not-found', `Event '${data.handle}' not found on ledger '${t.scope}'`)
+    reply.status(202).send()
+  })
+
+  // The deprecated form of a bulk retry (spec: activateBridge; recorded, secure): signed
+  // `{maxAge}`, access `activate`, 202 with no body. It resends cancelled deliveries too.
+  app.post<{ Params: { id: string } }>('/api/v2/bridges/:id/activate', async (req, reply) => {
+    const who = await authenticate(req)
+    const t = await target(req, 'bridges', req.params.id)
+    verifyProofs(req.body)
+    await acl.authorize('activate', 'bridge', { who, proofs: proofKeys(req.body) }, { ledger: t.ledger, record: t.found })
+    const maxAge = (req.body as any)?.data?.maxAge
+    await core.retryDeliveries(t.scope, t.found.data.handle, { maxAge: typeof maxAge === 'number' ? maxAge : undefined })
     reply.status(202).send()
   })
 

@@ -85,3 +85,40 @@ sequenceDiagram
 4. **`settle` u scenariju koji `aborted` smatra konačnim** pročitao bi intent prije
    nego što bridge potvrdi abort. Polling ide mimo proxyja, pa popravak ne mijenja
    fixture.
+
+## Bridge `secure`, retry cap, traits, `activate`
+
+### Što je napravljeno
+
+- **Secreti.** Vrijednost pravila u `secure` je referenca `{{ secret.<ime> }}`, a sama
+  vrijednost stiže jednom, u `meta.secret`. Ledger je zapečati (AES-256-GCM, master
+  ključ `OPEN_LEDGER_MASTER_KEY`, kontekst `ledger/bridge/handle/ime` kao AAD) i nikad
+  je ne vraća. Referenca bez vrijednosti i obična vrijednost odbijaju se istim greškama
+  kao na referenci.
+- **`header` i `oauth2`** na svakom pokušaju isporuke (`Bridges.authorize`). OAuth2 token
+  traži se prije svakog poziva, kao kod reference.
+- **Retry cap:** pet retryja, zatim `cancelled delivery.retry-cap-exhausted`. Zadnji
+  neuspjeli pokušaj nosi `detail.body`, i to je pravilo koje objašnjava i 501 iz `events`.
+- **Traits:** popis metoda i `{method, filter}`. Bez `statuses` nema PUT-a, a filtrirani
+  unos ledger knjiži sam.
+- **`POST /bridges/{id}/activate`** i status isporuke `running`.
+- Scenarij `secure` (43/44 + 39/39; jedna razlika je vremenska), 7 unit testova.
+
+### Odluke
+
+- **Master ključ je jedan po serveru, ne po ledgeru.** Kontekst (AAD) veže svaki
+  secret za ledger, bridge i ime, pa se zapečaćena vrijednost ne može podmetnuti drugom
+  bridgeu. Bez varijable server radi s ključem po procesu i na Postgresu upozorava, jer
+  bi secreti nakon restarta bili nečitljivi.
+- **Bez cachea OAuth2 tokena,** jer ga ni referenca nema. Dokumentacija ga obećaje, pa
+  je u TODO-u.
+- **Token zahtjevi u comparatoru uspoređuju se po obliku, jednom.** Referenca je za osam
+  poziva tražila sedam tokena bez vidljivog razloga, dok se `Authorization` svakog
+  poziva i dalje provjerava.
+
+### Zamke
+
+1. Uvjet „isporuke su se smirile“ (dva jednaka očitanja u 2 s) pada između dva retryja.
+   Sad traži 16 s bez promjene.
+2. Adresa token endpointa ne završava na `/v2`, pa je normalizacija adrese bridgea
+   morala dobiti oblik i za ostale putanje na istom hostu.

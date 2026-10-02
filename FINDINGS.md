@@ -4,6 +4,43 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-02 — Bridge security, the retry cap, traits, activate
+
+Recorded with `conformance/scenarios/secure.ts` (44 client exchanges, 39 bridge
+calls). Four bridges on one tunnel; the test bridge logs the headers named in `seen`
+and serves an OAuth2 token endpoint. All reproduced but one timing artefact.
+
+- **Secrets.** A `secure` value must be a reference `{{ secret.<name> }}` (pattern
+  `^\{\{ secret\.[A-Za-z]+[A-Za-z0-9]* \}\}$`); its value is sent once, in
+  `meta.secret.<name>` of the create, as for signer factors (v2.38). The stored record
+  keeps the reference and never shows the value; `meta.secret` is not kept.
+  - A plain value: 422 `record.schema-invalid`, one Ajv error per `oneOf` branch:
+    `…/secure/0/clientId` required (oauth2), `…/secure/0/value` pattern (header),
+    `…/secure/0/public` required (generic), then `oneOf`.
+  - A reference without its value: 422 `record.invalid`, `Record data has a secret
+    reference to new secret 'missing' but no secret value was provided in
+    'meta.secret.missing'` ("new": an update may keep an earlier one).
+- **`header` rules** put the resolved value on every call (prepare, commit, status).
+- **`oauth2`**: `POST tokenUrl`, `Authorization: Basic base64(clientId:clientSecret)`,
+  `content-type: application/x-www-form-urlencoded`, body
+  `grant_type=client_credentials&scope=<scope>`; each call then has `Authorization:
+  Bearer <access_token>`. **The token is not cached**: seven token requests for eight
+  calls, with `expires_in: 3600` (the docs promise caching for tokens living ≥ 60 s).
+- **Retry cap**: six attempts (1 s × 1.2…), then `cancelled {reason:
+  delivery.retry-cap-exhausted}`. **The last failed attempt carries `detail.body`**
+  (`"{}"` for an empty answer) — the same rule explains the 501 case recorded in
+  `events`. The intent gets `error core.bridge-unreachable "Request failed with status
+  code 500"` and stays pending.
+- **`POST /bridges/{id}/activate`** (deprecated) with `{maxAge: 0}` → 202, no body; the
+  cancelled delivery was sent again (seventh attempt, `delivered`) and the intent
+  completed.
+- A delivery being attempted is **`running`** (replay 0, no proofs) — caught once in a
+  list read right after the intent completed.
+- **Traits**: a bridge with `traits: ['debits', {method: 'credits', filter: {amount:
+  {$gte: 100}}}]` got no status notifications at all (no `statuses`), the prepare and
+  commit of a 150 credit, nothing for a 5 credit (the ledger applied it itself), and
+  its debits unfiltered.
+
 ## 2026-10-02 — L7: threads (forward intents), expiry of a thread, the size cap
 
 Recorded with `conformance/scenarios/l7.ts` (service 2.46.5). One bridge `bank`, four

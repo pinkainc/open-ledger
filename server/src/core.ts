@@ -28,6 +28,8 @@ import type { AccessControl, Principal } from './access.js'
 import { Bridges, type BridgeCall, type BridgeOptions, type Outcome } from './bridges.js'
 import { createHash } from 'node:crypto'
 import { RoutingError, filterMatches, resolveAddress, route } from './routing.js'
+import { SecretBox, resolveRefs, secretRefs } from './secrets.js'
+import { matches, parseQuery } from './query.js'
 
 const entryId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 17)
 
@@ -72,6 +74,8 @@ export type CoreOptions = {
    */
   minuteMs?: number
   bridges?: BridgeOptions
+  /** Seals the secrets records refer to; one per server (secrets.ts). */
+  secrets?: SecretBox
 }
 
 /** A claim permission: an action on one wallet or symbol. */
@@ -81,16 +85,48 @@ export class Core {
   /** Access rules for claim permissions; set by the app that owns the rules. */
   access?: AccessControl
   readonly bridges: Bridges
+  readonly secrets: SecretBox
   private readonly minuteMs: number
   private expiryTimer?: NodeJS.Timeout
 
   constructor(
     private readonly store: Store,
-    { minuteMs = 60_000, bridges }: CoreOptions = {},
+    { minuteMs = 60_000, bridges, secrets = new SecretBox() }: CoreOptions = {},
   ) {
     this.minuteMs = minuteMs
+    this.secrets = secrets
     this.bridges = new Bridges(bridges)
     this.bridges.onAttempt = (call, outcome) => this.recordAttempt(call, outcome)
+    this.bridges.authorize = (call) => this.authorize(call)
+    this.bridges.onStart = (call) => this.markRunning(call)
+  }
+
+  // ---- bridge authentication (about-bridges, "Bridge authentication"; recorded, secure) --
+
+  // The headers a bridge's `secure` rules give, in their order, a later rule winning a
+  // header an earlier one set. `header` sets its key to the resolved secret; `oauth2`
+  // asks the token endpoint — with Basic `clientId:clientSecret` and a form body
+  // `grant_type=client_credentials[&scope=…]` — and sets `Authorization: Bearer`.
+  // Recorded: the reference asks for a token before every call, `expires_in` or not;
+  // so do we (a cache is an optimisation the docs promise but the reference lacks).
+  private async authorize(call: BridgeCall): Promise<Record<string, string>> {
+    const ledger = call.ledger
+    const bridge = ledger ? await this.store.get(ledger, 'bridges', call.bridge) : undefined
+    const rules: any[] = bridge?.data.secure ?? []
+    if (!ledger || !rules.length) return {}
+    const values = new Map<string, string>()
+    for (const name of secretRefs(rules)) {
+      const at = `bridge/${call.bridge}/${name}`
+      const sealed = await this.store.getSecret(ledger, at)
+      if (sealed === undefined) throw new Error(`secret ${name} of bridge ${call.bridge} is missing`)
+      values.set(name, this.secrets.open(sealed, `${ledger}/${at}`))
+    }
+    const headers: Record<string, string> = {}
+    for (const rule of resolveRefs(rules, (n) => values.get(n)!)) {
+      if (rule.schema === 'header') headers[rule.key] = rule.value
+      if (rule.schema === 'oauth2') headers.Authorization = `Bearer ${await oauthToken(rule)}`
+    }
+    return headers
   }
 
   /** Process an intent after the current request has been answered. */
@@ -131,6 +167,19 @@ export class Core {
     await tx.insert(ledger, 'events', record)
     call.ledger = ledger
     call.delivery = handle
+  }
+
+  // A delivery being attempted is `running` (recorded, secure: a delivery caught in
+  // flight, no proofs, replay 0); the attempt's outcome then replaces the status.
+  private async markRunning(call: BridgeCall) {
+    if (!call.ledger || !call.delivery) return
+    const ledger = call.ledger
+    await this.store.transaction(ledger, async (tx) => {
+      const d = await tx.get(ledger, 'events', call.delivery!)
+      if (!d || d.meta.status === 'running') return
+      d.meta.status = 'running'
+      await tx.update(ledger, 'events', d)
+    })
   }
 
   /** Each attempt is signed into its delivery; `replay` counts the attempts. */
@@ -529,10 +578,13 @@ export class Core {
   // Status notifications go once to each bridge of the intent that was asked to prepare:
   // on `prepared` and on the final status (recorded; a rejected intent that never
   // prepared gets only the last, and a bridge whose credit never went out, none — l6).
+  // A bridge whose traits leave out `statuses` gets none (recorded, secure).
   private async statusCalls(run: Run, parts: Part[], intent: any): Promise<BridgeCall[]> {
     const out: BridgeCall[] = []
     for (const bridge of new Set(parts.map((p) => p.bridge))) {
-      const server = await this.server(run.tx, run.ledger, bridge)
+      const record = await run.tx.get(run.ledger, 'bridges', bridge)
+      if (!hasTrait(record?.data ?? {}, 'statuses', run.intent.data)) continue
+      const server = record?.data.config?.server as string | undefined
       if (server) out.push({ bridge, server, method: 'PUT', path: `/intents/${encodeURIComponent(run.intent.data.handle)}`, body: intent })
     }
     return out
@@ -750,12 +802,16 @@ function bridgedEntries(claims: any[], entries: Entry[]) {
 // the resolved wallet. A symbol is never summed with another.
 async function partsOf(run: Run, entries: Entry[]): Promise<Part[]> {
   const claims: any[] = run.intent.data.claims
-  const config = new Map<string, Record<string, unknown>>()
+  const bridges = new Map<string, Record<string, any>>()
   const groups = new Map<string, Entry[]>()
   for (const e of bridgedEntries(claims, entries)) {
-    if (!config.has(e.bridge!)) config.set(e.bridge!, (await run.tx.get(run.ledger, 'bridges', e.bridge!))?.data.config ?? {})
-    const by = config.get(e.bridge!)![`${e.schema}s.claims.groupBy`]
+    if (!bridges.has(e.bridge!)) bridges.set(e.bridge!, (await run.tx.get(run.ledger, 'bridges', e.bridge!))?.data ?? {})
+    const bridge = bridges.get(e.bridge!)!
     const c = claims[e.input]
+    // A bridge takes part only in what its traits let through (filtered on the entry).
+    const entry = { schema: e.schema, ...(c.source ? { source: c.source } : {}), ...(c.target ? { target: c.target } : {}), symbol: c.symbol, amount: e.amount, inputs: [e.input], intent: run.intent }
+    if (!hasTrait(bridge, `${e.schema}s`, entry)) continue
+    const by = (bridge.config ?? {})[`${e.schema}s.claims.groupBy`]
     const address = (e.schema === 'debit' ? c.source : c.target)?.handle
     const key = by === 'address' ? `address ${address}` : by === 'wallet' ? `wallet ${e.wallet}` : `entry ${e.handle}`
     const k = [e.bridge, e.schema, e.symbol, key].join('\u0000')
@@ -767,6 +823,41 @@ async function partsOf(run: Run, entries: Entry[]): Promise<Part[]> {
     bridge: es[0].bridge!,
     entries: es,
   }))
+}
+
+// Traits (about-bridges): a bridge without `traits` takes part in everything; with
+// them, only in the methods listed — a string, or `{method, filter}` whose filter is a
+// query on the call's data (dot paths, operators).
+function hasTrait(bridge: Record<string, any>, method: string, data: unknown) {
+  const traits: any[] | undefined = bridge.traits
+  if (!traits) return true
+  const t = traits.find((t) => t === method || t?.method === method)
+  if (!t) return false
+  return typeof t === 'string' || !t.filter || matches(data as object, parseQuery(flatFilter(t.filter)))
+}
+
+// `{amount: {$gte: 100}}` → `{'amount.$gte': 100}`, the form query.ts parses.
+function flatFilter(filter: Record<string, unknown>) {
+  const out: Record<string, unknown> = {}
+  for (const [path, cond] of Object.entries(filter)) {
+    if (cond && typeof cond === 'object' && !Array.isArray(cond) && Object.keys(cond).every((k) => k.startsWith('$')))
+      for (const [op, v] of Object.entries(cond)) out[`${path}.${op}`] = v
+    else out[path] = cond
+  }
+  return out
+}
+
+async function oauthToken(rule: { clientId: string; clientSecret: string; tokenUrl: string; scope?: string }) {
+  const body = new URLSearchParams({ grant_type: 'client_credentials', ...(rule.scope ? { scope: rule.scope } : {}) })
+  const res = await fetch(rule.tokenUrl, {
+    method: 'POST',
+    headers: { authorization: `Basic ${Buffer.from(`${rule.clientId}:${rule.clientSecret}`).toString('base64')}`, 'content-type': 'application/x-www-form-urlencoded' },
+    body,
+    signal: AbortSignal.timeout(30_000),
+  })
+  const json: any = await res.json().catch(() => undefined)
+  if (!res.ok || typeof json?.access_token !== 'string') throw new Error(`OAuth2 token request to ${rule.tokenUrl} failed with status ${res.status}`)
+  return json.access_token as string
 }
 
 // Parts that were asked to prepare: every debit, and the credits once all debits were

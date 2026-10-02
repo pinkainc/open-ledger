@@ -82,6 +82,17 @@ scripts/cli-e2e.sh                  # the minka CLI end to end against a fresh s
 DATABASE_URL=… npm start            # server on :4620 (memory store without DATABASE_URL)
 ```
 
+Settings (environment):
+
+| Variable | Meaning |
+| --- | --- |
+| `DATABASE_URL` | Postgres; memory store without it |
+| `PORT` | listen port (4620) |
+| `PUBLIC_URL`, `SERVER_HANDLE` | what `GET /api/v2` reports, behind a proxy |
+| `OPEN_LEDGER_MASTER_KEY` | 32 bytes, base64: seals the secrets bridge `secure` rules refer to. Without it a key per process (secrets are lost on restart; the server warns) |
+| `OPEN_LEDGER_DELIVERY_MAX_RETRIES` | retries of a call to a bridge before it is cancelled (5, as the reference) |
+| `OPEN_LEDGER_LOG` | one line per request on stderr |
+
 `record` leaves one ledger on the public sandbox per run; the sandbox cannot delete
 ledgers. Ledgers are named `open-ledger-conf-<run>` so they stay identifiable. Record
 only when a scenario changes.

@@ -100,8 +100,12 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Invariant: a report delivered twice has the effect of one (`l5.test.ts`); intent status is
       never set by a proof on the intent (found by that test)
 - [x] Expiry of an intent waiting for a bridge aborts the bridge and releases the reservation
-- [ ] `secure` rules: `header` and `oauth2` (needs secret references → a secret store)
-- [ ] `traits` (a bridge without `statuses` gets no PUT; filters)
+- [x] `secure` rules `header` and `oauth2`, secrets from `meta.secret` sealed with AES-256-GCM
+      under `OPEN_LEDGER_MASTER_KEY` (recorded `secure`, 43/44 + 39/39)
+- [x] `traits`: methods listed, `{method, filter}` on the call's data; no `statuses` → no PUT
+- [ ] OAuth2 token cache (the docs promise one for tokens ≥ 60 s; the reference has none)
+- [ ] Generic `secure` rules (`{schema, public, secret}`, e.g. mtls) are accepted, not applied
+- [ ] Secrets of signer factors (`/signers/{id}/factors`) — factors are not implemented
 - [x] Debit and credit on the same bridge in one intent; grouping (`claims.groupBy`) — l6
 - [x] A commit report that never comes: the intent stays `committed` (recorded, l6; same here)
 - [ ] Bridge proof authorisation: today any signer allowed to sign the intent may report
@@ -168,9 +172,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] A cancelled delivery notes its intent (`error`, `core.bridge-unreachable`)
 - [x] `GET /bridges/{id}/events[/{handle}]`, `POST …/events/retry` (handle or `maxAge`),
       access `query-event` / `retry-event`
-- [ ] Unreachable target (network error): `delivery.target-unreachable {message, code}` —
-      from the docs, not recorded
-- [ ] Retry cap (`delivery.retry-cap-exhausted`) — server-configurable on the reference; none here
+- [x] Unreachable target (network error): `delivery.target-unreachable {message, code}` —
+      from the docs, not recorded (the shape of `detail` is ours)
+- [x] Retry cap: 5 retries, then `cancelled delivery.retry-cap-exhausted`; the last failed
+      attempt carries `detail.body` (recorded); `OPEN_LEDGER_DELIVERY_MAX_RETRIES`
+- [x] `POST /bridges/{id}/activate` (deprecated bulk retry); deliveries `running` while attempted
 - [ ] (?) Does bulk retry include `cancelled`? (we: failed, cancelled, pending)
 - [ ] Effects (`/effects`, signals, webhooks) and their deliveries (`/effects/{id}/events`)
 - [ ] `minka bridge events list|show|retry` in the CLI end-to-end

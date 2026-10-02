@@ -4,6 +4,7 @@ import { buildApp } from './app.js'
 import { Core } from './core.js'
 import { PgStore } from './pg-store.js'
 import { MemoryStore } from './store.js'
+import { SecretBox } from './secrets.js'
 
 const PORT = Number(process.env.PORT ?? 4620)
 const url = process.env.DATABASE_URL
@@ -11,7 +12,12 @@ const url = process.env.DATABASE_URL
 const store = url ? await PgStore.connect(url) : new MemoryStore()
 // OPEN_LEDGER_MINUTE_MS shortens intent expiry for conformance runs; leave it unset.
 const minuteMs = process.env.OPEN_LEDGER_MINUTE_MS ? Number(process.env.OPEN_LEDGER_MINUTE_MS) : undefined
-const core = new Core(store, { minuteMs })
+// OPEN_LEDGER_MASTER_KEY seals the secrets records refer to (secrets.ts).
+const secrets = new SecretBox()
+if (secrets.ephemeral && url) console.error('warning: OPEN_LEDGER_MASTER_KEY is not set; secrets stored now cannot be read after a restart')
+// OPEN_LEDGER_DELIVERY_MAX_RETRIES: retries of a call to a bridge before giving up (5).
+const maxRetries = process.env.OPEN_LEDGER_DELIVERY_MAX_RETRIES ? Number(process.env.OPEN_LEDGER_DELIVERY_MAX_RETRIES) : undefined
+const core = new Core(store, { minuteMs, secrets, bridges: { maxRetries } })
 // PUBLIC_URL: the address clients use (…/api/v2), when behind a proxy.
 const app = buildApp({ store, core, server: { handle: process.env.SERVER_HANDLE, url: process.env.PUBLIC_URL } })
 // OPEN_LEDGER_LOG=1 prints one line per request (method, url, status) to stderr.

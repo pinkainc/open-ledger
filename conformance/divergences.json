@@ -33,5 +33,15 @@
     "reference": "None: the forward intent never expires (see l7 #25–27).",
     "ours": "The expired forward intent aborts its prepared credit and tells the bridge it was rejected.",
     "why": "Consequence of expiring the thread, see the l7 entry."
+  },
+  {
+    "fixture": "secure",
+    "exchanges": [
+      38
+    ],
+    "what": "The deliveries of i-down listed right after it completed.",
+    "reference": "Caught the last status notification in flight: `running`, replay 0, no proofs.",
+    "ours": "The same delivery already `delivered` (replay 1). We set `running` too while an attempt is under way; this read just comes later.",
+    "why": "Timing, not behaviour: which state a list catches a delivery in depends on when it is read."
   }
 ]

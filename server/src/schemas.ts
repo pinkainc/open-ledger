@@ -49,6 +49,34 @@ const claims = {
   },
 }
 
+// A bridge `secure` rule (spec: bridge-security-rule). Secret values are references
+// `{{ secret.<name> }}`; the value itself travels once, in `meta.secret` (recorded,
+// secure). With a plain value the reference reports one error per branch, in this
+// order: oauth2's missing `clientId`, header's pattern, generic's missing `public`.
+const secretRef = { type: 'string', pattern: '^\\{\\{ secret\\.[A-Za-z]+[A-Za-z0-9]* \\}\\}$' }
+const securityRule = {
+  oneOf: [
+    {
+      type: 'object',
+      required: ['schema', 'clientId', 'tokenUrl', 'clientSecret'],
+      properties: { schema: { type: 'string', enum: ['oauth2'] }, clientId: { type: 'string' }, tokenUrl: { type: 'string' }, clientSecret: secretRef, scope: { type: 'string' } },
+      additionalProperties: false,
+    },
+    {
+      type: 'object',
+      required: ['schema', 'key', 'value'],
+      properties: { schema: { type: 'string', enum: ['header'] }, key: { type: 'string' }, value: secretRef },
+      additionalProperties: false,
+    },
+    {
+      type: 'object',
+      required: ['schema', 'public', 'secret'],
+      properties: { schema: { type: 'string' }, public: { type: 'string' }, secret: secretRef },
+      additionalProperties: false,
+    },
+  ],
+}
+
 const DATA = {
   ledgers: { allOf: [{ type: 'object', required: ['handle', 'signer'] }, baseData] },
   symbols: { allOf: [{ type: 'object', required: ['factor'] }, baseData] },
@@ -65,7 +93,7 @@ const DATA = {
       {
         type: 'object',
         required: ['config', 'secure'],
-        properties: { config: { type: 'object', required: ['server'], properties: { server: { type: 'string' } } }, secure: { type: 'array' } },
+        properties: { config: { type: 'object', required: ['server'], properties: { server: { type: 'string' } } }, secure: { type: 'array', items: securityRule } },
       },
       baseData,
     ],

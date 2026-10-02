@@ -47,6 +47,9 @@ function normaliser() {
     // several bridges on one port, a path prefix per bridge that is kept.
     const bridgeUrl = v.match(/^(?:https:\/\/[a-z0-9-]+\.trycloudflare\.com|http:\/\/127\.0\.0\.1:\d+)((?:\/[a-z0-9]+)?)\/v2$/)
     if (bridgeUrl) return `<bridge-url>${bridgeUrl[1]}`
+    // Other addresses on the bridge's host, e.g. an OAuth2 token endpoint.
+    const bridgeHost = v.match(/^(?:https:\/\/[a-z0-9-]+\.trycloudflare\.com|http:\/\/127\.0\.0\.1:\d+)(\/.*)$/)
+    if (bridgeHost) return `<bridge-host>${bridgeHost[1]}`
     const lh = v.match(ledgerHandle)
     if (lh) v = v.replace(lh[0], '<ledger>')
     // Entry handles inside paths, e.g. /v2/credits/cre_…/commit; ledger-made intent
@@ -111,20 +114,32 @@ function canonical(log: Exchange[]): Exchange[] {
     return x.req.body?.data?.action ? 3 : 0
   }
   // With several bridges, calls of one phase go out in parallel: bridge, then the
-  // entry's schema, then the action break the tie before arrival order does.
+  // entry's schema, then the action, then the claims the entry stands for (its
+  // `inputs`, fixed by the intent) break the tie before arrival order does.
+  const inputsOf = new Map<string, string>()
+  for (const x of log as any[]) {
+    const d = x.req?.body?.data
+    if (d?.handle && Array.isArray(d.inputs)) inputsOf.set(d.handle, JSON.stringify(d.inputs))
+  }
+  const entryOf = (x: any): string => x.proof?.handle ?? String(x.req?.url).match(/(?:deb|cre)_[A-Za-z0-9]{17}/)?.[0] ?? x.req?.body?.data?.handle ?? ''
   const tie = (x: any): string =>
-    x.proof
+    (x.proof
       ? `${x.bridge ?? ''} ${String(x.proof.handle).slice(0, 3)} ${x.proof.status}`
       : x.token
         ? `${x.bridge ?? ''} token`
-        : `${x.bridge ?? ''} ${String(x.req.url).replace(/(deb|cre)_[A-Za-z0-9]{17}/g, '$1')}`
+        : `${x.bridge ?? ''} ${String(x.req.url).replace(/(deb|cre)_[A-Za-z0-9]{17}/g, '$1')}`) + ` ${inputsOf.get(entryOf(x)) ?? ''}`
   const order = new Map<string, number>()
   const keyed = log.map((x, i) => {
     const intent = intentOf(x)
     if (!order.has(intent)) order.set(intent, order.size)
     return { x, i, k: [order.get(intent)!, rank(x)], t: x.bridge ? tie(x) : '' }
   })
-  return keyed.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.t.localeCompare(b.t) || a.i - b.i).map((e) => e.x)
+  const sorted = keyed.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.t.localeCompare(b.t) || a.i - b.i).map((e) => e.x)
+  // Token requests are compared by form, once each: the reference asked for a token
+  // before seven of eight calls (secure), for no reason a recording shows. Every call's
+  // `Authorization` header is still compared (`seen`).
+  const tokens = new Set<string>()
+  return sorted.filter((x: any) => !x.token || (!tokens.has(JSON.stringify(x.token)) && tokens.add(JSON.stringify(x.token))))
 }
 const bridgeFile = refFile.endsWith('.bridge.jsonl')
 const ref = bridgeFile ? canonical(load(refFile)) : load(refFile)

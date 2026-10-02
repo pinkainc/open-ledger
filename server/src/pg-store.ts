@@ -54,6 +54,12 @@ create table if not exists marks (
   key    text not null,
   primary key (ledger, key)
 );
+create table if not exists secrets (
+  ledger text not null,
+  name   text not null,
+  sealed text not null,
+  primary key (ledger, name)
+);
 `
 
 type Queryable = pg.Pool | pg.PoolClient
@@ -174,6 +180,15 @@ export class PgStore implements Store {
   async once(ledger: string, key: string) {
     const { rowCount } = await this.db.query('insert into marks (ledger, key) values ($1, $2) on conflict do nothing', [ledger, key])
     return rowCount === 1
+  }
+
+  async getSecret(ledger: string, name: string) {
+    const { rows } = await this.db.query('select sealed from secrets where ledger = $1 and name = $2', [ledger, name])
+    return rows[0]?.sealed as string | undefined
+  }
+
+  async putSecret(ledger: string, name: string, sealed: string) {
+    await this.db.query('insert into secrets (ledger, name, sealed) values ($1,$2,$3) on conflict (ledger, name) do update set sealed = excluded.sealed', [ledger, name, sealed])
   }
 
   async marked(ledger: string, key: string) {
