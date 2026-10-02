@@ -128,3 +128,7 @@ sandboxom, ne pretpostavljeno.
 - L6: kasni izvještaj nakon aborta, pad debita dok drugi debit još čeka.
 - Rute: dubina > 3, ciklus debita, neuspjeli `forward` (abort threada — L7).
 - L8: effecti (signali, webhooki) i njihove isporuke; `delivery.target-unreachable`.
+
+## Vezani dokumenti
+
+- Nastavak: [`2026-10-02-nastanak-l7-i-dalje.md`](2026-10-02-nastanak-l7-i-dalje.md) — L7, bridge `secure`, nova tablica „Gdje smo“.
