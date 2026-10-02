@@ -122,3 +122,36 @@ sequenceDiagram
    Sad traži 16 s bez promjene.
 2. Adresa token endpointa ne završava na `/v2`, pa je normalizacija adrese bridgea
    morala dobiti oblik i za ostale putanje na istom hostu.
+
+## Brojke
+
+| | početak | kraj |
+| --- | --- | --- |
+| Operacije | 82/146, 60 snimkom | **83/146, 61 snimkom** |
+| Razine u `npm run check` | 13 | **15** (+ l7, secure) + `minka` CLI e2e |
+| Testovi (memorija + Postgres) | 217 | **239** |
+| Novi ledgeri na sandboxu | — | 4 (l7 ×3, secure); prvi l7 s petljom od ~5000 intenata |
+
+## Gdje smo (2026-10-02)
+
+| Mjera | Stanje |
+| --- | --- |
+| Operacije API-ja | 83/146 (57 %), od toga 61 potvrđeno snimkom (42 %) |
+| Ljestvica L0–L9 | L0–L7 gotovo; rute gotove; L8 za bridgeove (sa `secure`, retry capom i traitsima), bez effecta; L9 ništa |
+| Resursi s 0 operacija | anchors, domains, effects, reports, oauth, system |
+
+Pomak od 28. 9.: L7 je zatvoren (threadovi se commitaju i padaju kao cjelina, istek i
+ograničenje veličine), a bridge s autentikacijom (`header`, `oauth2`, secreti) sad se
+može spojiti. Time otpada prvi razlog iz „Nije uporabljivo za produkciju“ (prava banka
+s autentikacijom). I dalje nedostaju: effecti (webhooki), anchors i domains, reporti,
+access policy, korisničke sheme, provjera `hsh`, šifrirani ključevi ledgera i
+zaključavanje po walletu.
+
+## Sljedeće
+
+Effecti (točka 3 plana). Signali su u specu (`event-signal`, 53 vrijednosti), payload je
+u `handle-webhooks.md`, a akcije su `webhook` i `bridge` (POST `{server}/effects/<handle>`,
+bridge trait `events`). Isporuke idu kroz isti outbox (`$evd` s `effect` umjesto
+`bridge`). Prvo snimiti scenarij: nekoliko signala s filterima, webhook koji vraća
+501, effect prema bridgeu, `/effects/{id}/events` i retry. Pritom pripaziti da nijedan
+effect ne može pokrenuti novi posao na referenci (vidi zamku iz L7).
