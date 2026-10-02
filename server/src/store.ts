@@ -60,6 +60,8 @@ export interface Store {
    * read, e.g. that the credit prepares of an intent went out (core.ts).
    */
   once(ledger: string, key: string): Promise<boolean>
+  /** Whether `once` has seen a key. */
+  marked(ledger: string, key: string): Promise<boolean>
   transaction<T>(ledger: string, fn: (tx: Store) => Promise<T>): Promise<T>
 }
 
@@ -162,6 +164,10 @@ export class MemoryStore implements Store {
     if (this.marks.has(k)) return false
     this.marks.add(k)
     return true
+  }
+
+  async marked(ledger: string, key: string) {
+    return this.marks.has(`${ledger}\u0000${key}`)
   }
 
   // Chains every transaction of a ledger behind the previous one. The callback gets

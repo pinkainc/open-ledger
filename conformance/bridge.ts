@@ -16,6 +16,8 @@ export type Decision =
   | { status: 'failed'; reason: string; detail: string }
   | { httpFirst: number; then: Decision }
   | { silent: true }
+  /** Answer this HTTP status for as long as `while()` holds, then decide `then`. */
+  | { httpWhile: number; while: () => boolean; then: Decision }
 
 export type BridgeSpec = {
   handle: string
@@ -26,6 +28,10 @@ export type BridgeSpec = {
   decide: (entry: any) => Decision
   /** Whether to report a commit or abort; default: report. */
   report?: (entry: string, action: 'commit' | 'abort', intent: any) => boolean
+  /** Request headers (lower case) logged with each call as `seen`, for `secure` rules. */
+  headers?: string[]
+  /** An OAuth2 token endpoint at `{prefix}/oauth/token`, answering this body. */
+  token?: Record<string, unknown>
 }
 
 export type BridgeOptions = {
@@ -90,6 +96,13 @@ export async function startBridges(o: { port: number; out: string; ledger: strin
       body = text
     }
     const url = req.url ?? ''
+    const tokenOf = o.bridges.find((x) => x.token && url === `${x.prefix ?? ''}/oauth/token`)
+    if (tokenOf) {
+      log(tokenOf, { token: { method: req.method, authorization: req.headers.authorization, type: req.headers['content-type'], body: text } })
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify(tokenOf.token))
+      return
+    }
     const b = o.bridges.find((x) => url.startsWith(`${x.prefix ?? ''}/v2/`)) ?? o.bridges[0]
     const path = url.slice((b.prefix ?? '').length)
     // `{server}` ends in /v2; the SDK mounts /credits, /debits and /intents under it.
@@ -103,6 +116,10 @@ export async function startBridges(o: { port: number; out: string; ledger: strin
       status = 202
       if (!action) {
         let d = b.decide(entry)
+        if ('httpWhile' in d) {
+          if (d.while()) status = d.httpWhile
+          d = d.then
+        }
         if ('httpFirst' in d) {
           if (!failedOnce.has(entry.handle)) {
             failedOnce.add(entry.handle)
@@ -110,7 +127,7 @@ export async function startBridges(o: { port: number; out: string; ledger: strin
           }
           d = d.then
         }
-        const decision = d as Exclude<Decision, { httpFirst: number }>
+        const decision = d as Exclude<Decision, { httpFirst: number } | { httpWhile: number }>
         if (status === 202 && !('silent' in decision))
           after = () =>
             sign(b, intent, decision.status === 'prepared' ? { handle: entry.handle, status: 'prepared', coreId: coreId(entry.handle) } : { handle: entry.handle, ...decision })
@@ -120,7 +137,8 @@ export async function startBridges(o: { port: number; out: string; ledger: strin
     } else if (req.method === 'PUT' && path.startsWith('/v2/intents/')) {
       status = 200
     }
-    log(b, { req: { method: req.method, url, headers: req.headers, body }, res: { status } })
+    const seen = b.headers && Object.fromEntries(b.headers.map((h) => [h, req.headers[h] ?? null]))
+    log(b, { req: { method: req.method, url, headers: req.headers, body }, res: { status }, ...(seen ? { seen } : {}) })
     res.statusCode = status
     res.end()
     if (after) void after()

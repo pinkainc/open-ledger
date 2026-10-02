@@ -118,8 +118,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Balance rows: `parent: ""` on every update, not only reservations (all recordings)
 - [ ] (?) Route depth beyond 3: our wording `… routing depth 3 exceeded …` is a guess
 - [ ] (?) Debit routing cycle wording (we mirror the credit one)
-- [ ] (?) A forward intent that fails: does the reference abort the thread (first intent
-      already completed)? — L7 thread abort
+- [x] A forward intent that fails rejects its thread, the first intent too (recorded, l7)
 - [ ] (?) Route target that does not resolve: our message reuses the unresolved-wallet one
 - [ ] `GET /wallets/{address}/anchors`, `/domains` resolution (needs anchors, domains)
 
@@ -146,8 +145,20 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       (from the client's `created` proof) get failed `core.intent-expired` → aborted → rejected.
       No threshold in the ledger config → no expiry. `OPEN_LEDGER_MINUTE_MS` shortens it for
       conformance (run.sh sets 1000 ms)
-- [ ] Thread abort: every intent of the expired intent's thread (one intent per thread today)
-- [ ] Release reservations of an expired intent (none exist yet: waiting intents reserve nothing)
+- [x] Threads (recorded `l7`): the first intent waits `prepared` until every forward intent of
+      its thread is prepared, commits first, forward intents after the intent that made them
+- [x] Thread abort: one intent fails → the others fail with its reason and detail, release
+      their reservations, abort their bridges (refused forward, bridge failure, expiry)
+- [x] Release reservations of an expired intent (bridge wait: core prepared → released; a
+      signature wait reserves nothing)
+- [x] Thread size cap 10 (`core.thread-size-exceeded`) checked when forwarding — divergence:
+      the reference checks after the fact and let a loop make ~5000 intents (FINDINGS)
+- [x] Expiry of a forward intent waiting for its bridge — divergence: the reference never
+      expires it (thread stuck); we expire it and abort the thread
+- [ ] Thread lookups scan the ledger's intents (only for threads with a forward); index by
+      `meta.thread` in Postgres if it shows up
+- [ ] Unsupported list filters → 400 `api.query-malformed` `Unsupported filters: '<f>'`
+      (seen for `data.origin` on intents); which fields are supported per kind is unknown (?)
 ## L8 — event delivery, retries, `cancelled` (recorded: `events`, 23/23 + 20/20)
 
 - [x] Deliveries `$evd` as an outbox: written in the transaction of the step that makes the

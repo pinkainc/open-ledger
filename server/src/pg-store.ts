@@ -171,12 +171,18 @@ export class PgStore implements Store {
     )
   }
 
-  // One Postgres transaction per call, holding a ledger-wide advisory lock until
-  // commit, so money-moving work on a ledger is serialised across processes too.
   async once(ledger: string, key: string) {
     const { rowCount } = await this.db.query('insert into marks (ledger, key) values ($1, $2) on conflict do nothing', [ledger, key])
     return rowCount === 1
   }
+
+  async marked(ledger: string, key: string) {
+    const { rowCount } = await this.db.query('select 1 from marks where ledger = $1 and key = $2', [ledger, key])
+    return rowCount === 1
+  }
+
+  // One Postgres transaction per call, holding a ledger-wide advisory lock until
+  // commit, so money-moving work on a ledger is serialised across processes too.
 
   async transaction<T>(ledger: string, fn: (tx: Store) => Promise<T>): Promise<T> {
     if (this.db !== this.pool) return fn(this) // already inside one

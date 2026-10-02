@@ -4,6 +4,46 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-02 — L7: threads (forward intents), expiry of a thread, the size cap
+
+Recorded with `conformance/scenarios/l7.ts` (service 2.46.5). One bridge `bank`, four
+wallets forwarding (`forward` route) to a wallet that refuses the claim, to bank
+accounts that fail, prepare, or never answer. Two earlier runs on the sandbox
+(`…20261002153639202`, `…154800742`) were read directly as well; the first contained
+a forward loop (see last point).
+
+- **The thread commits as one.** The first intent's trail: … `system prepared`; the
+  forward intent is created right after (as recorded in routes); the first intent then
+  **waits with `meta.status: prepared`** until the forward intent is prepared, and
+  only then goes `committed "awaiting-clearance"` → cleared → `completed`. The forward
+  intent commits after it (its `committed` follows the first's).
+- **The thread fails as one.** A forward intent refused at resolution (`No matching
+  out route found for intent <forward>.`) or by its bridge (`Bridge(s) failed to
+  process intent: bank`): the first intent gets the **same** `failed {reason, detail}`,
+  then `aborted`, `core aborted` per entry (reservation released) and `rejected`. The
+  forward intent goes its own way: `failed → aborted → [bridge aborted] → rejected`.
+- A forward intent's debit is **not checked against the balance**: it prepares while
+  the forwarding wallet is still empty (its credit is prepared, not committed). It has
+  no core proofs and no reservation (as in routes); its bridged credit gets the usual
+  prepare, commit and status calls.
+- `meta.routed: true` appears on a waiting first intent. When the forward intent was
+  refused at once it was absent in one recording and present in the next — a race
+  between the reference's stages; we always set it while waiting.
+- **A forward intent whose bridge never answers is never expired**, although the ledger
+  has a one-minute threshold: after nine minutes the forward intent was still `pending`
+  and the first intent `prepared` (its 5 USD reserved). The docs say an expired intent
+  aborts its thread. Deliberate divergence: we expire it and the thread follows.
+- **Thread size cap** (`core.thread-size-exceeded`, `Thread size exceeded the maximum of
+  10`): two wallets forwarding to each other made **~5000 intents in nine minutes** —
+  every one left `prepared` — until the loop was broken by changing their routes by
+  hand. Only then did the reference fail the thread with that reason. The cap is checked
+  after the fact. Deliberate divergence: we refuse the intent whose forward would make
+  the eleventh, and the thread fails with the reference's reason and detail. Never
+  record such a scenario again.
+- Unsupported list filter (read directly): `GET /intents?data.origin=…` → **400**
+  `api.query-malformed`, `Unsupported filters: 'data.origin'` (with a stack trace in
+  `custom.trace`). Not reproduced yet: we filter on any field.
+
 ## 2026-09-26 — L8: bridge event deliveries
 
 Recorded with `conformance/scenarios/events.ts` (23 client exchanges, 20 bridge calls).

@@ -29,6 +29,8 @@ function normaliser() {
   const ledgerHandle = /open-ledger-conf-[0-9a-z]+/
 
   const value = (v: string): string => {
+    // Core ids the test bridge hands out in order of arrival: racing prepares swap them.
+    if (/^core-\d+$/.test(v)) return '<core-id>'
     if (/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(v)) return '<moment>'
     if (/^\$[a-z]{3}\.-[\w-]{16}$/.test(v)) return token(`luid:${v.slice(1, 4)}`, v)
     if (/^-[\w-]{16}$/.test(v)) return token('thread', v)
@@ -47,8 +49,12 @@ function normaliser() {
     if (bridgeUrl) return `<bridge-url>${bridgeUrl[1]}`
     const lh = v.match(ledgerHandle)
     if (lh) v = v.replace(lh[0], '<ledger>')
-    // Entry handles inside paths, e.g. /v2/credits/cre_…/commit.
-    return v.replace(/\b(deb|cre)_[A-Za-z0-9]{17}\b/g, (e) => token(`entry:${e.slice(0, 3)}`, e))
+    // Entry handles inside paths, e.g. /v2/credits/cre_…/commit; ledger-made intent
+    // handles inside error details ("… for intent 04VCsmXExKRbsoTqV.").
+    return v
+      .replace(/\b(deb|cre)_[A-Za-z0-9]{17}\b/g, (e) => token(`entry:${e.slice(0, 3)}`, e))
+      .replace(/\b([Ii]ntent) ([A-Za-z0-9]{17})\b/g, (_, w, id) => `${w} ${token('id', id)}`)
+      .replace(/\/intents\/([A-Za-z0-9]{17})$/, (_, id) => `/intents/${token('id', id)}`)
   }
   const walk = (x: any): any => {
     if (typeof x === 'string') return value(x)
@@ -91,6 +97,8 @@ function canonical(log: Exchange[]): Exchange[] {
   const intentOfEntry = new Map<string, string>()
   const intentOf = (x: any): string => {
     if (x.proof) return intentOfEntry.get(x.proof.handle) ?? ''
+    // Token requests are ordered among themselves, ahead of the calls they authorise.
+    if (x.token) return 'token'
     const d = x.req.body?.data
     const handle = d?.intent?.data?.handle ?? (x.req.method === 'PUT' ? d?.handle : '')
     if (d?.handle && d?.intent) intentOfEntry.set(d.handle, handle)
@@ -98,6 +106,7 @@ function canonical(log: Exchange[]): Exchange[] {
   }
   const rank = (x: any): number => {
     if (x.proof) return ['prepared', 'failed'].includes(x.proof.status) ? 1 : 4
+    if (x.token) return 0
     if (x.req.method === 'PUT') return x.req.body?.meta?.status === 'prepared' ? 2 : 5
     return x.req.body?.data?.action ? 3 : 0
   }
@@ -106,7 +115,9 @@ function canonical(log: Exchange[]): Exchange[] {
   const tie = (x: any): string =>
     x.proof
       ? `${x.bridge ?? ''} ${String(x.proof.handle).slice(0, 3)} ${x.proof.status}`
-      : `${x.bridge ?? ''} ${String(x.req.url).replace(/(deb|cre)_[A-Za-z0-9]{17}/g, '$1')}`
+      : x.token
+        ? `${x.bridge ?? ''} token`
+        : `${x.bridge ?? ''} ${String(x.req.url).replace(/(deb|cre)_[A-Za-z0-9]{17}/g, '$1')}`
   const order = new Map<string, number>()
   const keyed = log.map((x, i) => {
     const intent = intentOf(x)
@@ -134,8 +145,15 @@ const nr = normaliser(), nc = normaliser()
 // proofs the bridge sent back; what is compared there is the ledger's request.
 const bridgeLog = bridgeFile
 const subject = (x: any) =>
-  !bridgeLog ? x.res.body : x.proof ? { proof: x.proof, answer: x.answer, error: x.error, bridge: x.bridge } : { method: x.req.method, url: x.req.url, body: x.req.body, status: x.res.status }
-const title = (x: any, n: (v: any) => any) => (x.proof ? `proof ${x.bridge ? `${x.bridge} ` : ''}${x.proof.status}` : `${x.req.method} ${n(x.req.url)}`)
+  !bridgeLog
+    ? x.res.body
+    : x.proof
+      ? { proof: x.proof, answer: x.answer, error: x.error, bridge: x.bridge }
+      : x.token
+        ? { token: x.token, bridge: x.bridge }
+        : { method: x.req.method, url: x.req.url, body: x.req.body, status: x.res.status, ...(x.seen ? { seen: x.seen } : {}) }
+const title = (x: any, n: (v: any) => any) =>
+  x.proof ? `proof ${x.bridge ? `${x.bridge} ` : ''}${x.proof.status}` : x.token ? `token ${x.bridge ?? ''}` : `${x.req.method} ${n(x.req.url)}`
 
 // Reports of several bridges race: adjacent proofs by participants other than the
 // ledger, with the same status, arrive in timing order on the reference as here.
@@ -162,11 +180,13 @@ function settleRaces(x: any): any {
   if (Array.isArray(out.proofs)) {
     const external = (p: any) => p?.signer && !['system', 'core'].includes(p.signer) && p.custom?.handle
     const key = (p: any) => `${p.signer} ${String(p.custom.handle).slice(0, 3)}`
+    // Then by the entry's place in the trail (its `resolved` proof), not its handle.
+    const place = (p: any) => out.proofs.findIndex((q: any) => q?.custom?.handle === p.custom.handle)
     const ps = [...out.proofs]
     for (let i = 0; i < ps.length; ) {
       let j = i
       while (j < ps.length && external(ps[j]) && ps[j].custom.status === ps[i].custom?.status) j++
-      if (j - i > 1) ps.splice(i, j - i, ...ps.slice(i, j).sort((a, b) => key(a).localeCompare(key(b))))
+      if (j - i > 1) ps.splice(i, j - i, ...ps.slice(i, j).sort((a, b) => key(a).localeCompare(key(b)) || place(a) - place(b)))
       i = Math.max(j, i + 1)
     }
     out.proofs = ps
@@ -181,7 +201,10 @@ for (let i = 0; i < n; i++) {
   const r = ref[i], c = cand[i]
   const label = r ? title(r, nr) : title(c, nc)
   if (!r || !c) {
-    console.log(`FAIL  #${i} ${label}: only in ${r ? 'reference' : 'candidate'}`)
+    if (deliberate.has(i)) {
+      diverged++
+      console.log(`diff  #${i} ${label}: only in ${r ? 'reference' : 'candidate'} — deliberate: ${deliberate.get(i)}`)
+    } else console.log(`FAIL  #${i} ${label}: only in ${r ? 'reference' : 'candidate'}`)
     continue
   }
   const rb = nr(settleRaces(subject(r))), cb = nc(settleRaces(subject(c)))

@@ -9,5 +9,29 @@
     "reference": "Checks maxBalance only after commit: the intent stays `committed` forever with a core.limit-exceeded proof and the credit is never applied.",
     "ours": "Checks maxBalance with the other limits before preparing and rejects the intent: failed (same reason and detail) → aborted → rejected.",
     "why": "An intent that can never reach a final status is a defect, not a contract. Clients waiting for completed/rejected would wait forever."
+  },
+  {
+    "fixture": "l7",
+    "exchanges": [
+      25,
+      26,
+      27
+    ],
+    "what": "A forward intent whose bridge never answers, in a ledger with a one-minute expiry: the forward intent, the intent that made it, and alice's balance.",
+    "reference": "Never expires it: after nine minutes the forward intent is still pending, the first intent prepared, alice's 5 USD reserved (observed; this recording reads it after 90 s).",
+    "ours": "Expires the forward intent (core.intent-expired), aborts its bridge part, and rejects the first intent with the same reason and detail, releasing the reservation.",
+    "why": "The docs say an expired intent aborts its whole thread; a thread that can never finish holds funds forever."
+  },
+  {
+    "fixture": "l7.bridge.jsonl",
+    "exchanges": [
+      12,
+      13,
+      14
+    ],
+    "what": "The abort of the silent forward intent's credit, the bridge's report, and the final status notification.",
+    "reference": "None: the forward intent never expires (see l7 #25–27).",
+    "ours": "The expired forward intent aborts its prepared credit and tells the bridge it was rejected.",
+    "why": "Consequence of expiring the thread, see the l7 entry."
   }
 ]

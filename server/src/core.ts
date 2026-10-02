@@ -222,14 +222,17 @@ export class Core {
    */
   async process(ledger: string, handle: string) {
     const calls: Delivery[] = []
-    let spawned: string[] = []
+    let wake: string[] = []
     await this.store.transaction(ledger, async (tx) => {
       const intent = await tx.get(ledger, 'intents', handle)
       if (!intent || FINAL.has(intent.meta.status)) return
       const run = new Run(tx, ledger, intent, (await tx.getKey(ledger, 'system'))!, (await tx.getKey(ledger, 'core'))!)
-      spawned = run.spawned
+      const threaded = await isThreaded(tx, ledger, intent)
       try {
-        if (intent.meta.status === 'pending') await this.advancePending(run, calls)
+        const failure = threaded && ['pending', 'prepared'].includes(intent.meta.status) ? await threadFailure(tx, ledger, intent) : undefined
+        if (failure) await this.abort(run, calls, await this.partsToAbort(run), failure.reason, failure.detail)
+        else if (intent.meta.status === 'pending') await this.advancePending(run, calls)
+        else if (intent.meta.status === 'prepared') await this.advancePrepared(run, calls)
         else if (intent.meta.status === 'committed') await this.advanceCommitted(run, calls)
         else if (intent.meta.status === 'aborted') await this.advanceAborted(run, calls)
       } catch (e) {
@@ -239,9 +242,15 @@ export class Core {
       }
       for (const d of calls) for (const c of d.calls) await this.enqueue(tx, ledger, c, handle)
       await run.finish()
+      wake = [...run.spawned, ...(threaded && run.trail.length ? await wakeable(tx, ledger, intent) : [])]
     })
     await this.deliver(calls)
-    for (const h of spawned) this.schedule(ledger, h)
+    for (const h of new Set(wake)) this.schedule(ledger, h)
+  }
+
+  // Parts to tell to abort: those asked to prepare, once the prepare phase has begun.
+  private async partsToAbort(run: Run) {
+    return (await run.prepareStarted()) ? sentParts(run, await partsOf(run, resolvedEntries(run.intent) ?? [])) : []
   }
 
   // pending: resolve, check permissions and limits, prepare. With bridged entries the
@@ -274,10 +283,10 @@ export class Core {
     const debitParts = parts.filter((p) => p.schema === 'debit')
     const creditParts = parts.filter((p) => p.schema === 'credit')
     const debits = entries.filter((e) => e.schema === 'debit')
-    if (!run.corePrepared()) {
+    if (!(await run.prepareStarted(true))) {
       // Bridges get the intent as it was resolved, before the core's own prepare.
       const resolved = run.snapshot('pending')
-      await this.checkLimits(tx, ledger, run.books, entries)
+      await this.checkLimits(tx, ledger, run.books, entries, !intent.data.origin)
       // The ledger core takes part as a participant only when balances are spent — and
       // not in an intent a forward route made (recorded: no core proofs, no reservation).
       if (debits.length && !intent.data.origin) {
@@ -318,13 +327,37 @@ export class Core {
 
   // prepared → committed: the ledger commits its own part at once; bridges are told to
   // commit and the intent completes when each has reported `committed`.
+  //
+  // A thread commits as one (about-intents, "Intent threads"; recorded, l7): an intent
+  // that forwarded waits `prepared` until every intent of its thread is prepared, the
+  // first intent commits first and each forward intent after the one that made it.
   private async commit(run: Run, calls: Delivery[], entries: Entry[], limits: LimitOp[], bridged: Part[]) {
-    const { tx, ledger, intent, trail } = run
+    const { intent, trail } = run
     trail.push(run.sign({ moment: run.now(), status: 'prepared' }))
     run.stage('prepared')
-    await this.forward(run, entries)
+    if (!(await this.forward(run, entries))) return this.abort(run, calls, bridged, 'core.thread-size-exceeded', `Thread size exceeded the maximum of ${MAX_THREAD}`)
     if (bridged.length) calls.push({ order: 'parallel', calls: await this.statusCalls(run, bridged, run.snapshot('prepared')) })
-    run.stage('prepared', true)
+    if (!(await threadReady(run))) {
+      // Waiting, routed (recorded; on the reference `routed` is a stage of its own that
+      // raced a forward intent refused at once — one recording has it, one has not).
+      intent.meta.status = 'prepared'
+      intent.meta.routed = true
+      run.stage('prepared', true)
+      return
+    }
+    await this.commitPrepared(run, calls, entries, limits, bridged)
+  }
+
+  // Waiting for the thread: commit once it is ready.
+  private async advancePrepared(run: Run, calls: Delivery[]) {
+    if (!(await threadReady(run))) return
+    const { entries, limits } = await this.resolve(run.tx, run.ledger, run.intent, resolvedEntries(run.intent))
+    await this.commitPrepared(run, calls, entries, limits, await partsOf(run, entries))
+  }
+
+  private async commitPrepared(run: Run, calls: Delivery[], entries: Entry[], limits: LimitOp[], bridged: Part[]) {
+    const { tx, ledger, intent, trail } = run
+    if (!intent.meta.routed) run.stage('prepared', true)
     trail.push(run.sign({ detail: 'awaiting-clearance', moment: run.now(), status: 'committed' }))
     run.stage('committed', true)
     if (bridged.length) calls.push({ order: 'parallel', calls: await this.commandCalls(run, bridged, 'commit', run.snapshot('committed', true)) })
@@ -358,17 +391,28 @@ export class Core {
   // A credit that ended at a `forward` route is passed on in a new intent of the same
   // thread, made and signed by the ledger once the first is prepared (recorded):
   // `{handle: <17 characters>, claims: [transfer wallet → route target], origin}`.
+  //
+  // A thread holds at most MAX_THREAD intents (release notes v2.3.0). The reference
+  // checks that only once the whole thread is prepared, so a forward loop runs away
+  // first (recorded, l7: thousands of intents); we refuse the intent that would make
+  // the thread too large. Returns false then.
   private async forward(run: Run, entries: Entry[]) {
     const { tx, ledger, intent } = run
     const claims: any[] = intent.data.claims
+    const forwards: { e: Entry; target: string }[] = []
     for (const e of entries.filter((e) => e.schema === 'credit')) {
       const c = claims[e.input]
       const wallet = await tx.get(ledger, 'wallets', e.wallet)
       const r = ((wallet?.data.routes ?? []) as any[]).filter((r) => ['credit', 'forward', 'accept'].includes(r.action)).find((r) => filterMatches(r.filter, c, intent))
-      if (r?.action !== 'forward') continue
+      if (r?.action === 'forward') forwards.push({ e, target: r.target })
+    }
+    if (!forwards.length) return true
+    if ((await threadOf(tx, ledger, intent)).length + forwards.length > MAX_THREAD) return false
+    await tx.once(ledger, threadKey(intent))
+    for (const { e, target } of forwards) {
       const data = {
         handle: entryId(),
-        claims: [{ action: 'transfer', amount: e.amount, source: { handle: e.wallet }, symbol: { handle: e.symbol }, target: { handle: r.target } }],
+        claims: [{ action: 'transfer', amount: e.amount, source: { handle: e.wallet }, symbol: { handle: e.symbol }, target: { handle: target } }],
         origin: intent.data.handle,
       }
       const hash = hashData(data)
@@ -381,6 +425,7 @@ export class Core {
       await tx.addChange(ledger, 'intents', data.handle, { ...record, meta: { ...record.meta, change: 1, action: 'create', labels: null } })
       run.spawned.push(data.handle)
     }
+    return true
   }
 
   private async advanceCommitted(run: Run, calls: Delivery[]) {
@@ -517,18 +562,24 @@ export class Core {
 
   // An expired intent is aborted like one a bridge refused: bridges it involves are
   // told to abort, reservations are released, and it ends `rejected` (access4).
+  //
+  // The docs say the whole thread is aborted. The reference never expired a forward
+  // intent waiting for its bridge (recorded, l7: still pending after nine minutes, its
+  // thread stuck); we expire it, and the rest of the thread follows with its reason.
   private async expireOne(ledger: string, handle: string) {
     const calls: Delivery[] = []
+    let wake: string[] = []
     await this.store.transaction(ledger, async (tx) => {
       const intent = await tx.get(ledger, 'intents', handle)
       if (!intent || intent.meta.status !== 'pending') return
       const run = new Run(tx, ledger, intent, (await tx.getKey(ledger, 'system'))!, (await tx.getKey(ledger, 'core'))!)
-      const bridged = run.corePrepared() ? sentParts(run, await partsOf(run, resolvedEntries(intent) ?? [])) : []
-      await this.abort(run, calls, bridged, 'core.intent-expired', `Intent ${intent.data.handle} expired`)
+      await this.abort(run, calls, await this.partsToAbort(run), 'core.intent-expired', `Intent ${intent.data.handle} expired`)
       for (const d of calls) for (const c of d.calls) await this.enqueue(tx, ledger, c, handle)
       await run.finish()
+      if (await isThreaded(tx, ledger, intent)) wake = await wakeable(tx, ledger, intent)
     })
     await this.deliver(calls)
+    for (const h of wake) this.schedule(ledger, h)
   }
 
   /** Runs `expire` periodically; the reference's job is not immediate either. */
@@ -626,13 +677,17 @@ export class Core {
   // The reference checks `maxBalance` only after commit, and an intent that breaks it
   // stays `committed` forever with the credit unapplied. We check it here and reject;
   // that divergence is deliberate and listed in conformance/divergences.json.
-  private async checkLimits(tx: Store, ledger: string, books: Books, entries: Entry[]) {
+  //
+  // A forward intent's debit is not checked: it spends a credit of its thread that is
+  // prepared but not yet committed (recorded, l7: the forward intent prepares while the
+  // wallet is still empty), and the thread commits as one.
+  private async checkLimits(tx: Store, ledger: string, books: Books, entries: Entry[], debits = true) {
     const limit = async (wallet: string, symbol: string, metric: string) =>
       (await tx.limits(ledger, wallet)).find((r) => r.data.symbol === symbol && r.data.metric === metric)?.data.amount
 
     for (const schema of ['debit', 'credit'] as const) {
       const moved = new Map<string, number>()
-      for (const e of entries.filter((e) => e.schema === schema)) {
+      for (const e of entries.filter((e) => e.schema === schema && (debits || schema === 'credit'))) {
         const key = `${e.wallet}\u0000${e.symbol}`
         const total = (moved.get(key) ?? 0) + e.amount
         moved.set(key, total)
@@ -724,6 +779,54 @@ function sentParts(run: Run, parts: Part[]) {
 
 const creditsKey = (intent: StoredRecord) => `intent ${intent.luid} credits prepared`
 
+// ---- threads ----------------------------------------------------------------------
+
+export const MAX_THREAD = 10
+
+/** Marks a thread that has more than one intent; most never do and skip the lookups. */
+const threadKey = (intent: StoredRecord) => `thread ${intent.meta.thread} forwarded`
+
+async function isThreaded(tx: Store, ledger: string, intent: StoredRecord) {
+  return !!intent.data.origin || (await tx.marked(ledger, threadKey(intent)))
+}
+
+// Intents of one thread. A scan of the ledger's intents: threads are rare and short
+// (MAX_THREAD); an index by thread is the obvious next step if that ever matters.
+async function threadOf(tx: Store, ledger: string, intent: StoredRecord) {
+  return (await tx.list(ledger, 'intents')).filter((i) => i.meta.thread === intent.meta.thread)
+}
+
+const preparedBySystem = (i: StoredRecord) => (i.meta.proofs as Proof[]).some((p) => p.signer === 'system' && p.custom?.status === 'prepared')
+const failureOf = (i: StoredRecord) => (i.meta.proofs as Proof[]).find((p) => p.signer === 'system' && p.custom?.status === 'failed')?.custom
+
+// When one intent of a thread fails, the others fail with its reason and detail
+// (recorded, l7: the first intent of a thread whose forward intent was refused).
+async function threadFailure(tx: Store, ledger: string, intent: StoredRecord): Promise<{ reason: string; detail: string } | undefined> {
+  if (failureOf(intent)) return undefined
+  for (const i of await threadOf(tx, ledger, intent)) {
+    const f = i.data.handle !== intent.data.handle && failureOf(i)
+    if (f) return { reason: String(f.reason), detail: String(f.detail) }
+  }
+  return undefined
+}
+
+// The first intent commits once every intent of the thread is prepared; a forward
+// intent, once the intent that made it has committed.
+async function threadReady(run: Run) {
+  const { tx, ledger, intent } = run
+  if (!(await isThreaded(tx, ledger, intent))) return true
+  if (intent.data.origin) {
+    const origin = await tx.get(ledger, 'intents', intent.data.origin)
+    return !!origin && ['committed', 'completed'].includes(origin.meta.status)
+  }
+  return (await threadOf(tx, ledger, intent)).every((i) => i.data.handle === intent.data.handle || preparedBySystem(i))
+}
+
+/** Other unfinished intents of the thread, which a change to this one may move on. */
+async function wakeable(tx: Store, ledger: string, intent: StoredRecord) {
+  return (await threadOf(tx, ledger, intent)).filter((i) => i.data.handle !== intent.data.handle && !FINAL.has(i.meta.status)).map((i) => i.data.handle)
+}
+
 // A group's handle, derived so that every pass (and a restart) names it the same.
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 function groupHandle(ledger: string, intent: string, key: string, schema: 'debit' | 'credit') {
@@ -770,6 +873,17 @@ class Run {
 
   corePrepared() {
     return this.proofs.some((p) => p.signer === 'core' && p.custom?.status === 'prepared')
+  }
+
+  /**
+   * Has the prepare phase begun? The core's own `prepared` proofs say so — except in an
+   * intent a forward route made, which has none (recorded), so a mark stands in for
+   * them. `start` sets the mark: the caller is about to begin.
+   */
+  async prepareStarted(start = false) {
+    if (!this.intent.data.origin) return this.corePrepared()
+    const key = `intent ${this.intent.luid} prepare`
+    return start ? !(await this.tx.once(this.ledger, key)) : this.tx.marked(this.ledger, key)
   }
 
   /** Has a participant other than the ledger reported one of these statuses for an entry? */
