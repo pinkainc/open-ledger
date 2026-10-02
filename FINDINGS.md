@@ -1,8 +1,58 @@
 # Findings
 
 Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/api/v2`,
-service 2.45.5, SDK 2.45.1) established by recording it. Each entry says how it was
+service 2.45.5 — 2.46.5 since the effects recording, SDK 2.45.1) established by recording it. Each entry says how it was
 established. Newest first.
+
+## 2026-10-02 — Effects: signals, webhooks, bridge effects, their deliveries
+
+Recorded with `conformance/scenarios/effects.ts` (51 client exchanges, 21 calls to the
+test bridge and its `/hooks/*` webhooks; sandbox 2.46.5). Two recordings: the first
+used the trait the docs name and was refused. All reproduced.
+
+- **The trait is `effects`, not `events`.** `register-effect.md` says a bridge needs the
+  trait `events`; the reference refuses it: 422 `record.schema-invalid`, `…/traits/0 must
+  be equal to one of the allowed values: debits, credits, statuses, anchors, domains,
+  effects, ping`, then `must be object`, then `oneOf`. Enum errors list the allowed
+  values after the message (Ajv's text plus `: a, b, …`).
+- **Effect record** `$eff`, created like any record (`status: created`, `owners`). Errors:
+  an unknown `signal` (enum of the spec's 54 values, in the spec's order); a webhook
+  without `endpoint` (each `oneOf` branch reports its missing property, then `oneOf`);
+  a duplicate handle (409 `Effect with handle … already exists.`). **An unknown bridge
+  and a bridge without traits are accepted.** `GET /effects?data.signal=…` is 400
+  `api.query-malformed`, `Unsupported filters: 'data.signal'`. `DELETE /effects/{id}`
+  (signed, `data.parent`) → 204, then 404 `Effect not found`.
+- **The event** is a ledger record `{hash, data: {handle: evt_<17>, signal, …}, meta:
+  {proofs: [system {moment}]}}`, sent as the body of `POST <endpoint>` (webhook) or
+  `POST {bridge server}/effects/{effect handle}` (bridge). **One event per occurrence,
+  shared by every effect it reaches** (same `evt_` handle).
+  - `wallet-created`: `{wallet}` as stored. `intent-created`: `{intent}` as stored
+    (pending, three proofs, `domains: []`).
+  - `intent-updated`: `{intent, parent}`, four per ledger-only transfer: prepared (parent:
+    pending after resolution), committed awaiting-clearance (parent: prepared, `routed`),
+    committed after the core's clearance proofs (parent: the commit), completed (parent:
+    **the commit, not the clearance** — a race of the reference's stages, the same in
+    both recordings). The resolution version raises nothing. Versions leave out `domains`.
+  - `balance-received`: `{amount, wallet, symbol, intent}` per credited wallet, the
+    intent at its commit (nine proofs, `routed`). Filters are dot paths on the event
+    (`wallet.data.handle`, `symbol.data.handle`, `intent.data.handle`).
+- **Deliveries** are `$evd` records like a bridge's, `data: {handle, bridge, effect,
+  record, linked}`: a webhook has `bridge: null`; `record`/`linked` name what the event
+  is about (`wallet`/`bob` for balance-received). `GET /effects/{id}/events[/{handle}]`,
+  `…/events/retry` and the deprecated `…/activate` behave as for bridges; a delivery of
+  another effect is 404 `Event delivery '…' not found on ledger '…'`.
+  - 500 then 202: `failed`, `delivered`, replay 2. 501: `failed`, `cancelled
+    delivery.permanent-failure`, replay 1; a retry by handle delivers it (replay 2).
+  - **No `detail.body`** on the last failed attempt, unlike a bridge's call.
+  - A bridge without traits gets the call (it answered 404: six attempts, then
+    `retry-cap-exhausted`). **A bridge whose traits leave out `effects` gets nothing** —
+    not even a delivery record.
+  - **A bridge that does not exist**: a delivery with `bridge: "nope"`, `record`,
+    `linked` and `output` null, ten attempts `failed delivery.unexpected-error {detail:
+    {reason: core.unexpected-error, message: "Bridge nope not found"}}` (1 s × 1.2…),
+    then `cancelled retry-cap-exhausted`, replay 11.
+- Delivery lists of an effect come in event order, which races between effects and
+  stages; the comparator orders them by what the event is about.
 
 ## 2026-10-02 — Bridge security, the retry cap, traits, activate
 

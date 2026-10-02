@@ -32,6 +32,8 @@ export type BridgeSpec = {
   headers?: string[]
   /** An OAuth2 token endpoint at `{prefix}/oauth/token`, answering this body. */
   token?: Record<string, unknown>
+  /** HTTP status for an effect call `POST /v2/effects/{effect}` (trait `events`); default 202. */
+  effect?: (effect: string, event: any) => number
 }
 
 export type BridgeOptions = {
@@ -57,7 +59,15 @@ export async function startBridge(o: BridgeOptions) {
  * Several bridges on one port, told apart by path prefix. With more than one, every
  * log line names the bridge it belongs to.
  */
-export async function startBridges(o: { port: number; out: string; ledger: string; server: string; bridges: BridgeSpec[] }) {
+export async function startBridges(o: {
+  port: number
+  out: string
+  ledger: string
+  server: string
+  bridges: BridgeSpec[]
+  /** Webhook endpoints of effects, under `/hooks/` on the same port: the HTTP status to answer. */
+  hooks?: (path: string, event: any) => number
+}) {
   let seq = 0
   const many = o.bridges.length > 1
   const log = (b: BridgeSpec, x: unknown) => appendFileSync(o.out, JSON.stringify({ seq: seq++, ...(many ? { bridge: b.handle } : {}), ...(x as object) }) + '\n')
@@ -103,6 +113,13 @@ export async function startBridges(o: { port: number; out: string; ledger: strin
       res.end(JSON.stringify(tokenOf.token))
       return
     }
+    if (url.startsWith('/hooks/')) {
+      const status = req.method === 'POST' ? (o.hooks?.(url, body) ?? 202) : 404
+      appendFileSync(o.out, JSON.stringify({ seq: seq++, hook: url, req: { method: req.method, url, headers: req.headers, body }, res: { status } }) + '\n')
+      res.statusCode = status
+      res.end()
+      return
+    }
     const b = o.bridges.find((x) => url.startsWith(`${x.prefix ?? ''}/v2/`)) ?? o.bridges[0]
     const path = url.slice((b.prefix ?? '').length)
     // `{server}` ends in /v2; the SDK mounts /credits, /debits and /intents under it.
@@ -134,6 +151,8 @@ export async function startBridges(o: { port: number; out: string; ledger: strin
       } else if (b.report?.(handle, action as 'commit' | 'abort', intent) ?? true) {
         after = () => sign(b, intent, { handle, status: action === 'commit' ? 'committed' : 'aborted', coreId: coreId(handle) })
       }
+    } else if (req.method === 'POST' && path.startsWith('/v2/effects/')) {
+      status = b.effect?.(decodeURIComponent(path.slice('/v2/effects/'.length)), body) ?? 202
     } else if (req.method === 'PUT' && path.startsWith('/v2/intents/')) {
       status = 200
     }

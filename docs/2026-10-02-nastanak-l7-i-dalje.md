@@ -123,6 +123,62 @@ sequenceDiagram
 2. Adresa token endpointa ne završava na `/v2`, pa je normalizacija adrese bridgea
    morala dobiti oblik i za ostale putanje na istom hostu.
 
+## Effecti — signali, webhooki, effect prema bridgeu
+
+### Što je napravljeno
+
+- **Effect** (`$eff`) je zapis kao i ostali: kreiranje, čitanje, lista, izmjena,
+  proofovi, changes, access check, drop (`DELETE` i `POST …/drop`).
+- **Event** je zapis ledgera `{handle: evt_…, signal, …}` potpisan `system` ključem.
+  Nastaje jednom po događaju i ide svakom effectu na tom signalu čiji `filter` odgovara.
+  Svaki effect dobiva svoju isporuku `$evd`, upisanu u istoj transakciji kao i promjena
+  koja ju je izazvala, kroz isti outbox kao pozivi bridgeovima (`data.effect`, `record`,
+  `linked`).
+- **Signali:** `<zapis>-created|updated|proofs-added` za svaku vrstu zapisa,
+  `effect-dropped`, `intent-created`, `intent-updated` (po verziji intenta, s `parent`)
+  i `balance-received` (po kreditu, s intentom u trenutku commita).
+- **Isporuke:** `GET /effects/{id}/events[/{handle}]`, `…/events/retry` i `…/activate`
+  dijele kod s bridgeovima. Webhook ide na `endpoint`, a effect prema bridgeu na
+  `POST {server}/effects/{effect}`.
+- Scenarij `effects` (51/51 i 21/21 na memory i Postgresu) i 5 unit testova
+  (`server/test/effects.test.ts`).
+
+### Metoda
+
+Kao i prije. Testni bridge je naučio primati webhooke (`/hooks/*`) i pozive
+`/v2/effects/*`. Comparator normalizira `evt_` handleove i 17-znakovne idove u
+navodnicima. Effect pozive slaže po odredištu, signalu i verziji zapisa, a liste
+isporuka effecta po onome na što se event odnosi.
+
+Prije snimanja provjereno je da je scenarij ograničen: nijedan effect ne stvara
+intent, svaki endpoint koji pada se oporavi ili vrati 501, a `intent-updated` je
+filtriran na jedan intent. Dvije snimke (dva trajna ledgera). Prva je otkrila da
+referenca trait `events` iz dokumentacije odbija, pa je druga snimljena s `effects`.
+
+### Odluke
+
+- **Trait je `effects`.** Dokumentacija (`register-effect.md`) kaže `events`, a referenca
+  ga odbija. Pratimo referencu, a zapisano je u FINDINGS.
+- **Utrka reference se reproducira.** `completed` verzija intenta nosi kao `parent`
+  commit, a ne verziju nakon clearancea. Isto je u obje snimke, pa to tretiramo kao
+  pravilo („verzija clearancea nikad nije parent“), ne kao šum.
+- **Nepostojeći bridge** daje isporuku bez zapisa, linka i outputa, deset pokušaja
+  `delivery.unexpected-error`, pa `cancelled`. Vjerno preslikano (`unreachable` na
+  pozivu, vlastiti cap).
+- **`data.signal` filter na listi effecata** je 400, kao na referenci. Ostali filteri
+  rade kao drugdje, jer ih nismo snimili.
+- Signali koje nismo snimili (proofs-added, bridge-entry, wallet-limited,
+  `intent-updated` bridgeanog ili odbijenog intenta) rade po tipovima SDK-a i stoje u
+  TODO-u s `(?)`.
+
+### Zamke
+
+1. **Docs i referenca se razilaze** (trait). Prva snimka je zato potrošena na
+   effect prema bridgeu koji nije postojao. Iz nje je ipak ispao nalaz o nepostojećem
+   bridgeu, koji je u drugoj snimci namjerno zadržan.
+2. **Effect isporuka nema `detail.body`** na zadnjem neuspjelom pokušaju, za razliku
+   od poziva bridgeu. To je jedina razlika koju je prvi check pokazao.
+
 ## Brojke
 
 | | početak | kraj |
@@ -132,26 +188,23 @@ sequenceDiagram
 | Testovi (memorija + Postgres) | 217 | **239** |
 | Novi ledgeri na sandboxu | — | 4 (l7 ×3, secure); prvi l7 s petljom od ~5000 intenata |
 
-## Gdje smo (2026-10-02)
+## Gdje smo (2026-10-02, večer)
 
 | Mjera | Stanje |
 | --- | --- |
-| Operacije API-ja | 83/146 (57 %), od toga 61 potvrđeno snimkom (42 %) |
-| Ljestvica L0–L9 | L0–L7 gotovo; rute gotove; L8 za bridgeove (sa `secure`, retry capom i traitsima), bez effecta; L9 ništa |
-| Resursi s 0 operacija | anchors, domains, effects, reports, oauth, system |
+| Operacije API-ja | 97/146 (66 %), od toga 71 potvrđeno snimkom (49 %) |
+| Ljestvica L0–L9 | L0–L7 gotovo; rute gotove; L8 gotov (bridgeovi sa `secure`, retry capom i traitsima, effecti); L9 ništa |
+| Resursi s 0 operacija | anchors, domains, reports, oauth, system |
+| Testovi | 249 unit, 16 conformance razina na memory i Postgresu, `minka` CLI e2e |
 
-Pomak od 28. 9.: L7 je zatvoren (threadovi se commitaju i padaju kao cjelina, istek i
-ograničenje veličine), a bridge s autentikacijom (`header`, `oauth2`, secreti) sad se
-može spojiti. Time otpada prvi razlog iz „Nije uporabljivo za produkciju“ (prava banka
-s autentikacijom). I dalje nedostaju: effecti (webhooki), anchors i domains, reporti,
-access policy, korisničke sheme, provjera `hsh`, šifrirani ključevi ledgera i
-zaključavanje po walletu.
+Effecti su gotovi: ledger sad javlja vanjskim sustavima što se dogodilo (webhook ili
+bridge s traitom `effects`), s isporukama, retryem i `activate`. Za produkciju i dalje
+nedostaju: anchors i domains, reporti, access policy, korisničke sheme, provjera
+`hsh`, šifrirani ključevi ledgera i zaključavanje po walletu.
 
 ## Sljedeće
 
-Effecti (točka 3 plana). Signali su u specu (`event-signal`, 53 vrijednosti), payload je
-u `handle-webhooks.md`, a akcije su `webhook` i `bridge` (POST `{server}/effects/<handle>`,
-bridge trait `events`). Isporuke idu kroz isti outbox (`$evd` s `effect` umjesto
-`bridge`). Prvo snimiti scenarij: nekoliko signala s filterima, webhook koji vraća
-501, effect prema bridgeu, `/effects/{id}/events` i retry. Pritom pripaziti da nijedan
-effect ne može pokrenuti novi posao na referenci (vidi zamku iz L7).
+Redom iz plana: korisničke sheme koje validiraju zapise (prvo snimiti greške
+reference), zatim anchors i domains (uključujući `GET /wallets/{address}/anchors`),
+pa reports i access policy, L9 cross-ledger i produkcijska jezgra. Usput: `SEMVER`
+servera je još 2.45.5, a referenca je na 2.46.5 (DTC policy iz 2.46 open-ledger nema).

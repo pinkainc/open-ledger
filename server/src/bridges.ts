@@ -26,6 +26,14 @@ export type BridgeCall = {
   /** The delivery record this call is (`$evd`), once enqueued. */
   ledger?: string
   delivery?: string
+  /**
+   * Why the call has nowhere to go: an effect naming a bridge that does not exist
+   * (recorded, effects). Each attempt fails `delivery.unexpected-error` with this as
+   * the message, and the delivery is cancelled after ten.
+   */
+  unreachable?: string
+  /** The effect whose event this is; its deliveries keep no answer body (recorded, effects). */
+  effect?: string
 }
 
 /** What one attempt came to, as the delivery's proof records it. */
@@ -42,6 +50,10 @@ export type BridgeOptions = {
   /** Retries after the first attempt before giving up; the reference's default is 5. */
   maxRetries?: number
 }
+
+// Retries of a call that fails inside the ledger rather than at the target (recorded,
+// effects: ten failed attempts, then cancelled).
+const UNEXPECTED_RETRIES = 9
 
 export class Bridges {
   private closed = false
@@ -84,9 +96,9 @@ export class Bridges {
         const stop =
           outcome.status !== 'failed' ? undefined
           : outcome.detail.httpStatus === 501 ? 'delivery.permanent-failure'
-          : attempt >= this.maxRetries ? 'delivery.retry-cap-exhausted'
+          : attempt >= (call.unreachable ? UNEXPECTED_RETRIES : this.maxRetries) ? 'delivery.retry-cap-exhausted'
           : undefined
-        if (stop && outcome.status === 'failed' && body !== undefined) outcome.detail.body = (body || '{}').slice(0, 500)
+        if (stop && outcome.status === 'failed' && body !== undefined && !call.effect) outcome.detail.body = (body || '{}').slice(0, 500)
         await this.onAttempt?.(call, outcome)
         if (outcome.status === 'delivered') return true
         if (stop) {
@@ -118,6 +130,8 @@ export class Bridges {
   // Recorded: a non-2xx answer is `delivery.target-rejected` with the status; the
   // answer's body is kept for the attempt that ends the delivery (see deliver).
   private async attempt(call: BridgeCall): Promise<{ outcome: Outcome; body?: string }> {
+    if (call.unreachable)
+      return { outcome: { status: 'failed', reason: 'delivery.unexpected-error', detail: { reason: 'core.unexpected-error', message: call.unreachable } } }
     try {
       // Rules may set any header but these two, which the ledger owns (about-bridges).
       const auth = (await this.authorize?.(call)) ?? {}

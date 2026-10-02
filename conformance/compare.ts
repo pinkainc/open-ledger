@@ -36,6 +36,8 @@ function normaliser() {
     if (/^-[\w-]{16}$/.test(v)) return token('thread', v)
     if (/^\{\{ secret\.[a-z0-9]+ \}\}$/.test(v)) return token('secret', v)
     if (/^(deb|cre)_[A-Za-z0-9]{17}$/.test(v)) return token(`entry:${v.slice(0, 3)}`, v)
+    // Events effects deliver: one handle per event, shared by every effect it reaches.
+    if (/^evt_[A-Za-z0-9_-]{17}$/.test(v)) return token('event', v)
     // Handles the ledger makes itself: event deliveries, intents of forward routes.
     if (/^[A-Za-z0-9]{17}$/.test(v)) return token('id', v)
     if (/^[0-9a-f]{64}$/.test(v)) return '<hex64>'
@@ -58,6 +60,7 @@ function normaliser() {
       .replace(/\b(deb|cre)_[A-Za-z0-9]{17}\b/g, (e) => token(`entry:${e.slice(0, 3)}`, e))
       .replace(/\b([Ii]ntent) ([A-Za-z0-9]{17})\b/g, (_, w, id) => `${w} ${token('id', id)}`)
       .replace(/\/intents\/([A-Za-z0-9]{17})$/, (_, id) => `/intents/${token('id', id)}`)
+      .replace(/'([A-Za-z0-9]{17})'/g, (_, id) => `'${token('id', id)}'`)
   }
   const walk = (x: any): any => {
     if (typeof x === 'string') return value(x)
@@ -96,7 +99,22 @@ const [refFile, candFile] = process.argv.slice(2)
 // A bridge log interleaves by timing: a status notification may overtake a commit call,
 // and a late notification may land among the next intent's calls. Compared in a
 // canonical order instead: by intent (first appearance), then by phase.
-function canonical(log: Exchange[]): Exchange[] {
+function canonical(all: Exchange[]): Exchange[] {
+  // Effect calls (webhooks, `/v2/effects/…`) race each other and the bridge calls; they
+  // are compared after those, by target, signal and the record the event is about,
+  // keeping each event's attempts in order.
+  const isEffect = (x: any) => x.hook || /\/v2\/effects\//.test(String(x.req?.url))
+  const effectKey = (x: any) => {
+    const d = x.req?.body?.data ?? {}
+    const about = Object.keys(d).sort().map((k) => `${k}=${d[k]?.data?.handle ?? ''}:${d[k]?.meta?.status ?? ''}:${d[k]?.meta?.proofs?.length ?? ''}`).join(' ')
+    return `${String(x.req.url).replace(/^.*?(\/hooks\/|\/v2\/effects\/)/, '$1')} ${d.signal} ${about}`
+  }
+  const effects = all.map((x, i) => ({ x, i })).filter(({ x }) => isEffect(x)).sort((a, b) => effectKey(a.x).localeCompare(effectKey(b.x)) || a.i - b.i).map((e) => e.x)
+  const log = all.filter((x) => !isEffect(x))
+  return [...canonicalBridge(log), ...effects]
+}
+
+function canonicalBridge(log: Exchange[]): Exchange[] {
   const intentOfEntry = new Map<string, string>()
   const intentOf = (x: any): string => {
     if (x.proof) return intentOfEntry.get(x.proof.handle) ?? ''
@@ -181,7 +199,17 @@ function settleRaces(x: any): any {
   // Delivery lists (`$evd`, newest first): a status notification and a commit go out
   // together, so their creation order is timing. Within an intent: final status,
   // command, `prepared` status, prepare.
-  if (Array.isArray(out.data) && out.data.length && out.data.every((d: any) => String(d?.luid).startsWith('$evd.'))) {
+  const evd = Array.isArray(out.data) && out.data.length && out.data.every((d: any) => String(d?.luid).startsWith('$evd.'))
+  // An effect's deliveries are made as events happen, which races: ordered by what the
+  // event is about (linked record, signal, the version of the record it carries).
+  if (evd && out.data.every((d: any) => d.data?.effect)) {
+    const key = (d: any) => {
+      const e = d.meta?.output?.data ?? {}
+      const v = e.intent ?? e[d.data.record] ?? {}
+      return `${d.data.linked} ${e.signal} ${String(v.meta?.proofs?.length ?? 0).padStart(4, '0')} ${v.meta?.status ?? ''}`
+    }
+    out.data = [...out.data].sort((a: any, b: any) => key(a).localeCompare(key(b)))
+  } else if (evd) {
     const group = new Map<string, number>()
     for (const d of out.data) if (!group.has(d.data.linked)) group.set(d.data.linked, group.size)
     const rank = (d: any) => {

@@ -178,7 +178,17 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       attempt carries `detail.body` (recorded); `OPEN_LEDGER_DELIVERY_MAX_RETRIES`
 - [x] `POST /bridges/{id}/activate` (deprecated bulk retry); deliveries `running` while attempted
 - [ ] (?) Does bulk retry include `cancelled`? (we: failed, cancelled, pending)
-- [ ] Effects (`/effects`, signals, webhooks) and their deliveries (`/effects/{id}/events`)
+- [x] Effects (`/effects`, recorded in `effects`): record `$eff`, validation, drop; events
+      `evt_` signed by `system`, one per occurrence for every effect on the signal whose
+      `filter` matches; webhook or bridge (`POST …/effects/{effect}`, trait `effects`);
+      deliveries `/effects/{id}/events[/{handle}]`, retry, activate, through the same outbox
+- [x] Signals raised: `<record>-created|updated|proofs-added` for every record kind,
+      `effect-dropped`, `intent-created`, `intent-updated` (per version, with `parent`),
+      `balance-received`
+- [ ] (?) Signals not recorded: `*-proofs-added` payload, bridge-entry-*, wallet-limited,
+      intent-updated of a bridged or rejected intent, balance-received of several credits
+      to one wallet (summed or one each?)
+- [ ] (?) Effect retry of a webhook unreachable on the network (we: `target-unreachable`)
 - [ ] `minka bridge events list|show|retry` in the CLI end-to-end
 ## L9 — cross-ledger
 

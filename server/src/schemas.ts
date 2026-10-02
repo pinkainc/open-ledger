@@ -77,6 +77,35 @@ const securityRule = {
   ],
 }
 
+// Spec `event-signal`, in its order: Ajv lists the allowed values as the enum has them.
+export const SIGNALS = [
+  'anchor-created', 'anchor-dropped', 'anchor-proofs-added', 'anchor-updated', 'balance-received', 'bridge-created',
+  'bridge-entry-created', 'bridge-entry-proofs-added', 'bridge-entry-updated', 'bridge-proofs-added', 'bridge-updated',
+  'circle-created', 'circle-proofs-added', 'circle-updated', 'domain-created', 'domain-proofs-added', 'domain-updated',
+  'effect-created', 'effect-proofs-added', 'effect-updated', 'effect-dropped', 'intent-created', 'intent-proofs-added',
+  'intent-updated', 'ledger-created', 'ledger-proofs-added', 'ledger-updated', 'policy-created', 'policy-proofs-added',
+  'policy-updated', 'report-created', 'report-dropped', 'report-proofs-added', 'report-updated', 'request-created',
+  'request-proofs-added', 'request-updated', 'schema-created', 'schema-proofs-added', 'schema-updated', 'signer-created',
+  'signer-proofs-added', 'signer-updated', 'signer-factor-created', 'signer-factor-updated', 'signer-factor-proofs-added',
+  'signer-factor-dropped', 'symbol-created', 'symbol-proofs-added', 'symbol-updated', 'wallet-created', 'wallet-limited',
+  'wallet-proofs-added', 'wallet-updated',
+] as const
+
+// An effect's action (recorded, effects): with neither branch's field, each branch
+// reports its missing property, then the oneOf.
+const effectAction = {
+  oneOf: [
+    { type: 'object', required: ['schema', 'endpoint'], properties: { schema: { enum: ['webhook'] }, endpoint: { type: 'string' } } },
+    { type: 'object', required: ['schema', 'bridge'], properties: { schema: { enum: ['bridge'] }, bridge: { type: 'string' } } },
+  ],
+}
+
+// A bridge trait is a method name or an object naming one (recorded, effects: the
+// names; `events`, which the docs give for effects, is not among them).
+const trait = {
+  oneOf: [{ enum: ['debits', 'credits', 'statuses', 'anchors', 'domains', 'effects', 'ping'] }, { type: 'object' }],
+}
+
 const DATA = {
   ledgers: { allOf: [{ type: 'object', required: ['handle', 'signer'] }, baseData] },
   symbols: { allOf: [{ type: 'object', required: ['factor'] }, baseData] },
@@ -93,11 +122,16 @@ const DATA = {
       {
         type: 'object',
         required: ['config', 'secure'],
-        properties: { config: { type: 'object', required: ['server'], properties: { server: { type: 'string' } } }, secure: { type: 'array', items: securityRule } },
+        properties: {
+          config: { type: 'object', required: ['server'], properties: { server: { type: 'string' } } },
+          secure: { type: 'array', items: securityRule },
+          traits: { type: 'array', items: trait },
+        },
       },
       baseData,
     ],
   },
+  effects: { allOf: [{ type: 'object', required: ['signal', 'action'], properties: { signal: { enum: SIGNALS }, action: effectAction } }, baseData] },
 } as const
 
 export type ValidatedKind = keyof typeof DATA
@@ -111,11 +145,14 @@ const validators = Object.fromEntries(
 
 // Ajv reports a missing property at its parent; the reference names the property in
 // `path` but keeps the parent in the human-readable `detail`.
+// An enum error names the allowed values after the message (recorded, effects).
+const messageOf = (e: ErrorObject) => (e.keyword === 'enum' ? `${e.message}: ${(e.params as any).allowedValues.join(', ')}` : (e.message ?? ''))
+
 function toWire(e: ErrorObject) {
   const missing = e.keyword === 'required' ? `/${(e.params as any).missingProperty}` : ''
   return {
     path: `/body${e.instancePath}${missing}`,
-    message: e.message ?? '',
+    message: messageOf(e),
     errorCode: `${e.keyword}.openapi.validation`,
   }
 }
@@ -124,6 +161,6 @@ export function validateBody(kind: ValidatedKind, body: unknown) {
   const validate = validators[kind]
   if (validate(body ?? {})) return
   const errs = validate.errors ?? []
-  const detail = `Schema validation error: ${errs.map((e) => `request/body${e.instancePath} ${e.message}`).join(', ')}`
+  const detail = `Schema validation error: ${errs.map((e) => `request/body${e.instancePath} ${messageOf(e)}`).join(', ')}`
   throw new LedgerError(422, 'record.schema-invalid', detail, { errors: errs.map(toWire) })
 }

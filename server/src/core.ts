@@ -32,6 +32,8 @@ import { SecretBox, resolveRefs, secretRefs } from './secrets.js'
 import { matches, parseQuery } from './query.js'
 
 const entryId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 17)
+// Event handles: `evt_` and 17 characters, `-` and `_` among them (recorded).
+const eventId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_', 17)
 
 type LimitOp = { wallet: string; symbol: string; metric: string; amount: number }
 
@@ -155,18 +157,79 @@ export class Core {
 
   // Each call becomes a delivery record `$evd`, written in the transaction of the step
   // that caused it, so a call is never lost between the trail and the wire.
-  private async enqueue(tx: Store, ledger: string, call: BridgeCall, linked: string) {
+  private async enqueue(tx: Store, ledger: string, call: BridgeCall, linked: string, of?: { bridge: string | null; effect: string; record: string | null; linked: string | null; output: unknown }) {
     const handle = entryId()
-    const data = { handle, bridge: call.bridge, effect: null, record: 'intent', linked }
+    const data = of
+      ? { handle, bridge: of.bridge, effect: of.effect, record: of.record, linked: of.linked }
+      : { handle, bridge: call.bridge, effect: null, record: 'intent', linked }
     const record: StoredRecord = {
       hash: hashData(data),
       data,
       luid: newLuid('$evd'),
-      meta: { status: 'pending', replay: 0, moment: new Date().toISOString(), output: call.body, proofs: [] },
+      meta: { status: 'pending', replay: 0, moment: new Date().toISOString(), output: of ? of.output : call.body, proofs: [] },
     }
     await tx.insert(ledger, 'events', record)
     call.ledger = ledger
     call.delivery = handle
+  }
+
+  // ---- effects (register-effect, handle-webhooks; recorded, effects) ----------------
+
+  /**
+   * Raises an event. Each effect on the signal whose `filter` the event matches gets a
+   * delivery, written in the caller's transaction; the caller sends the returned calls
+   * once it has committed. One event — one `evt_` handle — for all of them, and none
+   * at all when no effect is listening.
+   *
+   * The event is the ledger's record `{handle, signal, …payload}` signed by `system`;
+   * `about` names the record the deliveries are linked to (`data.record`, `data.linked`).
+   */
+  async raise(tx: Store, ledger: string, signal: string, payload: Record<string, unknown>, about: { record: string; linked: string }): Promise<BridgeCall[]> {
+    const effects = (await tx.list(ledger, 'effects')).filter((e) => e.data.signal === signal)
+    if (!effects.length) return []
+    const data = { handle: `evt_${eventId()}`, signal, ...payload }
+    const listening = effects.filter((e) => !e.data.filter || matches(data, parseQuery(flatFilter(e.data.filter))))
+    if (!listening.length) return []
+    const key = (await tx.getKey(ledger, 'system'))!
+    const hash = hashData(data)
+    const event = { hash, data, meta: { proofs: [serverProof(hash, { moment: new Date().toISOString() }, key, 'system')] } }
+    const calls: BridgeCall[] = []
+    for (const effect of listening) {
+      const call = await this.effectCall(tx, ledger, effect, event)
+      if (!call) continue
+      // An effect whose bridge is missing still gets a delivery, but one that knows
+      // nothing of the event: no record, no link, no output (recorded).
+      const lost = call.unreachable !== undefined
+      await this.enqueue(tx, ledger, call, about.linked, {
+        bridge: effect.data.action?.schema === 'bridge' ? effect.data.action.bridge : null,
+        effect: effect.data.handle,
+        record: lost ? null : about.record,
+        linked: lost ? null : about.linked,
+        output: lost ? null : event,
+      })
+      calls.push(call)
+    }
+    return calls
+  }
+
+  // Where an effect's event goes: a webhook's endpoint, or `POST {server}/effects/{effect}`
+  // of its bridge. A bridge with traits takes effects only with the trait `effects` (the
+  // docs say `events`, which the reference refuses); without traits, everything.
+  private async effectCall(tx: Store, ledger: string, effect: StoredRecord, event: unknown): Promise<BridgeCall | undefined> {
+    const action = effect.data.action ?? {}
+    const of = { method: 'POST' as const, body: event, effect: effect.data.handle as string }
+    if (action.schema === 'webhook') return { ...of, bridge: '', server: action.endpoint, path: '' }
+    const bridge = await tx.get(ledger, 'bridges', action.bridge)
+    if (!bridge) return { ...of, bridge: action.bridge, server: '', path: '', unreachable: `Bridge ${action.bridge} not found` }
+    if (!hasTrait(bridge.data, 'effects', (event as any)?.data)) return undefined
+    return { ...of, bridge: action.bridge, server: bridge.data.config?.server, path: `/effects/${encodeURIComponent(effect.data.handle)}` }
+  }
+
+  /** Raises an event outside a transaction of the caller's and sends its calls. */
+  async announce(ledger: string, signal: string, payload: Record<string, unknown>, about: { record: string; linked: string }) {
+    if (!(await this.store.list(ledger, 'effects')).some((e) => e.data.signal === signal)) return
+    const calls = await this.store.transaction(ledger, (tx) => this.raise(tx, ledger, signal, payload, about))
+    for (const c of calls) void this.bridges.deliver(c)
   }
 
   // A delivery being attempted is `running` (recorded, secure: a delivery caught in
@@ -193,11 +256,12 @@ export class Core {
       const moment = new Date().toISOString()
       const { status, ...rest } = outcome
       d.meta.proofs.push(serverProof(d.hash, { ...rest, moment, status }, key, 'system'))
-      if (status !== 'cancelled') d.meta.replay = (d.meta.replay ?? 0) + 1
+      // A call with nowhere to go counts its cancellation as an attempt too (recorded).
+      if (status !== 'cancelled' || call.unreachable) d.meta.replay = (d.meta.replay ?? 0) + 1
       d.meta.status = status
       d.meta.moment = new Date(Date.parse(moment) + 1).toISOString()
       await tx.update(ledger, 'events', d)
-      if (status === 'cancelled' && d.data.record === 'intent') await this.noteUnreachable(tx, ledger, d, key)
+      if (status === 'cancelled' && d.data.record === 'intent' && !d.data.effect) await this.noteUnreachable(tx, ledger, d, key)
     })
   }
 
@@ -220,6 +284,12 @@ export class Core {
   // A delivery's call, rebuilt from its output: a prepared entry (`schema`), a command
   // (`action`) or the intent itself (a status notification).
   private async callOf(ledger: string, d: StoredRecord): Promise<BridgeCall | undefined> {
+    if (d.data.effect) {
+      const effect = await this.store.get(ledger, 'effects', d.data.effect)
+      if (!effect) return undefined
+      const call = await this.effectCall(this.store, ledger, effect, d.meta.output)
+      return call && { ...call, ledger, delivery: d.data.handle }
+    }
     const server = await this.server(this.store, ledger, d.data.bridge)
     if (!server) return undefined
     const out: any = d.meta.output
@@ -231,12 +301,12 @@ export class Core {
   }
 
   /**
-   * Sends deliveries of a bridge again (retry endpoint): one by handle, whatever its
+   * Sends deliveries of a bridge or an effect again (retry endpoint): one by handle, whatever its
    * status; or every failed, cancelled or pending one whose last attempt is at most
    * `maxAge` minutes old (0: any age). Returns false for an unknown handle.
    */
-  async retryDeliveries(ledger: string, bridge: string, by: { handle?: string; maxAge?: number }) {
-    const all = (await this.store.list(ledger, 'events')).filter((d) => d.data.bridge === bridge)
+  async retryDeliveries(ledger: string, owner: 'bridge' | 'effect', handle: string, by: { handle?: string; maxAge?: number }) {
+    const all = (await this.store.list(ledger, 'events')).filter((d) => d.data[owner] === handle)
     let chosen: StoredRecord[]
     if (by.handle !== undefined) {
       chosen = all.filter((d) => d.data.handle === by.handle)
@@ -290,11 +360,45 @@ export class Core {
         intent.meta.status = 'rejected'
       }
       for (const d of calls) for (const c of d.calls) await this.enqueue(tx, ledger, c, handle)
+      const raised = await this.intentEvents(run)
+      if (raised.length) calls.push({ order: 'parallel', calls: raised })
       await run.finish()
       wake = [...run.spawned, ...(threaded && run.trail.length ? await wakeable(tx, ledger, intent) : [])]
     })
     await this.deliver(calls)
     for (const h of new Set(wake)) this.schedule(ledger, h)
+  }
+
+  // Events of one pass (recorded, effects): `intent-updated` for each saved version
+  // that moved the intent on, carrying the version before as `parent`, and
+  // `balance-received` for each credit once the intent commits. The reference skips
+  // the version that only resolves entries, and the version cleared by the core's own
+  // proofs is never a parent: completion names the commit before it (a race of its
+  // stages, reproduced). Versions here leave out `domains`, as there.
+  private async intentEvents(run: Run): Promise<BridgeCall[]> {
+    const { tx, ledger, intent } = run
+    // Called before the pass is saved: the stored proofs are those before it.
+    const version = (st: Stage) => {
+      const { domains: _d, routed: _r, proofs, status: _s, ...meta } = intent.meta
+      return { hash: intent.hash, data: intent.data, luid: intent.luid, meta: { ...meta, proofs: [...proofs, ...run.trail.slice(0, st.proofs)], status: st.status, ...(st.routed ? { routed: true } : {}) } }
+    }
+    const about = { record: 'intent', linked: intent.data.handle }
+    const calls: BridgeCall[] = []
+    const versions = [run.start, ...run.stages]
+    const cleared = (i: number) => i > 0 && versions[i].status === 'committed' && versions[i - 1].status === 'committed'
+    for (let i = 1; i < versions.length; i++) {
+      const st = versions[i], prev = versions[i - 1]
+      if (st.status === 'pending' || (st.status === prev.status && st.proofs === prev.proofs)) continue
+      let j = i - 1
+      while (j > 0 && cleared(j)) j--
+      calls.push(...(await this.raise(tx, ledger, 'intent-updated', { intent: version(st), parent: version(versions[j]) }, about)))
+    }
+    for (const r of run.received) {
+      const at = run.stages.find((st) => st.proofs === r.proofs && st.status === 'committed')!
+      const [wallet, symbol] = [await tx.get(ledger, 'wallets', r.wallet), await tx.get(ledger, 'symbols', r.symbol)]
+      calls.push(...(await this.raise(tx, ledger, 'balance-received', { amount: r.amount, intent: version(at), symbol, wallet }, { record: 'wallet', linked: r.wallet })))
+    }
+    return calls
   }
 
   // Parts to tell to abort: those asked to prepare, once the prepare phase has begun.
@@ -409,6 +513,7 @@ export class Core {
     if (!intent.meta.routed) run.stage('prepared', true)
     trail.push(run.sign({ detail: 'awaiting-clearance', moment: run.now(), status: 'committed' }))
     run.stage('committed', true)
+    for (const e of entries.filter((e) => e.schema === 'credit')) run.received.push({ wallet: e.wallet, symbol: e.symbol, amount: e.amount, proofs: trail.length })
     if (bridged.length) calls.push({ order: 'parallel', calls: await this.commandCalls(run, bridged, 'commit', run.snapshot('committed', true)) })
 
     const tc = run.now()
@@ -627,6 +732,8 @@ export class Core {
       const run = new Run(tx, ledger, intent, (await tx.getKey(ledger, 'system'))!, (await tx.getKey(ledger, 'core'))!)
       await this.abort(run, calls, await this.partsToAbort(run), 'core.intent-expired', `Intent ${intent.data.handle} expired`)
       for (const d of calls) for (const c of d.calls) await this.enqueue(tx, ledger, c, handle)
+      const raised = await this.intentEvents(run)
+      if (raised.length) calls.push({ order: 'parallel', calls: raised })
       await run.finish()
       if (await isThreaded(tx, ledger, intent)) wake = await wakeable(tx, ledger, intent)
     })
@@ -947,6 +1054,10 @@ class Run {
   readonly spawned: string[] = []
   readonly sign = (custom: Record<string, unknown>) => serverProof(this.intent.hash, custom, this.system, 'system')
   readonly stage = (status: string, routed = false) => void this.stages.push({ proofs: this.trail.length, status, routed })
+  /** Balances this pass credited, for `balance-received`, with the trail length at the time. */
+  readonly received: { wallet: string; symbol: string; amount: number; proofs: number }[] = []
+  /** The intent as it was before this pass: its last saved version. */
+  readonly start: Stage
 
   constructor(
     readonly tx: Store,
@@ -956,6 +1067,7 @@ class Run {
     readonly core: KeyPair,
   ) {
     this.books = new Books(tx, ledger)
+    this.start = { proofs: 0, status: intent.meta.status, routed: !!intent.meta.routed }
   }
 
   private get proofs(): Proof[] {

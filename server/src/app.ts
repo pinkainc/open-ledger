@@ -48,13 +48,14 @@ const KINDS = {
   'circle-signers': { luid: '$csn', name: 'Circle signer', record: 'circle-signer' },
   bridges: { luid: '$brg', name: 'Bridge', record: 'bridge' },
   schemas: { luid: '$sch', name: 'Schema', record: 'schema' },
+  effects: { luid: '$eff', name: 'Effect', record: 'effect' },
 } as const
 type Kind = keyof typeof KINDS
 
 /** Kinds with the full record surface under `/api/v2/<kind>`. */
-const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges', 'schemas'] as const
+const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects'] as const
 /** Kinds a client may update and sign after creation. Intents are immutable. */
-const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges', 'schemas'] as const
+const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects'] as const
 
 const PAGE_LIMIT = 20
 // Any caller may reach the server, read a ledger record, and (signed) create a ledger.
@@ -245,6 +246,10 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await store.addChange(scope, kind, keyOf(r), snapshot(r, n, action, moment))
   }
 
+  // An event about a record (effects): `<record>-<what>`, linked to the record.
+  const raise = (scope: string, kind: Kind, what: string, payload: Record<string, unknown>, r: StoredRecord) =>
+    core.announce(scope, `${KINDS[kind].record}-${what}`, payload, { record: KINDS[kind].record, linked: keyOf(r) })
+
   // ---- secrets (secrets.ts; recorded, secure) -----------------------------------------
 
   // Every `{{ secret.<name> }}` in a record's data needs its value in `meta.secret` —
@@ -318,6 +323,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (!(await store.insert(scope, kind, record))) throw errors.duplicated(KINDS[kind].name, body.data.handle)
     await keepSecrets(scope, kind, keyOf(record), secrets)
     await addChange(scope, kind, record, 'create')
+    if (scope && kind !== 'circle-signers') await raise(scope, kind, 'created', { [KINDS[kind].record]: record }, record)
     if (kind === 'intents') core.schedule(scope, body.data.handle)
     return record
   }
@@ -539,6 +545,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await store.update(t.scope, t.kind, updated)
     await keepSecrets(t.scope, t.kind, keyOf(updated), secrets)
     await addChange(t.scope, t.kind, updated, 'update')
+    if (t.scope) await raise(t.scope, t.kind, 'updated', { [KINDS[t.kind].record]: updated, parent: t.found }, updated)
     return updated
   }
 
@@ -572,7 +579,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       const n = (await tx.changes(t.scope, t.kind, keyOf(current))).length + 1
       await tx.addChange(t.scope, t.kind, keyOf(current), snapshot(current, n, 'update', now()))
       return current
-    }).then((current) => {
+    }).then(async (current) => {
+      if (t.scope) await raise(t.scope, t.kind, 'proofs-added', { proofs: [stored], [record]: keyOf(current) }, current)
       // A participant reporting on an entry (`custom.handle`) may let the intent move on.
       if (t.kind === 'intents' && typeof stored.custom?.handle === 'string') core.schedule(t.scope, current.data.handle)
       return current
@@ -608,6 +616,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     app.get(`/api/v2/${kind}`, async (req) => {
       const who = await authenticate(req)
       const ledger = await hostedLedger(req)
+      // Recorded (effects): the reference does not filter effects by signal.
+      if (kind === 'effects' && 'data.signal' in (req.query as object))
+        throw new LedgerError(400, 'api.query-malformed', "Unsupported filters: 'data.signal'")
       await acl.authorize('read', record, { who }, { ledger })
       return listPage(req, await store.list(ledger.data.handle, kind))
     })
@@ -643,51 +654,75 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await store.remove(ledger.data.handle, 'wallets', found.data.handle)
     reply.status(204).send()
   }
-  // ---- bridge event deliveries (inspect-event-deliveries; recorded in `events`) ------
+  // ---- event deliveries (inspect-event-deliveries; recorded in `events`, `effects`) --
 
-  // Every call to a bridge is a delivery record (`$evd`, core.ts). Listing needs
-  // `query-event` on the bridge, retrying `retry-event`; lists take the usual filters
-  // (`meta.status`, `data.linked`) and come newest first.
-  type E = { Params: { id: string; delivery: string } }
-  const deliveriesOf = async (t: Target) => (await store.list(t.scope, 'events')).filter((d) => d.data.bridge === t.found.data.handle)
-  app.get<{ Params: { id: string } }>('/api/v2/bridges/:id/events', async (req) => {
-    const who = await authenticate(req)
-    const t = await target(req, 'bridges', req.params.id)
-    await acl.authorize('query-event', 'bridge', { who }, { ledger: t.ledger, record: t.found })
-    return listPage(req, await deliveriesOf(t))
-  })
-  app.get<E>('/api/v2/bridges/:id/events/:delivery', async (req) => {
-    const who = await authenticate(req)
-    const t = await target(req, 'bridges', req.params.id)
-    await acl.authorize('query-event', 'bridge', { who }, { ledger: t.ledger, record: t.found })
-    const found = (await deliveriesOf(t)).find((d) => d.data.handle === req.params.delivery)
-    if (!found) throw new LedgerError(404, 'record.not-found', `Event delivery '${req.params.delivery}' not found on ledger '${t.scope}'`)
-    return found
-  })
-  // 202 with no body; the deliveries go out in the background.
-  app.post<{ Params: { id: string } }>('/api/v2/bridges/:id/events/retry', async (req, reply) => {
-    const who = await authenticate(req)
-    const t = await target(req, 'bridges', req.params.id)
-    verifyProofs(req.body)
-    await acl.authorize('retry-event', 'bridge', { who, proofs: proofKeys(req.body) }, { ledger: t.ledger, record: t.found })
-    const data = ((req.body as any)?.data ?? {}) as { handle?: string; maxAge?: number }
-    const by = data.handle !== undefined ? { handle: String(data.handle) } : { maxAge: typeof data.maxAge === 'number' ? data.maxAge : undefined }
-    if (!(await core.retryDeliveries(t.scope, t.found.data.handle, by)))
-      throw new LedgerError(404, 'record.not-found', `Event '${data.handle}' not found on ledger '${t.scope}'`)
-    reply.status(202).send()
-  })
+  // Every call to a bridge or an effect's target is a delivery record (`$evd`,
+  // core.ts), linked to its bridge or effect by `data.bridge` / `data.effect`. Listing
+  // needs `query-event` on the owner, retrying `retry-event`; lists take the usual
+  // filters (`meta.status`, `data.linked`) and come newest first.
+  for (const kind of ['bridges', 'effects'] as const) {
+    const record = KINDS[kind].record
+    type E = { Params: { id: string; delivery: string } }
+    const deliveriesOf = async (t: Target) => (await store.list(t.scope, 'events')).filter((d) => d.data[record] === t.found.data.handle)
+    app.get<{ Params: { id: string } }>(`/api/v2/${kind}/:id/events`, async (req) => {
+      const who = await authenticate(req)
+      const t = await target(req, kind, req.params.id)
+      await acl.authorize('query-event', record, { who }, { ledger: t.ledger, record: t.found })
+      return listPage(req, await deliveriesOf(t))
+    })
+    app.get<E>(`/api/v2/${kind}/:id/events/:delivery`, async (req) => {
+      const who = await authenticate(req)
+      const t = await target(req, kind, req.params.id)
+      await acl.authorize('query-event', record, { who }, { ledger: t.ledger, record: t.found })
+      const found = (await deliveriesOf(t)).find((d) => d.data.handle === req.params.delivery)
+      if (!found) throw new LedgerError(404, 'record.not-found', `Event delivery '${req.params.delivery}' not found on ledger '${t.scope}'`)
+      return found
+    })
+    // 202 with no body; the deliveries go out in the background.
+    app.post<{ Params: { id: string } }>(`/api/v2/${kind}/:id/events/retry`, async (req, reply) => {
+      const who = await authenticate(req)
+      const t = await target(req, kind, req.params.id)
+      verifyProofs(req.body)
+      await acl.authorize('retry-event', record, { who, proofs: proofKeys(req.body) }, { ledger: t.ledger, record: t.found })
+      const data = ((req.body as any)?.data ?? {}) as { handle?: string; maxAge?: number }
+      const by = data.handle !== undefined ? { handle: String(data.handle) } : { maxAge: typeof data.maxAge === 'number' ? data.maxAge : undefined }
+      if (!(await core.retryDeliveries(t.scope, record, t.found.data.handle, by)))
+        throw new LedgerError(404, 'record.not-found', `Event '${data.handle}' not found on ledger '${t.scope}'`)
+      reply.status(202).send()
+    })
 
-  // The deprecated form of a bulk retry (spec: activateBridge; recorded, secure): signed
-  // `{maxAge}`, access `activate`, 202 with no body. It resends cancelled deliveries too.
-  app.post<{ Params: { id: string } }>('/api/v2/bridges/:id/activate', async (req, reply) => {
+    // The deprecated form of a bulk retry (spec: activateBridge, activateEffect;
+    // recorded, secure): signed `{maxAge}`, access `activate`, 202 with no body. It
+    // resends cancelled deliveries too.
+    app.post<{ Params: { id: string } }>(`/api/v2/${kind}/:id/activate`, async (req, reply) => {
+      const who = await authenticate(req)
+      const t = await target(req, kind, req.params.id)
+      verifyProofs(req.body)
+      await acl.authorize('activate', record, { who, proofs: proofKeys(req.body) }, { ledger: t.ledger, record: t.found })
+      const maxAge = (req.body as any)?.data?.maxAge
+      await core.retryDeliveries(t.scope, record, t.found.data.handle, { maxAge: typeof maxAge === 'number' ? maxAge : undefined })
+      reply.status(202).send()
+    })
+  }
+
+  // ---- effects ------------------------------------------------------------------------
+
+  // Dropped like a wallet (signed, `data.parent`), then gone: a read is 404 (recorded).
+  const dropEffect = async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    validateBody('drop', req.body)
     const who = await authenticate(req)
-    const t = await target(req, 'bridges', req.params.id)
-    verifyProofs(req.body)
-    await acl.authorize('activate', 'bridge', { who, proofs: proofKeys(req.body) }, { ledger: t.ledger, record: t.found })
-    const maxAge = (req.body as any)?.data?.maxAge
-    await core.retryDeliveries(t.scope, t.found.data.handle, { maxAge: typeof maxAge === 'number' ? maxAge : undefined })
-    reply.status(202).send()
-  })
+    const { ledger, found } = await existing(req, 'effects', req.params.id)
+    const body = req.body as any
+    const keys = await impersonate(req.body, ledger.data.handle, who, 'dropped')
+    await acl.authorize('drop', 'effect', { who, proofs: keys }, { ledger, record: found })
+    if (body.data.parent !== found.hash) throw errors.parentHashInvalid()
+    verifyProofs(body)
+    await store.remove(ledger.data.handle, 'effects', found.data.handle)
+    await raise(ledger.data.handle, 'effects', 'dropped', { effect: found }, found)
+    reply.status(204).send()
+  }
+  app.delete<{ Params: { id: string } }>('/api/v2/effects/:id', dropEffect)
+  app.post<{ Params: { id: string } }>('/api/v2/effects/:id/drop', dropEffect)
 
   app.delete<{ Params: { id: string } }>('/api/v2/wallets/:id', dropWallet)
   app.post<{ Params: { id: string } }>('/api/v2/wallets/:id/drop', dropWallet)
