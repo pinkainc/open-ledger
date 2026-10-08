@@ -119,3 +119,9 @@ Minka's text, code and name are not copied. The API is implemented from observed
 behaviour and public documentation. The CLI (UNLICENSED) is used as a client and its
 bundle was read to learn the token claims it sends; none of its code is reused.
 The SDK (MIT) is a dev dependency of the conformance suite.
+
+## License
+
+MIT, see [LICENSE](LICENSE). open-ledger is an independent project and is not
+affiliated with or endorsed by Minka Inc.; "Minka" refers to their product only to
+name the API this server is compatible with.
