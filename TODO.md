@@ -205,8 +205,10 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Schemas `$sch`: the 12 system schemas per ledger, full record surface; list filters
       (`query.ts`, about-queries: `$eq $ne $gt $gte $lt $lte $in $nin $regex`, array fan-out,
       index, `$plainTextQuery`)
-- [ ] User schemas enforce records (docs: once a schema for a kind exists, records must name
-      one and validate against it) — record the reference's errors first (?)
+- [x] User schemas enforce records: the named schema validates `data`, every error;
+      a record must name one once its kind has one; content checked as JSON Schema
+      (recorded `uschema` 35/35, `server/src/user-schemas.ts`)
+- [ ] Schema `extend` (inherit another schema) — not recorded (?)
 - [ ] Record the CLI flow against the sandbox as a conformance level (shell scenario in run.sh;
       `GET /api/v2` would be a divergence: handle, semver)
 - [ ] Unsupported filter fields: the docs say the reference answers an error — record (?)

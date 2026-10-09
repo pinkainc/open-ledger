@@ -4,6 +4,35 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-09 — User schemas
+
+Recorded with `conformance/scenarios/uschema.ts` on 2.47.4 (35 exchanges). All
+reproduced (`server/src/user-schemas.ts`). The first recording had two scenario bugs
+(string claim addresses; an SDK `data()` update merges deeply, so `{type: object}`
+changed nothing) and was redone.
+
+- **The schema validates `data`**, not the record: a schema `{required: ['data']}` fails
+  every wallet with `data must have required property 'data'`. (The docs' own example
+  wraps the rules in `properties.data`; it would never pass.)
+- Order on create **and update**: the named schema is looked up first, then the data is
+  validated, and only a record that names none is checked for "schemas of its kind
+  exist" (the reference's trace: `assertSchemaRecord` → `validate` → `assertSchemaCount`).
+- Named schema missing, or of another kind: 422 `record.relation-not-found`,
+  `Schema <h> not found for record of type <kind>.` (a bridge keeps its own wording,
+  `Referenced Schema <h> not found.`).
+- None named while one exists for the kind: 422 `record.schema-invalid`, `There are
+  schemas defined for record of type <kind>, you must specify at least one.` The same
+  for an update of a record created before the first schema. A schema for symbols does
+  not affect wallets.
+- Invalid data: 422 `record.schema-invalid`, `Schema validator error: <errors>`, every
+  error (Ajv `allErrors`), each `data<path with dots> <message>`, joined by `, `;
+  `custom.errors` carries Ajv's objects `{instancePath, schemaPath, keyword, params, message}`.
+- Schema content that is not JSON Schema: 422 `record.schema-invalid`, `Schema content
+  is invalid`, `custom.error.message: "schema is invalid: <ajv errorsText>"`. An unknown
+  `format` (only `json-schema`) or `record` kind is refused by the request validator.
+- A schema update applies to the next record.
+- Intents are validated synchronously on `POST /intents` (422, no intent created).
+
 ## 2026-10-09 — Abort before the bridge confirms it (v2.47)
 
 Recorded with `conformance/scenarios/abort.ts` on sandbox 2.47.4 (16 client exchanges, 8

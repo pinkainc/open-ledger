@@ -14,6 +14,7 @@ import { keyOf, type Store, type StoredRecord } from './store.js'
 import { applyStatus } from './status.js'
 import { secretRefs } from './secrets.js'
 import { SYSTEM_SCHEMAS } from './system-schemas.js'
+import { checkContent, schemaNotFound, schemaRequired, validateData } from './user-schemas.js'
 
 export type AppOptions = {
   store: Store
@@ -468,7 +469,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
 
   // References between records and what a record of a kind must name (recorded, l5):
   // a bridge must choose one of the ledger's bridge schemas (`rest`), and a wallet's
-  // `bridge` must exist.
+  // `bridge` must exist. Any record is held to the schema it names, and must name one
+  // once a schema for its kind exists (recorded, uschema; `user-schemas.ts`).
   async function related(kind: Kind, scope: string, data: any) {
     if (kind === 'bridges') {
       if (!data.schema) throw new LedgerError(422, 'record.schema-invalid', 'There are schemas defined for record of type bridge, you must specify at least one.')
@@ -477,6 +479,13 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     }
     if (kind === 'wallets' && data.bridge && !(await store.get(scope, 'bridges', data.bridge)))
       throw new LedgerError(422, 'record.relation-not-found', `Referenced Bridge ${data.bridge} not found.`)
+    if (kind === 'schemas') return checkContent(data.schema)
+    const record = KINDS[kind].record
+    if (typeof data.schema === 'string') {
+      const schema = await store.get(scope, 'schemas', data.schema)
+      if (!schema || schema.data.record !== record) throw schemaNotFound(data.schema, record)
+      validateData(schema.data.schema, data)
+    } else if ((await store.list(scope, 'schemas')).some((s) => s.data.record === record)) throw schemaRequired(record)
   }
 
   // A record a route addresses: `/ledger` is the ledger record itself, stored at the

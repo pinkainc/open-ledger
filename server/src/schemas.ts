@@ -114,7 +114,21 @@ const DATA = {
   signers: baseData,
   circles: baseData,
   policies: { allOf: [{ type: 'object', required: ['handle', 'schema', 'values'] }, baseData] },
-  schemas: { allOf: [{ type: 'object', required: ['record', 'format', 'schema'] }, baseData] },
+  // Recorded (uschema): an unknown format or record kind is refused by the validator.
+  schemas: {
+    allOf: [
+      {
+        type: 'object',
+        required: ['record', 'format', 'schema'],
+        properties: {
+          format: { enum: ['json-schema'] },
+          record: { enum: ['anchor', 'anchor-lookup', 'bridge', 'circle', 'domain', 'effect', 'intent', 'policy', 'report', 'signer', 'signer-factor', 'symbol', 'wallet'] },
+          schema: { type: 'object' },
+        },
+      },
+      baseData,
+    ],
+  },
   'circle-signers': { type: 'object', required: ['circle', 'signer'] },
   drop: { type: 'object', required: ['parent'] },
   bridges: {
