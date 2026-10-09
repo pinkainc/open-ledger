@@ -135,8 +135,13 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] (?) Bridge `secure` headers on anchor/domain calls (the reference sent the client's token)
 - [ ] (?) Is the bridge's list signature verified? (we check the shape only)
 - [ ] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize)
-- [ ] Domains (`/domains`, `meta.domain` from handle suffix or proof, access inheritance),
-      `GET /wallets/{h}/domains`
+- [x] Domains: `$dom` records, `meta.domain` from a proof or a one-`@` handle suffix,
+      subdomain `data.domain`, intent `meta.domains` (recorded `domains` 31/31)
+- [ ] Domain access inheritance (rules of a domain apply to its records and subdomains) —
+      record with restrictive ledger rules (?)
+- [ ] (?) Updating a subdomain: its stored data has `domain`, which the schema forbids
+- [ ] (?) `meta.domains` of a forward intent, and order with several domains
+- [ ] (?) `domain.resolutionFromHandleEnabled: false` (domain only from proofs)
 
 ## L6 — N participants, ordered prepare/commit/abort, timeouts, crashes
 

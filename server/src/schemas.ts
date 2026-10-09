@@ -156,6 +156,7 @@ const DATA = {
     ],
     unevaluatedProperties: false,
   },
+  domains: { allOf: [{ type: 'object', properties: { handle: {}, parent: {}, access: {}, custom: {}, schema: {} } }, baseData], unevaluatedProperties: false },
   effects: { allOf: [{ type: 'object', required: ['signal', 'action'], properties: { signal: { enum: SIGNALS }, action: effectAction } }, baseData] },
 } as const
 

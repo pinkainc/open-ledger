@@ -4,6 +4,28 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-09 — Domains
+
+Recorded with `conformance/scenarios/domains.ts` on 2.47.4 (31 exchanges), reproduced.
+Access inheritance is not recorded yet (the scenario ledger grants everything).
+
+- `$dom` records: create, read, list, `PUT`; no drop in the spec. `data` has
+  `unevaluatedProperties: false`. Duplicate: 409 `Domain with handle <h> already exists.`
+- A record's domain, set at creation and shown last in `meta` as `meta.domain`:
+  a proof's `custom.domain` if any (it wins over the handle), else the suffix of a
+  handle with **exactly one** `@` (`treasury@payments` → `payments`; `w@eu@payments`
+  joins no domain although a domain `eu@payments` exists). Records created before the
+  first domain keep none. Seen on wallets, symbols and domains.
+- An unknown domain: 422 `record.relation-not-found`, `Trying to set a domain which
+  doesn't exist "nowhere" to the record "y"`, `custom: {domain: "nowhere"}`.
+- **A subdomain stores its parent in `data.domain`**, right after `handle`, with the
+  client's hash unchanged (like a ledger's `config: null`).
+- `GET /wallets?meta.domain=payments` filters; `GET /domains?meta.domain=…` is 400
+  `api.query-malformed`, `Unsupported filters: 'meta.domain'`.
+- Intents: `meta.domains` lists the domains of the wallets the claims name (`['payments']`
+  for an issue to `treasury@payments`, and for a transfer from it to a wallet without
+  one), already in the `POST` response; `GET /intents?meta.domains=payments` filters.
+
 ## 2026-10-09 — Wallet anchors and domains from a bridge
 
 Recorded with `conformance/scenarios/anchors2.ts` on 2.47.4 (19 client exchanges, 6

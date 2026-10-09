@@ -52,13 +52,14 @@ const KINDS = {
   schemas: { luid: '$sch', name: 'Schema', record: 'schema' },
   effects: { luid: '$eff', name: 'Effect', record: 'effect' },
   anchors: { luid: '$anc', name: 'Anchor', record: 'anchor' },
+  domains: { luid: '$dom', name: 'Domain', record: 'domain' },
 } as const
 type Kind = keyof typeof KINDS
 
 /** Kinds with the full record surface under `/api/v2/<kind>`. */
-const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects', 'anchors'] as const
+const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects', 'anchors', 'domains'] as const
 /** Kinds a client may update and sign after creation. Intents are immutable. */
-const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects', 'anchors'] as const
+const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects', 'anchors', 'domains'] as const
 
 const PAGE_LIMIT = 20
 // Any caller may reach the server, read a ledger record, and (signed) create a ledger.
@@ -292,6 +293,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     // without a status, unlike every other record.
     const link = kind === 'circle-signers'
     const clientProofs = await annotate(scope, proofs, !link)
+    const domain = kind === 'intents' || !scope ? undefined : await domainOf(scope, body.data.handle, proofs)
 
     let record: StoredRecord
     if (kind === 'intents')
@@ -304,7 +306,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
           proofs: [...clientProofs, sign({ moment, status: 'pending' }), sign({ luid, moment: now(), status: 'pending' })],
           status: 'pending',
           thread: newThread(),
-          domains: [],
+          domains: await intentDomains(scope, body.data.claims),
           moment,
           owners,
         },
@@ -315,13 +317,20 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
         // The reference ledger materialises an absent ledger `config` as null after
         // the client hashed the data, so the stored data no longer hashes to `hash`.
         // Clients may depend on the field, so the quirk is reproduced.
-        data: kind === 'ledgers' ? { ...body.data, config: body.data.config ?? null } : body.data,
+        // Likewise a subdomain gets its parent as `data.domain`, after the handle (domains).
+        data:
+          kind === 'ledgers'
+            ? { ...body.data, config: body.data.config ?? null }
+            : kind === 'domains' && domain
+              ? { handle: body.data.handle, domain, ...body.data }
+              : body.data,
         luid,
         meta: {
           proofs: [...clientProofs, sign({ luid, moment: now(), status: 'created' })],
           ...(link ? {} : { status: 'created' }),
           moment,
           owners,
+          ...(domain ? { domain } : {}),
         },
       }
     if (!(await store.insert(scope, kind, record))) throw errors.duplicated(KINDS[kind].name, body.data.handle)
@@ -330,6 +339,33 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (scope && kind !== 'circle-signers') await raise(scope, kind, 'created', { [KINDS[kind].record]: record }, record)
     if (kind === 'intents') core.schedule(scope, body.data.handle)
     return record
+  }
+
+  // A record joins a domain at creation (about-domains; recorded, domains): the one a
+  // proof names in `custom.domain`, else the suffix of a handle with exactly one `@`
+  // (`treasury@payments`; `w@eu@payments` joins none) once the ledger has domains.
+  // The domain must exist.
+  async function domainOf(scope: string, handle: unknown, proofs: Proof[]) {
+    const named = proofs.map((p) => p.custom?.domain).find((d) => typeof d === 'string') as string | undefined
+    const parts = typeof handle === 'string' ? handle.split('@') : []
+    const suffix = parts.length === 2 ? parts[1] : undefined
+    const domain = named ?? (suffix && (await store.list(scope, 'domains')).length ? suffix : undefined)
+    if (domain && !(await store.get(scope, 'domains', domain)))
+      throw new LedgerError(422, 'record.relation-not-found', `Trying to set a domain which doesn't exist "${domain}" to the record "${handle}"`, { domain })
+    return domain
+  }
+
+  // An intent's `meta.domains`: the domains of the wallets its claims name, in order.
+  async function intentDomains(scope: string, claims: any[]) {
+    const out: string[] = []
+    for (const c of claims ?? [])
+      for (const w of [c?.source, c?.target, c?.wallet]) {
+        const handle = typeof w === 'string' ? w : w?.handle
+        if (typeof handle !== 'string') continue
+        const d = ((await store.get(scope, 'wallets', handle)) ?? (await resolveAddress(store, scope, handle)))?.meta.domain
+        if (typeof d === 'string' && !out.includes(d)) out.push(d)
+      }
+    return out
   }
 
   // The ledger publishes its server signers as signer records, each self-signed and
@@ -635,6 +671,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       // Recorded (effects): the reference does not filter effects by signal.
       if (kind === 'effects' && 'data.signal' in (req.query as object))
         throw new LedgerError(400, 'api.query-malformed', "Unsupported filters: 'data.signal'")
+      if (kind === 'domains' && 'meta.domain' in (req.query as object))
+        throw new LedgerError(400, 'api.query-malformed', "Unsupported filters: 'meta.domain'")
       await acl.authorize('read', record, { who }, { ledger })
       return listPage(req, await store.list(ledger.data.handle, kind))
     })
