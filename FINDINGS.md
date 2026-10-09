@@ -4,6 +4,15 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-09 — Drop of bridges and policies
+
+Recorded with `conformance/scenarios/drops.ts` on 2.47.4 (19 exchanges), reproduced.
+`DELETE /bridges/{h}` and `DELETE /policies/{h}` (the SDK reads the record, then sends
+the signed drop): 204, then a read is 404 `Bridge not found` / `Policy not found`. A
+bridge that a wallet names: 422 `record.drop-rejected`, `Bridge used is in use by
+wallets. Please remove it from the wallets first.` A system policy (`intent:status`)
+may be dropped: 204.
+
 ## 2026-10-09 — User schemas
 
 Recorded with `conformance/scenarios/uschema.ts` on 2.47.4 (35 exchanges). All

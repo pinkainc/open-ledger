@@ -81,6 +81,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] (?) `destroy`: we require `destroy` on the symbol **and** `spend` on the source — not recorded
 - [ ] (?) Does the reference check claim permissions before or after limits? (we: before)
 - [ ] (?) Record reference: drop of a funded wallet (our reason `record.drop-rejected`, wording ours)
+- [x] Drop of bridges and policies (`DELETE`, `POST …/drop`): a bridge a wallet names is
+      `record.drop-rejected`; system policies may be dropped (recorded `drops` 19/19)
 - [x] `PUT /ledger`, `POST /ledger/proofs`, `/ledger/changes/{n}`, `/ledger/access/!check` (records2 52/52)
 - [x] Access check as recorded: check-request proofs for every action, rules without `signer`,
       record rules named by kind, ledger rules first, server rules not listed

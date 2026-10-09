@@ -162,5 +162,21 @@ for (const [storeName, makeStore] of STORES) {
       assert.deepEqual([out.meta.status, out.meta.owners], [done.meta.status, done.meta.owners])
       assert.equal(out.meta.proofs.at(-1).public, other.public)
     })
+
+    test('bridges and policies drop like wallets; a bridge a wallet names cannot be dropped (recorded, drops)', async () => {
+      const { sdk } = await newLedger(server.base, kp)
+      const s: any = sdk
+      const make = (client: string, data: Record<string, unknown>) => raw(s[client].init().data(data).hash().sign([{ keyPair: kp }]).send())
+      const bridge = { schema: 'rest', config: { server: 'http://127.0.0.1:9/v2' }, secure: [] }
+      await make('bridge', { handle: 'idle', ...bridge })
+      await make('bridge', { handle: 'used', ...bridge })
+      await make('wallet', { handle: 'acc', bridge: 'used' })
+      await s.bridge.drop('idle').hash().sign([{ keyPair: kp }]).send()
+      assert.equal((await failure(s.bridge.read('idle'))).detail, 'Bridge not found')
+      const f = await failure(s.bridge.drop('used').hash().sign([{ keyPair: kp }]).send())
+      assert.deepEqual([f.status, f.reason, f.detail], [422, 'record.drop-rejected', 'Bridge used is in use by wallets. Please remove it from the wallets first.'])
+      await s.policy.drop('intent:status').hash().sign([{ keyPair: kp }]).send()
+      assert.equal((await failure(s.policy.read('intent:status'))).detail, 'Policy not found')
+    })
   })
 }

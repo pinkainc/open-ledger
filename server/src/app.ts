@@ -647,22 +647,41 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
 
   // ---- wallets -------------------------------------------------------------------
 
-  // Drop: signed like an update (data.parent = current hash). A wallet that still
-  // holds a balance cannot be dropped.
-  const dropWallet = async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    validateBody('drop', req.body)
-    const who = await authenticate(req)
-    const { ledger, found } = await existing(req, 'wallets', req.params.id)
-    const body = req.body as any
-    const keys = await impersonate(req.body, ledger.data.handle, who, 'dropped')
-    await acl.authorize('drop', 'wallet', { who, proofs: keys }, { ledger, record: found })
-    if (body.data.parent !== found.hash) throw errors.parentHashInvalid()
-    verifyProofs(body)
-    const held = (await store.balances(ledger.data.handle, found.data.handle)).filter((b) => b.data.amount !== 0)
-    if (held.length) throw errors.dropRejected(`Wallet ${found.data.handle} still holds a balance.`)
-    await store.remove(ledger.data.handle, 'wallets', found.data.handle)
-    reply.status(204).send()
+  // Drop: signed like an update (data.parent = current hash), 204, then gone (a read
+  // is 404). What may not be dropped (recorded): a wallet that still holds a balance,
+  // a bridge a wallet names (`drops`). System policies may be (`drops`).
+  const dropOf = (kind: 'wallets' | 'effects' | 'bridges' | 'policies', guard?: (scope: string, found: StoredRecord) => Promise<void>) =>
+    async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      validateBody('drop', req.body)
+      const who = await authenticate(req)
+      const { ledger, found } = await existing(req, kind, req.params.id)
+      const body = req.body as any
+      const keys = await impersonate(req.body, ledger.data.handle, who, 'dropped')
+      await acl.authorize('drop', KINDS[kind].record, { who, proofs: keys }, { ledger, record: found })
+      if (body.data.parent !== found.hash) throw errors.parentHashInvalid()
+      verifyProofs(body)
+      await guard?.(ledger.data.handle, found)
+      await store.remove(ledger.data.handle, kind, found.data.handle)
+      if (kind === 'effects') await raise(ledger.data.handle, 'effects', 'dropped', { effect: found }, found)
+      reply.status(204).send()
+    }
+  const drops = {
+    wallets: dropOf('wallets', async (scope, found) => {
+      const held = (await store.balances(scope, found.data.handle)).filter((b) => b.data.amount !== 0)
+      if (held.length) throw errors.dropRejected(`Wallet ${found.data.handle} still holds a balance.`)
+    }),
+    bridges: dropOf('bridges', async (scope, found) => {
+      if ((await store.list(scope, 'wallets')).some((w) => w.data.bridge === found.data.handle))
+        throw errors.dropRejected(`Bridge ${found.data.handle} is in use by wallets. Please remove it from the wallets first.`)
+    }),
+    policies: dropOf('policies'),
+    effects: dropOf('effects'),
   }
+  for (const [kind, handler] of Object.entries(drops)) {
+    app.delete<{ Params: { id: string } }>(`/api/v2/${kind}/:id`, handler)
+    app.post<{ Params: { id: string } }>(`/api/v2/${kind}/:id/drop`, handler)
+  }
+
   // ---- event deliveries (inspect-event-deliveries; recorded in `events`, `effects`) --
 
   // Every call to a bridge or an effect's target is a delivery record (`$evd`,
@@ -713,28 +732,6 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       reply.status(202).send()
     })
   }
-
-  // ---- effects ------------------------------------------------------------------------
-
-  // Dropped like a wallet (signed, `data.parent`), then gone: a read is 404 (recorded).
-  const dropEffect = async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    validateBody('drop', req.body)
-    const who = await authenticate(req)
-    const { ledger, found } = await existing(req, 'effects', req.params.id)
-    const body = req.body as any
-    const keys = await impersonate(req.body, ledger.data.handle, who, 'dropped')
-    await acl.authorize('drop', 'effect', { who, proofs: keys }, { ledger, record: found })
-    if (body.data.parent !== found.hash) throw errors.parentHashInvalid()
-    verifyProofs(body)
-    await store.remove(ledger.data.handle, 'effects', found.data.handle)
-    await raise(ledger.data.handle, 'effects', 'dropped', { effect: found }, found)
-    reply.status(204).send()
-  }
-  app.delete<{ Params: { id: string } }>('/api/v2/effects/:id', dropEffect)
-  app.post<{ Params: { id: string } }>('/api/v2/effects/:id/drop', dropEffect)
-
-  app.delete<{ Params: { id: string } }>('/api/v2/wallets/:id', dropWallet)
-  app.post<{ Params: { id: string } }>('/api/v2/wallets/:id/drop', dropWallet)
 
   app.get<{ Params: { id: string } }>('/api/v2/wallets/:id/balances', async (req) => {
     const who = await authenticate(req)
