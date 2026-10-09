@@ -4,7 +4,8 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import { jwtVerify } from 'jose'
 import { customAlphabet } from 'nanoid'
 import { AccessControl, type Access, type Principal } from './access.js'
-import { Core } from './core.js'
+import { Core, hasTrait } from './core.js'
+import { resolveAddress } from './routing.js'
 import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, signDigest, verifyDigest, type KeyPair, type Proof } from './crypto.js'
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
@@ -746,15 +747,78 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     })
   }
 
-  // The wallet's local anchors (`data.wallet`); a wallet that does not exist has none
-  // (recorded, anchors). Anchors a bridge serves (trait `anchors`) are not asked yet.
+  // Anchors and domains of a wallet (recorded, anchors2). When the address resolves
+  // to a wallet whose bridge has the trait, the bridge answers instead of the ledger:
+  // `GET {server}/wallets/<address>/anchors|domains`, or `POST …/anchors/!lookup` with
+  // the request's data signed by the ledger, sent with the client's own token. It returns a signed
+  // list of records' data; each comes back as `{data: {access: [], …}, meta: {}}`.
+  // Otherwise the ledger answers from its own anchors (`data.wallet`); it holds no
+  // domains for a wallet. A signed list without `page` either way.
+  async function fromBridge(req: FastifyRequest, scope: string, address: string, what: 'anchors' | 'domains', lookup?: any) {
+    const wallet = await resolveAddress(store, scope, address)
+    const bridge = wallet?.data.bridge ? await store.get(scope, 'bridges', wallet.data.bridge) : undefined
+    if (!bridge || !hasTrait(bridge.data, what, lookup?.data ?? { wallet: address })) return undefined
+    const invalid = () => new LedgerError(500, 'bridge.proxy-response-invalid', `Invalid response from bridge while querying ${what}`)
+    const auth = req.headers.authorization
+    let body: any
+    try {
+      const res = await fetch(`${bridge.data.config?.server}/wallets/${address}/${what}${lookup ? '/!lookup' : ''}`, {
+        method: lookup ? 'POST' : 'GET',
+        headers: { ...(auth ? { authorization: auth } : {}), 'x-ledger': scope, ...(lookup ? { 'content-type': 'application/json' } : {}) },
+        body: lookup ? JSON.stringify(lookup) : undefined,
+        signal: AbortSignal.timeout(30_000),
+      })
+      body = res.ok ? await res.json() : undefined
+    } catch {
+      throw invalid()
+    }
+    // The reference refused full records here (`hash`, `meta`): the data is checked like a create's.
+    const valid = (d: any) => {
+      if (what === 'domains') return d && typeof d === 'object' && typeof d.handle === 'string'
+      try {
+        validateBody('anchors', { data: d })
+        return true
+      } catch {
+        return false
+      }
+    }
+    if (!Array.isArray(body?.data) || !body.data.every(valid)) throw invalid()
+    return body.data.map((d: any) => ({ data: { access: [], ...d }, meta: {} }))
+  }
+
+  const localAnchors = async (scope: string, address: string) =>
+    [...(await store.list(scope, 'anchors')).filter((a) => a.data.wallet === address)].reverse()
+
   app.get<{ Params: { id: string } }>('/api/v2/wallets/:id/anchors', async (req) => {
     const who = await authenticate(req)
     const ledger = await hostedLedger(req)
     await acl.authorize('read', 'anchor', { who }, { ledger })
-    // A signed list without `page` (recorded).
-    const rows = (await store.list(ledger.data.handle, 'anchors')).filter((a) => a.data.wallet === req.params.id)
-    return envelope(req.ledgerKey, [...rows].reverse())
+    const scope = ledger.data.handle
+    return envelope(req.ledgerKey, (await fromBridge(req, scope, req.params.id, 'anchors')) ?? (await localAnchors(scope, req.params.id)))
+  })
+
+  // The body names the wallet it looks up in; it must be the one in the path.
+  app.post<{ Params: { id: string } }>('/api/v2/wallets/:id/anchors/!lookup', async (req) => {
+    const who = await authenticate(req)
+    const ledger = await hostedLedger(req)
+    const body = req.body as any
+    verifyProofs(body)
+    await acl.authorize('lookup', 'anchor', { who, proofs: proofKeys(body) }, { ledger })
+    if (body?.data?.wallet !== req.params.id) throw new LedgerError(422, 'record.invalid', 'Address in the request does not match the address in the data')
+    const scope = ledger.data.handle
+    // The bridge gets the data signed by the ledger, not the client's proofs (recorded).
+    const forwarded = { hash: body.hash, data: body.data, meta: { proofs: [serverProof(body.hash, { moment: now() }, req.ledgerKey!, 'system')] } }
+    const bridged = await fromBridge(req, scope, req.params.id, 'anchors', forwarded)
+    if (bridged) return envelope(req.ledgerKey, bridged)
+    const { wallet: _w, access: _a, custom: _c, ...fields } = body.data
+    return envelope(req.ledgerKey, (await localAnchors(scope, req.params.id)).filter((a) => Object.entries(fields).every(([k, v]) => a.data[k] === v)))
+  })
+
+  app.get<{ Params: { id: string } }>('/api/v2/wallets/:id/domains', async (req) => {
+    const who = await authenticate(req)
+    const ledger = await hostedLedger(req)
+    await acl.authorize('read', 'wallet', { who }, { ledger })
+    return envelope(req.ledgerKey, (await fromBridge(req, ledger.data.handle, req.params.id, 'domains')) ?? [])
   })
 
   app.get<{ Params: { id: string } }>('/api/v2/wallets/:id/balances', async (req) => {

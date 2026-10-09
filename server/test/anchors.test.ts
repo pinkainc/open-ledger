@@ -2,17 +2,22 @@
 // existing wallet; a wallet with anchors cannot be dropped.
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { STORES, failure, newKeyPair, newLedger, startServer, type KeyPair } from './helpers.js'
+import { STORES, failure, newKeyPair, newLedger, startServer, testBridge, type KeyPair } from './helpers.js'
 
 for (const [storeName, makeStore] of STORES) {
   describe(`anchors on ${storeName}`, () => {
     let server: Awaited<ReturnType<typeof startServer>>
+    let bridge: Awaited<ReturnType<typeof testBridge>>
     let kp: KeyPair
     before(async () => {
       server = await startServer(await makeStore())
+      bridge = await testBridge()
       kp = await newKeyPair()
     })
-    after(() => server.close())
+    after(async () => {
+      await server.close()
+      await bridge.close()
+    })
 
     const raw = async (p: Promise<any>) => (await p).response.data
     async function books() {
@@ -68,6 +73,59 @@ for (const [storeName, makeStore] of STORES) {
       for (const h of ['b1', 'b2']) await s.anchor.drop(h).hash().sign([{ keyPair: kp }]).send()
       assert.equal((await failure(s.anchor.read('b1'))).detail, 'Anchor not found')
       await s.wallet.drop('bob').hash().sign([{ keyPair: kp }]).send()
+    })
+
+    // Recorded in anchors2.
+    async function bridged(traits?: unknown[]) {
+      const { s, anchor } = await books()
+      await raw(s.bridge.init().data({ handle: 'bank', schema: 'rest', config: { server: bridge.url }, secure: [], ...(traits ? { traits } : {}) }).hash().sign([{ keyPair: kp }]).send())
+      await raw(s.wallet.init().data({ handle: 'acc', bridge: 'bank' }).hash().sign([{ keyPair: kp }]).send())
+      await anchor({ handle: 'local-1', wallet: 'acc', target: 't' })
+      return s
+    }
+    const signedList = (data: unknown[]) => ({ hash: 'h', data, meta: { proofs: [] } })
+
+    test('a bridge with the trait answers wallet anchors and domains instead of the ledger', async () => {
+      const s = await bridged()
+      bridge.replyWith((c) => (c.url.includes('/domains') ? signedList([{ handle: 'branch@acc' }]) : signedList([{ handle: 'tel:9', wallet: 'acc', target: 'acc:9' }])))
+      try {
+        const list = await raw(s.wallet.getAnchors('tel:9@acc'))
+        assert.deepEqual(list.data, [{ data: { access: [], handle: 'tel:9', wallet: 'acc', target: 'acc:9' }, meta: {} }])
+        const call = bridge.calls.at(-1)!
+        assert.deepEqual([call.method, call.url], ['GET', '/v2/wallets/tel:9@acc/anchors'])
+        assert.deepEqual((await raw(s.wallet.getDomains('acc'))).data.map((d: any) => d.data.handle), ['branch@acc'])
+
+        const found = await raw(s.wallet.with('acc').anchor.lookup().data({ wallet: 'acc', target: 'tel:9' }).hash().sign([{ keyPair: kp }]).send())
+        assert.equal(found.data.length, 1)
+        const lookup = bridge.calls.at(-1)!
+        assert.deepEqual([lookup.method, lookup.url, lookup.body.data], ['POST', '/v2/wallets/acc/anchors/!lookup', { wallet: 'acc', target: 'tel:9' }])
+        assert.deepEqual(lookup.body.meta.proofs.map((p: any) => p.signer), ['system'])
+      } finally {
+        bridge.replyWith(() => undefined)
+      }
+    })
+
+    test('an invalid bridge answer is 500 bridge.proxy-response-invalid', async () => {
+      const s = await bridged()
+      bridge.replyWith(() => signedList([{ hash: 'x', data: {}, meta: {} }]))
+      try {
+        const f = await failure(raw(s.wallet.getAnchors('acc')))
+        assert.deepEqual([f.status, f.reason, f.detail], [500, 'bridge.proxy-response-invalid', 'Invalid response from bridge while querying anchors'])
+      } finally {
+        bridge.replyWith(() => undefined)
+      }
+    })
+
+    test('without the trait the ledger answers; a lookup must name the wallet of its path', async () => {
+      const s = await bridged(['debits', 'credits'])
+      const n = bridge.calls.length
+      assert.deepEqual((await raw(s.wallet.getAnchors('acc'))).data.map((a: any) => a.data.handle), ['local-1'])
+      assert.deepEqual((await raw(s.wallet.getDomains('acc'))).data, [])
+      const f = await failure(raw(s.wallet.with('acc').anchor.lookup().data({ wallet: 'other' }).hash().sign([{ keyPair: kp }]).send()))
+      assert.deepEqual([f.status, f.reason, f.detail], [422, 'record.invalid', 'Address in the request does not match the address in the data'])
+      const local = await raw(s.wallet.with('acc').anchor.lookup().data({ wallet: 'acc', target: 't' }).hash().sign([{ keyPair: kp }]).send())
+      assert.deepEqual(local.data.map((a: any) => a.data.handle), ['local-1'])
+      assert.equal(bridge.calls.length, n)
     })
   })
 }

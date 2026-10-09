@@ -4,6 +4,30 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-09 — Wallet anchors and domains from a bridge
+
+Recorded with `conformance/scenarios/anchors2.ts` on 2.47.4 (19 client exchanges, 6
+bridge calls; the first recording answered full records and was refused). Reproduced.
+
+- The paths are those of the about-bridges trait table: `GET {server}/wallets/<address>/anchors`,
+  `POST {server}/wallets/<address>/anchors/!lookup`, `GET {server}/wallets/<address>/domains`.
+  `<address>` is the one the client asked for, unencoded (`tel:9@acc`); the bridge is
+  that of the wallet the address resolves to (`acc`). The other three paths the docs
+  give (`/v2/anchors`, `/v2/wallets/:handle/!lookup`, `/v2/wallets/:domain`) are not used.
+- Headers: **the client's own `authorization`** and `x-ledger`; no ledger token.
+- The lookup body is the client's `{hash, data}` with its proofs **replaced** by one
+  ledger `system` proof `{moment}`.
+- Only a bridge whose traits allow it is asked (`traits` without `anchors` → the ledger
+  answers itself). When asked, **the bridge's answer replaces the local anchors**: a
+  local anchor of the same wallet is not listed.
+- The bridge answers a signed list of records' **data**; each item comes back as
+  `{data: {access: [], …item}, meta: {}}` in a signed list without `page`. Full records
+  (`{hash, data, meta}`) are refused: 500 `bridge.proxy-response-invalid`,
+  `Invalid response from bridge while querying anchors|domains`.
+- Lookup whose `data.wallet` is not the path's address (or is missing): 422
+  `record.invalid`, `Address in the request does not match the address in the data`.
+- A wallet without a bridge: anchors and domains `[]` (no domains held locally).
+
 ## 2026-10-09 — Anchors as records
 
 Recorded with `conformance/scenarios/anchors.ts` on 2.47.4 (29 exchanges), reproduced.

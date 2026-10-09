@@ -114,6 +114,7 @@ export type Call = { method: string; url: string; body: any }
 export async function testBridge() {
   const calls: Call[] = []
   let answer = (_c: Call) => 202
+  let json: (c: Call) => unknown = () => undefined
   const server = createServer((req, res) => {
     let s = ''
     req.on('data', (c) => (s += c))
@@ -121,7 +122,9 @@ export async function testBridge() {
       const call = { method: req.method!, url: req.url!, body: s ? JSON.parse(s) : undefined }
       calls.push(call)
       res.statusCode = answer(call)
-      res.end()
+      const body = json(call)
+      if (body !== undefined) res.setHeader('content-type', 'application/json')
+      res.end(body === undefined ? undefined : JSON.stringify(body))
     })
   })
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
@@ -130,6 +133,8 @@ export async function testBridge() {
     url: `http://127.0.0.1:${port}/v2`,
     calls,
     answerWith: (f: (c: Call) => number) => (answer = f),
+    /** A JSON body for the answer (undefined: none). */
+    replyWith: (f: (c: Call) => unknown) => (json = f),
     close: () => new Promise<void>((r) => server.close(() => r())),
   }
 }

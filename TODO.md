@@ -129,8 +129,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Anchors as records (`$anc`, full surface, drop), wallet required and existing,
       `GET /wallets/{h}/anchors` local; a wallet with anchors is not dropped (recorded `anchors` 29/29)
 - [ ] (?) Wallet drop with anchors when `anchor.walletRequired` is off (we refuse always)
-- [ ] Wallet anchors from a bridge (trait `anchors`, `GET {server}/anchors?wallet=`), resolved
-      by address; `POST /wallets/{h}/anchors/!lookup` — record the bridge calls (?)
+- [x] Wallet anchors and domains from a bridge (traits `anchors`, `domains`), resolved by
+      address; `POST /wallets/{h}/anchors/!lookup` (recorded `anchors2` 19/19 + 6/6)
+- [ ] (?) Lookup on a wallet without a bridge: we filter its anchors by the given fields
+- [ ] (?) Bridge `secure` headers on anchor/domain calls (the reference sent the client's token)
+- [ ] (?) Is the bridge's list signature verified? (we check the shape only)
 - [ ] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize)
 - [ ] Domains (`/domains`, `meta.domain` from handle suffix or proof, access inheritance),
       `GET /wallets/{h}/domains`

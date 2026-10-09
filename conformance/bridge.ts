@@ -9,6 +9,7 @@
 import { createServer, type IncomingMessage } from 'node:http'
 import { appendFileSync } from 'node:fs'
 import { LedgerSdk } from '@minka/ledger-sdk'
+import { hashData, serverProof } from '../server/src/crypto.js'
 
 /** What the bridge answers to a prepare: sign `prepared`, sign `failed`, fail the HTTP call first, or accept and never report. */
 export type Decision =
@@ -32,6 +33,11 @@ export type BridgeSpec = {
   headers?: string[]
   /** An OAuth2 token endpoint at `{prefix}/oauth/token`, answering this body. */
   token?: Record<string, unknown>
+  /**
+   * Lists the bridge serves (traits `anchors`, `domains`): for a call it answers, the
+   * records; the bridge replies 200 with them as a list signed by its key.
+   */
+  lists?: (method: string, path: string, body: any) => unknown[] | undefined
   /** HTTP status for an effect call `POST /v2/effects/{effect}` (trait `events`); default 202. */
   effect?: (effect: string, event: any) => number
 }
@@ -52,7 +58,7 @@ const read = (req: IncomingMessage) =>
   })
 
 export async function startBridge(o: BridgeOptions) {
-  return startBridges({ ...o, bridges: [{ handle: o.handle, keyPair: o.keyPair, decide: o.decide, report: o.report }] })
+  return startBridges({ ...o, bridges: [{ handle: o.handle, keyPair: o.keyPair, decide: o.decide, report: o.report, lists: o.lists }] })
 }
 
 /**
@@ -160,10 +166,18 @@ export async function startBridges(o: {
     } else if (req.method === 'PUT' && path.startsWith('/v2/intents/')) {
       status = 200
     }
+    let reply: unknown
+    const listed = status === 404 ? b.lists?.(req.method ?? '', path, body) : undefined
+    if (listed) {
+      status = 200
+      const hash = hashData(listed)
+      reply = { hash, data: listed, meta: { proofs: [serverProof(hash, { moment: new Date().toISOString() }, b.keyPair, b.handle)] } }
+    }
     const seen = b.headers && Object.fromEntries(b.headers.map((h) => [h, req.headers[h] ?? null]))
     log(b, { req: { method: req.method, url, headers: req.headers, body }, res: { status }, ...(seen ? { seen } : {}) })
     res.statusCode = status
-    res.end()
+    if (reply) res.setHeader('content-type', 'application/json')
+    res.end(reply ? JSON.stringify(reply) : undefined)
     if (after) void after()
   })
   await new Promise<void>((r) => server.listen(o.port, '127.0.0.1', () => r()))

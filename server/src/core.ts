@@ -940,7 +940,7 @@ async function partsOf(run: Run, entries: Entry[]): Promise<Part[]> {
 // Traits (about-bridges): a bridge without `traits` takes part in everything; with
 // them, only in the methods listed — a string, or `{method, filter}` whose filter is a
 // query on the call's data (dot paths, operators).
-function hasTrait(bridge: Record<string, any>, method: string, data: unknown) {
+export function hasTrait(bridge: Record<string, any>, method: string, data: unknown) {
   const traits: any[] | undefined = bridge.traits
   if (!traits) return true
   const t = traits.find((t) => t === method || t?.method === method)
