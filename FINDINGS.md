@@ -1,8 +1,29 @@
 # Findings
 
 Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/api/v2`,
-service 2.45.5 — 2.46.5 since the effects recording, SDK 2.45.1) established by recording it. Each entry says how it was
+service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
+
+## 2026-10-09 — Abort before the bridge confirms it (v2.47)
+
+Recorded with `conformance/scenarios/abort.ts` on sandbox 2.47.4 (16 client exchanges, 8
+bridge calls); `l5`, `l6` and `l7` re-recorded on 2.47.4 the same day. All reproduced.
+Release notes v2.47.0: *"Fixes reserved balances staying held on aborted intents while
+bridges have not confirmed the abort."*
+
+- A local debit and a credit to bridge `bank`; the bank fails the credit's prepare and
+  holds its `aborted` report back. The intent goes `failed` → `aborted`, and **in the
+  same step** the core signs `aborted` for every entry (debit and credit) and alice's
+  reservation returns to `available` (100/0 while the bridge has not answered).
+- When the bank reports `aborted`, the intent goes `rejected` and nothing else changes:
+  no second core abort, no balance move. Proof order is therefore `core:aborted ×N`,
+  `bank:aborted`, `system:rejected` (2.46 had the bank's report first).
+- A bridge that never confirms leaves the intent `aborted` forever, with the money
+  already released.
+- Abort calls to bridges now carry `meta.domains: []` (last key) when the core took
+  part in the intent; a forward intent's abort (no core, `l7`) still has none. In
+  2.46 no abort call carried it.
+- Nothing else in `l5`, `l6`, `l7` changed between 2.46.5 and 2.47.4.
 
 ## 2026-10-02 — Effects: signals, webhooks, bridge effects, their deliveries
 

@@ -143,10 +143,9 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] Crash in the middle of the credit phase: redrive re-sends the credits (mark set);
       covered by `resume`, not by a test yet
 - [ ] (?) Commit never confirmed: is there any reconciliation on the reference (none seen)?
-- [ ] (?) v2.47.0 fix: "reserved balances staying held on aborted intents while bridges have
-      not confirmed the abort". `rejectAborted` releases debit reservations only once every
-      bridge reports `aborted`, i.e. the pre-2.47 behaviour. Record on sandbox 2.47.4 when
-      the reservation returns to `available` (see docs.minka.io `ssot/2026-10-08-upstream-refresh-v2.47.md`)
+- [x] v2.47.0: the core aborts its entries and releases reservations at `aborted`, not
+      when the last bridge confirms; abort calls carry `domains: []` when the core took
+      part (recorded `abort` 16/16 + 8/8; l5, l6, l7 re-recorded on 2.47.4)
 ## L7 — expiry and thread abort
 
 - [x] Expiry job (`Core.startExpiry`): pending intents older than `intent.expiryThresholdMinutes`

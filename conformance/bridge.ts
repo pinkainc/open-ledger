@@ -26,8 +26,8 @@ export type BridgeSpec = {
   prefix?: string
   /** Decides the answer to a prepare call, by entry. */
   decide: (entry: any) => Decision
-  /** Whether to report a commit or abort; default: report. */
-  report?: (entry: string, action: 'commit' | 'abort', intent: any) => boolean
+  /** Whether to report a commit or abort; default: report. `'hold'` keeps the report until `release()`. */
+  report?: (entry: string, action: 'commit' | 'abort', intent: any) => boolean | 'hold'
   /** Request headers (lower case) logged with each call as `seen`, for `secure` rules. */
   headers?: string[]
   /** An OAuth2 token endpoint at `{prefix}/oauth/token`, answering this body. */
@@ -82,6 +82,7 @@ export async function startBridges(o: {
     ]),
   )
   const failedOnce = new Set<string>()
+  const held: (() => Promise<void>)[] = []
   // Core ids numbered in order of first use, so they compare across runs.
   const coreIds = new Map<string, string>()
   const coreId = (handle: string) => coreIds.get(handle) ?? (coreIds.set(handle, `core-${coreIds.size + 1}`), coreIds.get(handle)!)
@@ -148,8 +149,11 @@ export async function startBridges(o: {
         if (status === 202 && !('silent' in decision))
           after = () =>
             sign(b, intent, decision.status === 'prepared' ? { handle: entry.handle, status: 'prepared', coreId: coreId(entry.handle) } : { handle: entry.handle, ...decision })
-      } else if (b.report?.(handle, action as 'commit' | 'abort', intent) ?? true) {
-        after = () => sign(b, intent, { handle, status: action === 'commit' ? 'committed' : 'aborted', coreId: coreId(handle) })
+      } else {
+        const report = b.report?.(handle, action as 'commit' | 'abort', intent) ?? true
+        const send = () => sign(b, intent, { handle, status: action === 'commit' ? 'committed' : 'aborted', coreId: coreId(handle) })
+        if (report === 'hold') held.push(send)
+        else if (report) after = send
       }
     } else if (req.method === 'POST' && path.startsWith('/v2/effects/')) {
       status = b.effect?.(decodeURIComponent(path.slice('/v2/effects/'.length)), body) ?? 202
@@ -163,5 +167,11 @@ export async function startBridges(o: {
     if (after) void after()
   })
   await new Promise<void>((r) => server.listen(o.port, '127.0.0.1', () => r()))
-  return { close: () => new Promise<void>((r) => server.close(() => r())) }
+  return {
+    close: () => new Promise<void>((r) => server.close(() => r())),
+    /** Sends the reports held back so far, in order. */
+    release: async () => {
+      for (const send of held.splice(0)) await send()
+    },
+  }
 }

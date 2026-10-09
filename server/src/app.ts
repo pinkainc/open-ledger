@@ -33,7 +33,7 @@ export type AppOptions = {
 }
 
 /** The reference release whose API this server answers (published spec version). */
-export const SEMVER = '2.45.5'
+export const SEMVER = '2.47.4'
 
 // Record kinds: path segment → luid prefix, name used in error details, and the
 // record type access rules refer to. Prefixes are the reference's.

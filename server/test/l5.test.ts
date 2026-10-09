@@ -88,7 +88,8 @@ for (const [storeName, makeStore] of STORES) {
       assert.deepEqual(puts.map((p) => [p.url, p.body.meta.status]), [[`/v2/intents/${h}`, 'prepared'], [`/v2/intents/${h}`, 'completed']])
     })
 
-    test('a failed prepare aborts every bridged entry, releases the reservation and rejects', async () => {
+    // v2.47.0: the core aborts and releases at `aborted`, before the bridge confirms (recorded, abort).
+    test('a failed prepare aborts every bridged entry, releases the reservation at once, rejects once confirmed', async () => {
       const { sdk, asBank } = await books()
       await settle(sdk, await send(sdk, [issue('alice', 100)]))
       const h = await send(sdk, [transfer('alice', 'acc', 7)])
@@ -98,13 +99,15 @@ for (const [storeName, makeStore] of STORES) {
       assert.equal(abort.body.data.intent.meta.status, 'aborted')
       const failed = abort.body.data.intent.meta.proofs.find((p: any) => p.signer === 'system' && p.custom.status === 'failed').custom
       assert.deepEqual([failed.reason, failed.detail], ['core.bridge-prepare-failed', 'Bridge(s) failed to process intent: bank'])
-      assert.deepEqual(await balanceOf(sdk, 'alice'), { available: 93, reserved: 7 })
+      assert.deepEqual(abort.body.data.intent.meta.domains, [])
+      assert.deepEqual(await balanceOf(sdk, 'alice'), { available: 100, reserved: 0 })
+      assert.equal((await raw(sdk.intent.read(h))).meta.status, 'aborted')
 
       await report(asBank, abort.body.data.intent, { handle: entry.handle, status: 'aborted', coreId: '1' })
       const done = await settle(sdk, h)
       assert.equal(done.meta.status, 'rejected')
       const intent = await raw(sdk.intent.read(h))
-      assert.deepEqual(statuses(intent).slice(-4), ['bank:aborted', 'core:aborted', 'core:aborted', 'system:rejected'])
+      assert.deepEqual(statuses(intent).slice(-4), ['core:aborted', 'core:aborted', 'bank:aborted', 'system:rejected'])
       assert.deepEqual(await balanceOf(sdk, 'alice'), { available: 100, reserved: 0 })
       const puts = await until(() => { const p = callsFor(h).filter((c) => c.method === 'PUT'); return p.length ? p : undefined }, 'final notification')
       assert.deepEqual(puts.map((p) => p.body.meta.status), ['rejected'])

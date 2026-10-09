@@ -596,15 +596,29 @@ export class Core {
 
   // failed → aborted: every part that was asked to prepare is told to abort (the
   // failing one too; a credit whose prepare never went out is not), and the intent is
-  // rejected once each has reported `aborted`; then the core releases its reservations.
+  // rejected once each has reported `aborted`. The core aborts its entries and releases
+  // their reservations at `aborted`, without waiting for the bridges (v2.47.0, recorded
+  // in `abort`; before it, the release waited for the last bridge's confirmation).
   private async abort(run: Run, calls: Delivery[], bridged: Part[], reason: string, detail: string) {
     run.trail.push(run.sign({ detail, moment: run.now(), reason, status: 'failed' }))
     run.stage('failed')
     run.trail.push(run.sign({ moment: run.now(), status: 'aborted' }))
     run.stage('aborted')
     run.intent.meta.status = 'aborted'
-    if (bridged.length) calls.push({ order: 'parallel', calls: await this.commandCalls(run, bridged, 'abort', run.snapshot('aborted')) })
+    await this.releaseCore(run)
+    if (bridged.length) calls.push({ order: 'parallel', calls: await this.commandCalls(run, bridged, 'abort', run.snapshot('aborted', false, run.corePrepared())) })
     else await this.rejectAborted(run, calls, bridged)
+  }
+
+  private async releaseCore(run: Run) {
+    if (!run.corePrepared()) return
+    const entries = resolvedEntries(run.intent) ?? []
+    const ta = run.now()
+    for (const e of entries) run.trail.push(serverProof(run.intent.hash, { handle: e.handle, moment: ta, schema: e.schema, status: 'aborted' }, run.core, 'core'))
+    for (const e of entries.filter((e) => e.schema === 'debit')) {
+      await run.books.move(e.wallet, e.symbol, 'reserved', -e.amount, ta, true)
+      await run.books.move(e.wallet, e.symbol, 'available', +e.amount, ta, true)
+    }
   }
 
   private async advanceAborted(run: Run, calls: Delivery[]) {
@@ -613,15 +627,6 @@ export class Core {
   }
 
   private async rejectAborted(run: Run, calls: Delivery[], bridged: Part[]) {
-    const entries = resolvedEntries(run.intent) ?? []
-    if (run.corePrepared()) {
-      const ta = run.now()
-      for (const e of entries) run.trail.push(serverProof(run.intent.hash, { handle: e.handle, moment: ta, schema: e.schema, status: 'aborted' }, run.core, 'core'))
-      for (const e of entries.filter((e) => e.schema === 'debit')) {
-        await run.books.move(e.wallet, e.symbol, 'reserved', -e.amount, ta, true)
-        await run.books.move(e.wallet, e.symbol, 'available', +e.amount, ta, true)
-      }
-    }
     run.trail.push(run.sign({ moment: run.now(), status: 'rejected' }))
     run.stage('rejected')
     run.intent.meta.status = 'rejected'
@@ -1096,7 +1101,9 @@ class Run {
 
   /**
    * The intent as bridges see it now: without `domains` (recorded) — except in the
-   * second prepare phase, whose credits carry `domains: []` after the other fields (l6).
+   * second prepare phase, whose credits carry `domains: []` after the other fields (l6),
+   * and since v2.47 in abort calls of an intent the core prepared (abort, l5, l6; a
+   * forward intent's abort has none, l7 — all recorded on 2.47.4).
    */
   snapshot(status: string, routed = false, domains = false) {
     const { domains: d, routed: _r, proofs: _p, status: _s, ...meta } = this.intent.meta
