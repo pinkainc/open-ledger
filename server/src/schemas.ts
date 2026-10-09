@@ -7,9 +7,12 @@
 // decides which error comes first. They are written here from observed behaviour and
 // the documented field lists, not copied from Minka's spec.
 import { Ajv, type ErrorObject } from 'ajv'
+import { Ajv2019 } from 'ajv/dist/2019.js'
 import { LedgerError } from './errors.js'
 
 const ajv = new Ajv({ allErrors: false, strict: false })
+// `unevaluatedProperties` (spec: every record's data) needs draft 2019-09.
+const ajv2019 = new Ajv2019({ allErrors: false, strict: false })
 
 const baseData = { type: 'object', required: ['handle'] }
 const ref = { type: 'object', required: ['handle'], properties: { handle: { type: 'string' } } }
@@ -145,6 +148,14 @@ const DATA = {
       baseData,
     ],
   },
+  // Recorded (anchors): `target` required, nothing outside the documented fields.
+  anchors: {
+    allOf: [
+      { type: 'object', required: ['target'], properties: { handle: {}, parent: {}, access: {}, custom: {}, schema: {}, wallet: {}, symbol: {}, source: {}, target: {}, amount: {} } },
+      baseData,
+    ],
+    unevaluatedProperties: false,
+  },
   effects: { allOf: [{ type: 'object', required: ['signal', 'action'], properties: { signal: { enum: SIGNALS }, action: effectAction } }, baseData] },
 } as const
 
@@ -153,7 +164,7 @@ export type ValidatedKind = keyof typeof DATA
 const validators = Object.fromEntries(
   Object.entries(DATA).map(([k, data]) => [
     k,
-    ajv.compile({ type: 'object', allOf: [{ type: 'object' }, { type: 'object', required: ['data'], properties: { data } }] }),
+    ('unevaluatedProperties' in data ? ajv2019 : ajv).compile({ type: 'object', allOf: [{ type: 'object' }, { type: 'object', required: ['data'], properties: { data } }] }),
   ]),
 ) as Record<ValidatedKind, ReturnType<typeof ajv.compile>>
 

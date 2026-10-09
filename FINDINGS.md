@@ -4,6 +4,27 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-09 — Anchors as records
+
+Recorded with `conformance/scenarios/anchors.ts` on 2.47.4 (29 exchanges), reproduced.
+No bridge: what a bridge with trait `anchors` adds is not recorded yet.
+
+- `$anc` records with the generic surface (create, read by handle or luid, list with
+  filters, `PUT` with `parent`, status by proof, changes, drop). Their change entries
+  have **no `meta.labels`** (every other kind's have `labels: null`).
+- `target` is required (422 `…/data must have required property 'target'`), and
+  `data` has `unevaluatedProperties: false` (422 `request/body/data must NOT have
+  unevaluated properties`, path `/body/data`).
+- **A wallet is required and must exist even without `anchor.walletRequired`**:
+  422 `record.relation-not-found`, `Cannot find anchor wallet 'undefined'` (none named)
+  or `'ghost'`. The docs say anchors may exist without a wallet unless the option is set.
+- Duplicate handle: 409 `Anchor with handle <h> already exists.`
+- `GET /wallets/{h}/anchors`: the anchors whose `data.wallet` is `h`, newest first, a
+  signed list **without `page`**; an unknown wallet gives an empty list, not 404.
+- Dropping a wallet that anchors name (recorded with `anchor.walletRequired: true`):
+  422 `record.drop-rejected`, `Cannot drop wallet 'bob' with anchors associated with
+  it`, `custom.anchors: [handles, oldest first]`.
+
 ## 2026-10-09 — Drop of bridges and policies
 
 Recorded with `conformance/scenarios/drops.ts` on 2.47.4 (19 exchanges), reproduced.

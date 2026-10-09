@@ -50,13 +50,14 @@ const KINDS = {
   bridges: { luid: '$brg', name: 'Bridge', record: 'bridge' },
   schemas: { luid: '$sch', name: 'Schema', record: 'schema' },
   effects: { luid: '$eff', name: 'Effect', record: 'effect' },
+  anchors: { luid: '$anc', name: 'Anchor', record: 'anchor' },
 } as const
 type Kind = keyof typeof KINDS
 
 /** Kinds with the full record surface under `/api/v2/<kind>`. */
-const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects'] as const
+const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects', 'anchors'] as const
 /** Kinds a client may update and sign after creation. Intents are immutable. */
-const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects'] as const
+const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects', 'anchors'] as const
 
 const PAGE_LIMIT = 20
 // Any caller may reach the server, read a ledger record, and (signed) create a ledger.
@@ -237,14 +238,15 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // ---- record creation -----------------------------------------------------------
 
   // A change is the full record as it was after one create/update, numbered from 1.
-  const snapshot = (r: StoredRecord, change: number, action: 'create' | 'update', moment = r.meta.moment): StoredRecord => ({
+  // Anchors' changes carry no `labels` (recorded, anchors); every other kind's `null`.
+  const snapshot = (r: StoredRecord, change: number, action: 'create' | 'update', moment = r.meta.moment, labels = true): StoredRecord => ({
     ...r,
-    meta: { ...r.meta, moment, change, action, labels: null },
+    meta: { ...r.meta, moment, change, action, ...(labels ? { labels: null } : {}) },
   })
 
   async function addChange(scope: string, kind: Kind, r: StoredRecord, action: 'create' | 'update', moment?: string) {
     const n = (await store.changes(scope, kind, keyOf(r))).length + 1
-    await store.addChange(scope, kind, keyOf(r), snapshot(r, n, action, moment))
+    await store.addChange(scope, kind, keyOf(r), snapshot(r, n, action, moment, kind !== 'anchors'))
   }
 
   // An event about a record (effects): `<record>-<what>`, linked to the record.
@@ -479,6 +481,10 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     }
     if (kind === 'wallets' && data.bridge && !(await store.get(scope, 'bridges', data.bridge)))
       throw new LedgerError(422, 'record.relation-not-found', `Referenced Bridge ${data.bridge} not found.`)
+    // Recorded (anchors): an anchor names an existing wallet, whatever
+    // `anchor.walletRequired` says (the docs make it optional without it).
+    if (kind === 'anchors' && !(typeof data.wallet === 'string' && (await store.get(scope, 'wallets', data.wallet))))
+      throw new LedgerError(422, 'record.relation-not-found', `Cannot find anchor wallet '${data.wallet}'`)
     if (kind === 'schemas') return checkContent(data.schema)
     const record = KINDS[kind].record
     if (typeof data.schema === 'string') {
@@ -586,7 +592,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       else await applyStatus(tx, acl, t.ledger, record, current, stored)
       await tx.update(t.scope, t.kind, current)
       const n = (await tx.changes(t.scope, t.kind, keyOf(current))).length + 1
-      await tx.addChange(t.scope, t.kind, keyOf(current), snapshot(current, n, 'update', now()))
+      await tx.addChange(t.scope, t.kind, keyOf(current), snapshot(current, n, 'update', now(), t.kind !== 'anchors'))
       return current
     }).then(async (current) => {
       if (t.scope) await raise(t.scope, t.kind, 'proofs-added', { proofs: [stored], [record]: keyOf(current) }, current)
@@ -650,7 +656,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // Drop: signed like an update (data.parent = current hash), 204, then gone (a read
   // is 404). What may not be dropped (recorded): a wallet that still holds a balance,
   // a bridge a wallet names (`drops`). System policies may be (`drops`).
-  const dropOf = (kind: 'wallets' | 'effects' | 'bridges' | 'policies', guard?: (scope: string, found: StoredRecord) => Promise<void>) =>
+  const dropOf = (kind: 'wallets' | 'effects' | 'bridges' | 'policies' | 'anchors', guard?: (scope: string, found: StoredRecord) => Promise<void>) =>
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       validateBody('drop', req.body)
       const who = await authenticate(req)
@@ -669,12 +675,19 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     wallets: dropOf('wallets', async (scope, found) => {
       const held = (await store.balances(scope, found.data.handle)).filter((b) => b.data.amount !== 0)
       if (held.length) throw errors.dropRejected(`Wallet ${found.data.handle} still holds a balance.`)
+      // Recorded (anchors, with `anchor.walletRequired` on): the anchors are named.
+      const anchors = (await store.list(scope, 'anchors')).filter((a) => a.data.wallet === found.data.handle)
+      if (anchors.length)
+        throw new LedgerError(422, 'record.drop-rejected', `Cannot drop wallet '${found.data.handle}' with anchors associated with it`, {
+          anchors: anchors.map((a) => a.data.handle),
+        })
     }),
     bridges: dropOf('bridges', async (scope, found) => {
       if ((await store.list(scope, 'wallets')).some((w) => w.data.bridge === found.data.handle))
         throw errors.dropRejected(`Bridge ${found.data.handle} is in use by wallets. Please remove it from the wallets first.`)
     }),
     policies: dropOf('policies'),
+    anchors: dropOf('anchors'),
     effects: dropOf('effects'),
   }
   for (const [kind, handler] of Object.entries(drops)) {
@@ -732,6 +745,17 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       reply.status(202).send()
     })
   }
+
+  // The wallet's local anchors (`data.wallet`); a wallet that does not exist has none
+  // (recorded, anchors). Anchors a bridge serves (trait `anchors`) are not asked yet.
+  app.get<{ Params: { id: string } }>('/api/v2/wallets/:id/anchors', async (req) => {
+    const who = await authenticate(req)
+    const ledger = await hostedLedger(req)
+    await acl.authorize('read', 'anchor', { who }, { ledger })
+    // A signed list without `page` (recorded).
+    const rows = (await store.list(ledger.data.handle, 'anchors')).filter((a) => a.data.wallet === req.params.id)
+    return envelope(req.ledgerKey, [...rows].reverse())
+  })
 
   app.get<{ Params: { id: string } }>('/api/v2/wallets/:id/balances', async (req) => {
     const who = await authenticate(req)
