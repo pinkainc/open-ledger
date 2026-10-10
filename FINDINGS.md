@@ -1,8 +1,56 @@
 # Findings
 
 Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/api/v2`,
-service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
+service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
+
+## 2026-10-10 — Reports: the reporting protocol, statuses, assets
+
+Recorded with `reports` (54 exchanges + 14 bridge calls, through a tunnel) and
+`reports2` (243, client proofs only) on 2.47.4, reproduced
+(`server/test/reports.test.ts`, `server/src/reports.ts`).
+
+- **A report (`$rep`) needs `data.schema`**, also when no report schema exists
+  (`request/body/data must have required property 'schema'`). An unknown schema, or
+  one for another record: `record.relation-not-found` `Schema X not found for record of
+  type report.` `custom` is validated by the schema like any user schema.
+- **The protocol is the generic effect one.** No special trait: the docs' `reports`
+  trait is refused by the bridge schema (the enum is debits, credits, statuses,
+  anchors, domains, effects, ping). An effect on `report-created` (filter
+  `report.data.schema`) with a bridge action posts `{handle, signal, report}` to the
+  bridge's `/effects/{effect}` (trait `effects`). The bridge signs proofs on the
+  report (`POST /reports/{id}/proofs`) over the unchanged hash; the ledger does not
+  countersign them. The tutorial's `preparing` is `pending` in its own code.
+- **Creating a report also raises `report-proofs-added`**, carrying the ledger's own
+  `created` proof. Every stored proof raises one more.
+- **Status table** (all 25 pairs recorded): created → pending | rejected; pending →
+  completed | rejected; completed → settled; rejected → pending | completed (a
+  retry); settled → nothing. Anything else: 422 `record.update-rejected` `Proof
+  contains invalid status change, from X to Y`. A proof repeating the current status
+  is answered 200 and **dropped**: not stored, no change, no event. An unknown status
+  is a schema error listing the five. The docs' "rejected at any stage before
+  completion" is wrong: completed → rejected is refused.
+- **Assets** are set from a `completed` proof's `custom.assets` into `meta.assets` (an
+  empty list too; none without the field). Each `output` must be
+  `gs://{reporting bucket}/ledgers/{ledger}/schemas/{schema}/reports/{luid}/assets/{file}`
+  with `file` = the asset handle. The sandbox's bucket is `ledger-reports-stg`. A bad
+  asset is a **500** whose stack trace names the reason (`Invalid gs URL`, `bucket (…)
+  different than reporting bucket`, `filename (…) different than asset handle`); the
+  proof is not stored, the report stays `pending`. Assets on a `pending` proof stay in
+  the proof only. We answer 422 `record.invalid` (divergences.json).
+- **`GET /reports/{id}/assets/{asset}`** (the SDK's `downloadAsset`, not in the spec)
+  streams the file from the reference's GCS bucket. Unknown asset or a report without
+  assets: 500 (`Cannot read properties of undefined`). An accepted asset whose file is
+  not in the bucket **drops the connection** (503 from the gateway, twice): do not
+  record that again. Unknown report: 404 `Report not found`. We serve files from
+  `OPEN_LEDGER_REPORTS_DIR` and answer 404 otherwise.
+- Reports have no `PUT` (spec): data never changes after creation. Drop by `DELETE`
+  and by `POST …/drop` (204, then 404). Lists filter by `meta.status` and
+  `data.schema`. The CLI's `report create/list/show/sign/changes/drop` work against us
+  (`scripts/cli-e2e.sh`).
+- Not recorded `(?)`: whether the ledger and luid inside an asset path are checked
+  (we check the shape), a report in a domain (`/domains/{d}/` in the path), status
+  policies on reports, `report-dropped`.
 
 ## 2026-10-10 — Authentication: signer factors, OAuth tokens, `hsh`
 

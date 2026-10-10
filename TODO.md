@@ -54,7 +54,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       stuck intents of the reference rejected by us (divergences.json)
 - [ ] (?) The daily window: rolling 24 hours (ours) or a UTC day; a destroy towards dailyAmount
 - [ ] Daily limits read every completed intent of the ledger per check; keep aggregates instead
-- [ ] L6 unit test "a bridge that never answers a prepare" flaked once under the full suite (5 s budget); passes alone
+- [x] L6 unit test "a bridge that never answers a prepare" timed out: the unit tests' Postgres database had grown to
+      3735 ledgers and the expiry scan read them all; `check.sh` now gives the tests an empty one per run
 - [x] A limit on a wallet with no balance row creates an `available` row of 0 (`limits2`); a daily one does not
 - [ ] Balance reservations visible while an intent is in flight (only matters once
       intents wait on external participants, L5)
@@ -110,6 +111,20 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] (?) An authentication value's `target.schema`; an external IdP token whose `sub` is no signer
 - [ ] (?) Who may `include=meta.secret` (we: `read` on `signer-factor-secret`)
 - [ ] `signer.factor.oauth.allowClientCredentials`: own credentials accepted, not recorded
+
+## Reports (recorded: `reports` 49/54 + 13/14, `reports2` 236/243; the rest deliberate)
+
+- [x] `$rep` records: 9 operations, schema required, custom validated by the report schema
+- [x] `report-created` → effect → reporting bridge (`/effects/{effect}`); `report-proofs-added`
+      also for the ledger's `created` proof
+- [x] Status table (25 pairs recorded); a repeated status is dropped (no proof, change, event)
+- [x] Assets on `completed`: bucket (`OPEN_LEDGER_REPORTS_BUCKET`), path shape, file = handle;
+      422 where the reference answers 500 (divergences.json)
+- [x] `GET /reports/{id}/assets/{asset}` from `OPEN_LEDGER_REPORTS_DIR` (the reference reads GCS)
+- [x] `minka report create/list/show/sign/changes/drop` in `scripts/cli-e2e.sh`
+- [ ] (?) Asset path: are the ledger and luid in it checked? A report in a domain (`/domains/{d}/`)
+- [ ] (?) Status policies on reports; `report-dropped` (we raise it; not recorded)
+- [ ] (?) Do not record a download of an asset missing from the bucket: it drops the reference's connection
 
 ## L5 — 2PC with one external participant (bridge), idempotency by handle
 
@@ -240,7 +255,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 ## E2E — the official `minka` CLI
 
 - [x] `scripts/cli-e2e.sh`: connect, signer, ledger, symbol, wallets, issue, transfer, balances,
-      lists, filtered intent list, schema list — 19 steps, balances checked over HTTP; part of
+      lists, filtered intent list, schema list, reports (S3) — 30 steps, balances checked over HTTP; part of
       `npm run check` (Postgres, ~16 s)
 - [x] `GET /api/v2` server info (`{handle, server, semver, status}`), `PUBLIC_URL`, `SERVER_HANDLE`
 - [x] Ledger create without a token (the CLI sends none; the proofs sign it)

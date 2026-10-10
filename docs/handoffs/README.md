@@ -64,7 +64,7 @@ povijest.
 | --- | --- | --- | --- | --- |
 | S1 | Pristup i limiti | gotovo | `75f319a` | 122/146, 92 potvrđeno; policies, policy-based, dnevni limiti, `claims2`; S2 nije započet |
 | S2 | Autentikacija (factors, oauth, hsh) | gotovo | `da44b4c` | 132/146, 101 potvrđeno; factors 43/43, oauth 21/21, hsh 18/18; OAuth2 cache za bridgeove |
-| S3 | Reports | otvoreno | | |
+| S3 | Reports | gotovo | `340c2fb` | 141/146, 110 potvrđeno; reports 49/54 + 13/14, reports2 236/243 (ostalo namjerno: 500 reference); `minka report` u CLI e2e |
 | S4 | Ledger i sustav → 146/146 | otvoreno | | |
 | S5 | Usmjeravanje i domene | otvoreno | | |
 | S6 | L9 cross-ledger | otvoreno | | |
