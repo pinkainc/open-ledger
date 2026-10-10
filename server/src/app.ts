@@ -4,6 +4,8 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import { SignJWT, decodeProtectedHeader, jwtVerify } from 'jose'
 import { createPrivateKey, createPublicKey, randomBytes, timingSafeEqual } from 'node:crypto'
 import { customAlphabet } from 'nanoid'
+import { createReadStream, existsSync } from 'node:fs'
+import { resolve, sep } from 'node:path'
 import { AccessControl, type Access, type Principal } from './access.js'
 import { Core, hasTrait } from './core.js'
 import { resolveAddress } from './routing.js'
@@ -11,12 +13,13 @@ import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, sig
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
 import { matches, parseQuery } from './query.js'
-import { validateBody, type ValidatedKind } from './schemas.js'
+import { validateBody, validateReportProof, type ValidatedKind } from './schemas.js'
 import { keyOf, type Store, type StoredRecord } from './store.js'
 import { applyStatus } from './status.js'
 import { secretRefs } from './secrets.js'
 import { SYSTEM_SCHEMAS } from './system-schemas.js'
 import { checkContent, schemaNotFound, schemaRequired, validateData } from './user-schemas.js'
+import { checkAssets, objectPath, statusChange } from './reports.js'
 
 export type AppOptions = {
   store: Store
@@ -33,6 +36,11 @@ export type AppOptions = {
    * address is taken from the request (`Host`, `X-Forwarded-Proto`).
    */
   server?: { handle?: string; url?: string }
+  /**
+   * Report assets (reports.ts): the reporting bucket every asset must name (any, when
+   * unset), and the local directory `GET /reports/{id}/assets/{asset}` serves them from.
+   */
+  reports?: { bucket?: string; dir?: string }
 }
 
 /** The reference release whose API this server answers (published spec version). */
@@ -55,12 +63,13 @@ const KINDS = {
   anchors: { luid: '$anc', name: 'Anchor', record: 'anchor' },
   domains: { luid: '$dom', name: 'Domain', record: 'domain' },
   factors: { luid: '$snf', name: 'Signer Factor', record: 'signer-factor' },
+  reports: { luid: '$rep', name: 'Report', record: 'report' },
 } as const
 type Kind = keyof typeof KINDS
 
 /** Kinds with the full record surface under `/api/v2/<kind>`. */
-const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects', 'anchors', 'domains'] as const
-/** Kinds a client may update and sign after creation. Intents are immutable. */
+const TOP_LEVEL = ['symbols', 'wallets', 'intents', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects', 'anchors', 'domains', 'reports'] as const
+/** Kinds a client may update after creation. Intents are immutable; reports change by proof only (no PUT in the spec). */
 const MUTABLE = ['symbols', 'wallets', 'signers', 'circles', 'policies', 'bridges', 'schemas', 'effects', 'anchors', 'domains'] as const
 
 const PAGE_LIMIT = 20
@@ -75,7 +84,7 @@ declare module 'fastify' {
   }
 }
 
-export function buildApp({ store, core = new Core(store), onRoute, serverRules = DEFAULT_SERVER_RULES, server = {} }: AppOptions) {
+export function buildApp({ store, core = new Core(store), onRoute, serverRules = DEFAULT_SERVER_RULES, server = {}, reports = {} }: AppOptions) {
   const app = Fastify({ logger: false })
   if (onRoute) app.addHook('onRoute', (r) => [r.method].flat().forEach((m) => onRoute(m, r.url)))
   const acl = new AccessControl(store, serverRules)
@@ -395,6 +404,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await keepSecrets(scope, kind, keyOf(record), secrets)
     await addChange(scope, kind, record, 'create')
     if (scope && kind !== 'circle-signers') await raise(scope, kind, 'created', { [KINDS[kind].record]: record }, record)
+    // Recorded (reports): the ledger's own `created` proof counts as added proofs.
+    if (kind === 'reports') await raise(scope, kind, 'proofs-added', { proofs: [record.meta.proofs.at(-1)], report: keyOf(record) }, record)
     if (kind === 'intents') core.schedule(scope, body.data.handle)
     return record
   }
@@ -675,10 +686,22 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (!proof?.digest || !proof?.public || !proof?.result) throw errors.signatureMissing()
     if (proof.digest !== digestFor(t.found.hash, proof.custom) || !verifyDigest(proof.digest, proof.public, proof.result))
       throw errors.signatureInvalid(proof.public)
+    if (t.kind === 'reports') validateReportProof(sent)
     const [stored] = await annotate(t.ledger.data.handle, [proof])
     // Intents are also written by the core; append under the ledger's lock.
+    let dropped = false
     return store.transaction(t.ledger.data.handle, async (tx) => {
       const current = (await tx.get(t.scope, t.kind, keyOf(t.found))) ?? t.found
+      const status = stored.custom?.status
+      // A report's status moves along its table; a proof repeating it is dropped (reports.ts).
+      if (t.kind === 'reports' && typeof status === 'string' && !statusChange(String(current.meta.status), status)) {
+        dropped = true
+        return current
+      }
+      if (t.kind === 'reports' && status === 'completed' && stored.custom?.assets !== undefined) {
+        checkAssets(stored.custom.assets, reports.bucket)
+        current.meta = { assets: stored.custom.assets, ...current.meta }
+      }
       // An intent's status belongs to its processing: a participant's report (which
       // carries a status) is appended and read by the core, never applied here. A late
       // duplicate `committed` must not move a completed intent back.
@@ -689,6 +712,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       await tx.addChange(t.scope, t.kind, keyOf(current), snapshot(current, n, 'update', now(), t.kind !== 'anchors'))
       return current
     }).then(async (current) => {
+      if (dropped) return current
       if (t.scope) await raise(t.scope, t.kind, 'proofs-added', { proofs: [stored], [record]: keyOf(current) }, current)
       // A participant reporting on an entry (`custom.handle`) may let the intent move on.
       if (t.kind === 'intents' && typeof stored.custom?.handle === 'string') core.schedule(t.scope, current.data.handle)
@@ -753,7 +777,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // is 404). What may not be dropped (recorded): a wallet that still holds a balance,
   // a bridge a wallet names (`drops`). System policies may be (`drops`).
   type DropParams = { Params: { id: string; signer?: string } }
-  const dropOf = (kind: 'wallets' | 'effects' | 'bridges' | 'policies' | 'anchors' | 'factors', guard?: (scope: string, found: StoredRecord, req: FastifyRequest<DropParams>) => Promise<void>) =>
+  const dropOf = (kind: 'wallets' | 'effects' | 'bridges' | 'policies' | 'anchors' | 'factors' | 'reports', guard?: (scope: string, found: StoredRecord, req: FastifyRequest<DropParams>) => Promise<void>) =>
     async (req: FastifyRequest<DropParams>, reply: FastifyReply) => {
       validateBody('drop', req.body)
       const who = await authenticate(req)
@@ -765,7 +789,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       verifyProofs(body)
       await guard?.(ledger.data.handle, found, req)
       await store.remove(ledger.data.handle, kind, found.data.handle)
-      if (kind === 'effects' || kind === 'factors') await raise(ledger.data.handle, kind, 'dropped', { [KINDS[kind].record]: found }, found)
+      if (kind === 'effects' || kind === 'factors' || kind === 'reports') await raise(ledger.data.handle, kind, 'dropped', { [KINDS[kind].record]: found }, found)
       reply.status(204).send()
     }
   const drops = {
@@ -786,11 +810,28 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     policies: dropOf('policies'),
     anchors: dropOf('anchors'),
     effects: dropOf('effects'),
+    reports: dropOf('reports'),
   }
   for (const [kind, handler] of Object.entries(drops)) {
     app.delete<{ Params: { id: string } }>(`/api/v2/${kind}/:id`, handler)
     app.post<{ Params: { id: string } }>(`/api/v2/${kind}/:id/drop`, handler)
   }
+
+  // ---- report assets (reports.ts) ------------------------------------------------------
+
+  // The SDK's `report.downloadAsset` (not in the spec): the file as an attachment named
+  // by the asset's handle. The reference answers an unknown asset, and a report without
+  // assets, with a 500, and fails outright on a file missing from its bucket; we answer 404.
+  app.get<{ Params: { id: string; asset: string } }>('/api/v2/reports/:id/assets/:asset', async (req, reply) => {
+    const { found } = await readable(req, 'reports', req.params.id)
+    const asset = (found.meta.assets as { handle: string; output: string }[] | undefined)?.find((a) => a.handle === req.params.asset)
+    if (!asset) throw new LedgerError(404, 'record.not-found', `Asset ${req.params.asset} not found`)
+    const file = reports.dir && resolve(reports.dir, objectPath(asset.output))
+    if (!file || !file.startsWith(resolve(reports.dir!) + sep) || !existsSync(file))
+      throw new LedgerError(404, 'record.not-found', `Asset ${asset.handle} is not stored on this server`)
+    reply.header('content-type', 'application/octet-stream').header('content-disposition', `attachment; filename="${asset.handle}"`)
+    return reply.send(createReadStream(file))
+  })
 
 
   // ---- signer factors (recorded, factors) ----------------------------------------------

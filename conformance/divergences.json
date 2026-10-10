@@ -91,5 +91,63 @@
     "reference": "Checks daily limits only after commit: the intent stays `committed` forever with a core.limit-exceeded proof (`Daily transactions|amount limit exceeded for wallet <w>`), its debit stays reserved, and it does not count towards later checks.",
     "ours": "Checks daily limits with the other limits before preparing and rejects the intent: failed (same reason and detail) → aborted → rejected; nothing stays reserved.",
     "why": "Same as the maxBalance entry for l3: an intent that can never reach a final status holds funds forever."
+  },
+  {
+    "fixture": "reports",
+    "exchanges": [
+      24,
+      25,
+      26,
+      27
+    ],
+    "what": "Downloading a report asset, GET /reports/{id}/assets/{asset} (the SDK’s report.downloadAsset; not in the spec).",
+    "reference": "A report without meta.assets, or an asset handle it does not have: 500 (`Cannot read properties of undefined (reading 'find'/'output')`). An asset the ledger accepted whose file is not in its bucket: the connection is dropped, 503 from the gateway.",
+    "ours": "404 record.not-found: `Asset {handle} not found`, or `Asset {handle} is not stored on this server` when no file is found under OPEN_LEDGER_REPORTS_DIR.",
+    "why": "Missing things are 404s. Report files live in the deployment’s storage (Minka: its GCS bucket), outside the client API; this server serves them from a configured directory."
+  },
+  {
+    "fixture": "reports",
+    "exchanges": [
+      31
+    ],
+    "what": "A `completed` proof whose assets the ledger refuses: a bucket other than the reporting bucket, an output that is not gs://{bucket}/ledgers/…/reports/{luid}/assets/{file}, a file name other than the asset handle.",
+    "reference": "500 api.unexpected-error `Unexpected server error`, the reason only in the stack trace (`Invalid gs URL: …`, `Error while validating asset, GCS URL bucket (…) different than reporting bucket (…)`, `… GCS URL filename (…) different than asset handle (…)`); the proof is not stored.",
+    "ours": "422 record.invalid with the reference’s message as detail; the proof is not stored.",
+    "why": "The request is invalid, not the server broken: a 500 tells a bridge to retry a proof that can never succeed."
+  },
+  {
+    "fixture": "reports.bridge.jsonl",
+    "exchanges": [
+      1
+    ],
+    "what": "A `completed` proof whose assets the ledger refuses: a bucket other than the reporting bucket, an output that is not gs://{bucket}/ledgers/…/reports/{luid}/assets/{file}, a file name other than the asset handle.",
+    "reference": "500 api.unexpected-error `Unexpected server error`, the reason only in the stack trace (`Invalid gs URL: …`, `Error while validating asset, GCS URL bucket (…) different than reporting bucket (…)`, `… GCS URL filename (…) different than asset handle (…)`); the proof is not stored.",
+    "ours": "422 record.invalid with the reference’s message as detail; the proof is not stored.",
+    "why": "The request is invalid, not the server broken: a 500 tells a bridge to retry a proof that can never succeed."
+  },
+  {
+    "fixture": "reports2",
+    "exchanges": [
+      202,
+      209,
+      215,
+      222
+    ],
+    "what": "A `completed` proof whose assets the ledger refuses: a bucket other than the reporting bucket, an output that is not gs://{bucket}/ledgers/…/reports/{luid}/assets/{file}, a file name other than the asset handle.",
+    "reference": "500 api.unexpected-error `Unexpected server error`, the reason only in the stack trace (`Invalid gs URL: …`, `Error while validating asset, GCS URL bucket (…) different than reporting bucket (…)`, `… GCS URL filename (…) different than asset handle (…)`); the proof is not stored.",
+    "ours": "422 record.invalid with the reference’s message as detail; the proof is not stored.",
+    "why": "The request is invalid, not the server broken: a 500 tells a bridge to retry a proof that can never succeed."
+  },
+  {
+    "fixture": "reports2",
+    "exchanges": [
+      238,
+      239,
+      241
+    ],
+    "what": "Downloading a report asset, GET /reports/{id}/assets/{asset} (the SDK’s report.downloadAsset; not in the spec).",
+    "reference": "A report without meta.assets, or an asset handle it does not have: 500 (`Cannot read properties of undefined (reading 'find'/'output')`). An asset the ledger accepted whose file is not in its bucket: the connection is dropped, 503 from the gateway.",
+    "ours": "404 record.not-found: `Asset {handle} not found`, or `Asset {handle} is not stored on this server` when no file is found under OPEN_LEDGER_REPORTS_DIR.",
+    "why": "Missing things are 404s. Report files live in the deployment’s storage (Minka: its GCS bucket), outside the client API; this server serves them from a configured directory."
   }
 ]

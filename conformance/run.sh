@@ -49,7 +49,8 @@ else
   # A recorded one-minute expiry takes a second here; see OPEN_LEDGER_MINUTE_MS in main.ts.
   # PUBLIC_URL: the server answers for the reference's address, so a token's `hsh`
   # (computed over that address by the scenario, HSH_URL) holds for both.
-  PORT=$SERVER_PORT PUBLIC_URL=$REFERENCE/api/v2 OPEN_LEDGER_MINUTE_MS=${OPEN_LEDGER_MINUTE_MS:-1000} npx tsx server/src/main.ts 2>.rec/server.log &
+  # OPEN_LEDGER_REPORTS_BUCKET: the sandbox's reporting bucket, which report assets must name.
+  PORT=$SERVER_PORT PUBLIC_URL=$REFERENCE/api/v2 OPEN_LEDGER_REPORTS_BUCKET=ledger-reports-stg OPEN_LEDGER_MINUTE_MS=${OPEN_LEDGER_MINUTE_MS:-1000} npx tsx server/src/main.ts 2>.rec/server.log &
   pids+=($!)
   wait_port $SERVER_PORT
   target=http://127.0.0.1:$SERVER_PORT

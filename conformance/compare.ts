@@ -72,6 +72,8 @@ function normaliser() {
       .replace(/\b([Ii]ntent) ([A-Za-z0-9]{17})\b/g, (_, w, id) => `${w} ${token('id', id)}`)
       .replace(/\/intents\/([A-Za-z0-9]{17})$/, (_, id) => `/intents/${token('id', id)}`)
       .replace(/'([A-Za-z0-9]{17})'/g, (_, id) => `'${token('id', id)}'`)
+      // Luids inside paths, e.g. a report asset's `gs://…/reports/$rep.…/assets/…`.
+      .replace(/\$[a-z]{3}\.-[\w-]{16}/g, (l) => token(`luid:${l.slice(1, 4)}`, l))
   }
   const walk = (x: any): any => {
     if (typeof x === 'string') return value(x)

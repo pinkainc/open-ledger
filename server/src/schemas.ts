@@ -187,6 +187,8 @@ const DATA = {
   domains: { allOf: [{ type: 'object', properties: { handle: {}, parent: {}, access: {}, custom: {}, schema: {} } }, baseData], unevaluatedProperties: false },
   effects: { allOf: [{ type: 'object', required: ['signal', 'action'], properties: { signal: { enum: SIGNALS }, action: effectAction } }, baseData] },
   factors: factorData,
+  // Recorded (reports): `schema` is required whether or not a report schema exists.
+  reports: { allOf: [{ type: 'object', required: ['schema'], properties: { schema: { type: 'string' } } }, baseData] },
 } as const
 
 export type ValidatedKind = keyof typeof DATA
@@ -212,8 +214,17 @@ function toWire(e: ErrorObject) {
   }
 }
 
-export function validateBody(kind: ValidatedKind, body: unknown) {
-  const validate = validators[kind]
+// A report proof's status is one of the report statuses (recorded, reports).
+const reportProof = ajv.compile({
+  type: 'object',
+  properties: { custom: { type: 'object', properties: { status: { enum: ['created', 'pending', 'completed', 'rejected', 'settled'] } } } },
+})
+
+export const validateReportProof = (body: unknown) => check(reportProof, body)
+
+export const validateBody = (kind: ValidatedKind, body: unknown) => check(validators[kind], body)
+
+function check(validate: ReturnType<typeof ajv.compile>, body: unknown) {
   if (validate(body ?? {})) return
   const errs = validate.errors ?? []
   const detail = `Schema validation error: ${errs.map((e) => `request/body${e.instancePath} ${messageOf(e)}`).join(', ')}`

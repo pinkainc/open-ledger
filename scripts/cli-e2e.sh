@@ -2,7 +2,8 @@
 # End-to-end: the official `minka` CLI against our server, through a typical flow.
 #
 #   server connect → signer → ledger → symbol → wallets → issue → transfer →
-#   balances → intent list/show → wallet/symbol/signer reads
+#   balances → intent list/show → wallet/symbol/signer reads →
+#   report schema → report create/list/show/sign/changes/drop
 #
 #   scripts/cli-e2e.sh              start a server (memory, or DATABASE_URL) on :4640
 #   BASE=http://…/api/v2 scripts/cli-e2e.sh    use a running server instead
@@ -55,6 +56,16 @@ step() {
   fi
 }
 
+# refused <title> <expected error regex> -- <minka args…>: a command that must fail so
+refused() {
+  local title=$1 want=$2; shift 3
+  local out
+  out=$(timeout 90 "$SEQ" 30 '' -- "$@" 2>&1 | clean)
+  { echo "### $title"; echo "\$ minka $*"; echo "$out"; echo; } >> "$LOG"
+  if grep -q 'Reason: ' <<<"$out" && grep -Eq "$want" <<<"$out"; then echo "  ok    $title"
+  else echo "  FAIL  $title (wanted an error matching $want)"; fails=$((fails + 1)); fi
+}
+
 # balance <wallet> <symbol> → the available amount, read over HTTP
 balance() {
   curl -s -H "x-ledger: $LEDGER" "$BASE/wallets/$1/balances" |
@@ -92,6 +103,24 @@ step "show the symbol" 'usd' '' -- symbol show usd
 step "list ledger signers" 'system' '' -- signer list --remote
 step "list intents filtered by status" 'i-issue' '' -- intent list --filter '{"meta.status.$in":["completed"],"data.handle":"i-issue"}'
 step "list the schemas" 'rest' '' -- schema list
+
+# Reports (docs: reporting/reports-from-cli): a report schema (the schema content is a
+# plain input under INLINE_EDITOR), a report, a status proof, changes and drop. No
+# reporting bridge here: the report stays `created` until a proof moves it.
+REPORT_SCHEMA='{"type":"object","required":["custom"],"properties":{"custom":{"type":"object","required":["account"],"properties":{"account":{"type":"string"}}}}}'
+step "create a report schema" 'rep-acct' \
+  "Handle>>rep-acct;Record>>@DOWN8;custom data>>@ENTER;enter the schema>>@ENTER;Enter schema content>>$REPORT_SCHEMA;$SIGN" -- -ie schema create
+step "create a report" 'Status: created' \
+  "Handle>>r-1;Schema>>@ENTER;Add custom data>>@YES;Field class>>@ENTER;Field title>>account;Field value>>1001001001;What do you want to do next>>@DOWN2;$SIGN" -- -ie report create
+step "list reports" 'r-1' '' -- report list
+step "show the report" 'account: 1001001001' '' -- report show r-1
+step "sign the report pending" 'pending' \
+  "Signer:>>@ENTER;password>>@PASS;Add custom data>>@YES;Field class>>@ENTER;Field title>>status;Field value>>pending;What do you want to do next>>@DOWN2;Add another signature>>@ENTER;Are you sure>>@YES" -- -ie report sign r-1
+step "show the report pending" 'Status: pending' '' -- report show r-1
+step "list report changes" 'r-1' '' -- report changes list r-1
+step "show report change 1" 'Handle: r-1' '' -- report changes show r-1 1
+step "drop the report" 'dropped|success' 'Signer:>>@ENTER;password>>@PASS;Confirm to drop>>@YES' -- -ie report drop r-1
+refused "the dropped report is gone" 'record.not-found' -- report show r-1
 
 a=$(balance alice usd) b=$(balance bob usd)
 if [ "$a/$b" = "7500/2500" ]; then echo "  ok    balances alice 7500, bob 2500 (factor 100)"

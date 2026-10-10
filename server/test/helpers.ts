@@ -2,7 +2,7 @@
 // unit tests exercise the same contract real clients depend on.
 import { LedgerSdk } from '@minka/ledger-sdk'
 import { createKeyPair } from '@minka/ledger-sdk/crypto'
-import { buildApp } from '../src/app.js'
+import { buildApp, type AppOptions } from '../src/app.js'
 import { Core } from '../src/core.js'
 import { MemoryStore } from '../src/store.js'
 import { PgStore } from '../src/pg-store.js'
@@ -15,8 +15,8 @@ export type KeyPair = Awaited<ReturnType<typeof createKeyPair>>
 export const STORES: [string, () => Promise<Store & { close?: () => Promise<void> }>][] = [['memory', async () => new MemoryStore()]]
 if (process.env.DATABASE_URL) STORES.push(['postgres', () => PgStore.connect(process.env.DATABASE_URL!)])
 
-export async function startServer(store: Store & { close?: () => Promise<void> } = new MemoryStore(), core = new Core(store)) {
-  const app = buildApp({ store, core })
+export async function startServer(store: Store & { close?: () => Promise<void> } = new MemoryStore(), core = new Core(store), options: Partial<AppOptions> = {}) {
+  const app = buildApp({ ...options, store, core })
   await app.listen({ port: 0, host: '127.0.0.1' })
   const { port } = app.server.address() as { port: number }
   return {
