@@ -7,12 +7,13 @@
 //   BASE=http://localhost:4610/api/v2 RUN=20260926a tsx conformance/scenarios/l0.ts
 import { LedgerSdk } from '@minka/ledger-sdk'
 import { createKeyPair } from '@minka/ledger-sdk/crypto'
+import { operatorKeyPair } from '../identity.js'
 
 const BASE = process.env.BASE ?? 'http://localhost:4610/api/v2'
 const RUN = process.env.RUN ?? new Date().toISOString().replace(/\D/g, '').slice(0, 14)
 const LEDGER = `open-ledger-conf-${RUN}`
 
-const keyPair = await createKeyPair()
+const keyPair = await operatorKeyPair()
 const secure = (aud: string) => ({
   // Same claim shape the official CLI builds (sendIntent in @minka/cli 2.45.1).
   iss: keyPair.public,

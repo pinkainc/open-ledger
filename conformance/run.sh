@@ -2,7 +2,8 @@
 # Conformance runner.
 #
 #   conformance/run.sh record l0    capture the reference ledger into fixtures/ (creates
-#                                   one ledger on the public sandbox; it cannot be deleted)
+#                                   one ledger on the public sandbox; it cannot be deleted,
+#                                   so the run is logged in conformance/footprint.jsonl)
 #   conformance/run.sh check  l0    run the same scenario against our server and compare
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -17,8 +18,14 @@ RUN=${RUN:-$(date -u +%Y%m%d%H%M%S | tr -d '\n')$(printf '%s' $RANDOM | tail -c 
 mkdir -p .rec conformance/fixtures
 
 pids=()
+started=
 # Waits for the ports to close, so the next run does not take them for another run's.
+# A recording that began is logged as ended, kept or not, failed or not (footprint.ts).
 cleanup() {
+  rc=$?
+  if [ -n "$started" ]; then
+    npx tsx conformance/footprint.ts end "$RUN" "$LEVEL" "$rc" "$out" ${bridge_out:-} || echo "footprint: end not logged for $RUN" >&2
+  fi
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
   for _ in $(seq 50); do
     nc -z 127.0.0.1 $PROXY_PORT 2>/dev/null || nc -z 127.0.0.1 $SERVER_PORT 2>/dev/null || nc -z 127.0.0.1 $BRIDGE_PORT 2>/dev/null || return 0
@@ -73,6 +80,14 @@ if grep -q needs-bridge conformance/scenarios/$LEVEL.ts; then
   export BRIDGE_OUT=$bridge_out BRIDGE_PORT
 fi
 export BRIDGE_URL
+
+if [ "$MODE" = record ]; then
+  # Ledgers on the sandbox are created by one operator key kept outside the repo, and
+  # every recording is logged before its first request (conformance/footprint.jsonl).
+  export OPEN_LEDGER_OPERATOR_KEY=${OPEN_LEDGER_OPERATOR_KEY:-${XDG_CONFIG_HOME:-$HOME/.config}/open-ledger/sandbox-operator.json}
+  npx tsx conformance/footprint.ts start "$RUN" "$LEVEL" "$REFERENCE"
+  started=1
+fi
 
 echo "==> $LEVEL against $target (run $RUN)"
 # DIRECT bypasses the proxy, for polling whose count would otherwise depend on timing.

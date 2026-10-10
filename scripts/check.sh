@@ -34,3 +34,4 @@ if command -v minka >/dev/null; then
 fi
 
 echo "==> coverage" && npx tsx conformance/coverage.ts
+echo "==> sandbox footprint" && npx tsx conformance/footprint.ts verify

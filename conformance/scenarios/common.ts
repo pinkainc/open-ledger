@@ -2,7 +2,7 @@
 // official CLI configures one, an SDK through the recording proxy (BASE), and one
 // that bypasses it (DIRECT) for polling, whose request count depends on timing.
 import { LedgerSdk } from '@minka/ledger-sdk'
-import { createKeyPair } from '@minka/ledger-sdk/crypto'
+import { operatorKeyPair } from '../identity.js'
 
 export async function scenario(opts: { expiryMinutes?: number; settleSeconds?: number; skipLedger?: boolean } = {}) {
   const BASE = process.env.BASE ?? 'http://localhost:4610/api/v2'
@@ -10,7 +10,7 @@ export async function scenario(opts: { expiryMinutes?: number; settleSeconds?: n
   const RUN = process.env.RUN ?? new Date().toISOString().replace(/\D/g, '').slice(0, 14)
   const LEDGER = `open-ledger-conf-${RUN}`
 
-  const keyPair = await createKeyPair()
+  const keyPair = await operatorKeyPair()
   const secure = { iss: keyPair.public, sub: `signer:${keyPair.public}`, aud: LEDGER, exp: 3600, createHsh: false, kid: keyPair.public, keyPair } as any
   const mine = [{ action: 'any', signer: { public: keyPair.public } }]
 

@@ -7,14 +7,14 @@
 //
 //   BASE=http://localhost:4610/api/v2 DIRECT=https://ldg-stg.one/api/v2 RUN=x tsx conformance/scenarios/l1.ts
 import { LedgerSdk } from '@minka/ledger-sdk'
-import { createKeyPair } from '@minka/ledger-sdk/crypto'
+import { operatorKeyPair } from '../identity.js'
 
 const BASE = process.env.BASE ?? 'http://localhost:4610/api/v2'
 const DIRECT = process.env.DIRECT ?? BASE
 const RUN = process.env.RUN ?? new Date().toISOString().replace(/\D/g, '').slice(0, 14)
 const LEDGER = `open-ledger-conf-${RUN}`
 
-const keyPair = await createKeyPair()
+const keyPair = await operatorKeyPair()
 const secure = {
   iss: keyPair.public,
   sub: `signer:${keyPair.public}`,

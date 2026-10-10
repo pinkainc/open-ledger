@@ -37,6 +37,13 @@ povijest.
   `never-loop-on-sandbox`): bez ruta koje se međusobno prosljeđuju i bez petlji. Takvi
   slučajevi idu samo u unit testove.
 - Snimaj samo kad se scenarij promijeni: svaka snimka ostavlja trajni ledger na stagingu.
+- **Trag na sandboxu je trajna povijest** (od 2026-10-10). `run.sh record` svako snimanje
+  upisuje u `conformance/footprint.jsonl`, i ono koje se odbaci ili padne, a
+  `docs/sandbox-footprint.md` generira iznova. Ledgere stvara jedan ključ operatora iz
+  `~/.config/open-ledger/sandbox-operator.json`; taj se ključ ne briše i ne commita.
+  **Oba footprint fajla commitaj nakon svakog snimanja**, i kad se fixture vrati na staro.
+  Log se ručno ne uređuje, samo se dopisuje. `npm run check` pada ako ledger iz fixturesa
+  nije u logu ili je dokument zastario (`npx tsx conformance/footprint.ts render`).
 - Snimku i check nikad ne pokreći istovremeno (portovi 4610, 4620 i 4630).
 - CLI samo pod ptyjem (`tools/minka-seq.exp`) s izoliranim `HOME`. `~/.minka` korisnika
   se ne dira.
