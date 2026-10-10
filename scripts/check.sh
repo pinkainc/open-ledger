@@ -4,7 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-export DATABASE_URL=$(./scripts/dev-db.sh start)
+# Unit tests get an empty database per run: they never clean up, and the expiry
+# test scans every ledger (3735 after a few weeks of runs pushed it past 5 s).
+export DATABASE_URL=$(./scripts/dev-db.sh fresh open_ledger_test)
 echo "==> typecheck" && npx tsc -p .
 echo "==> unit tests (memory + postgres)"
 npm test > .rec/test.log 2>&1 && ok=1 || ok=0
