@@ -138,8 +138,13 @@ function canonicalBridge(log: Exchange[]): Exchange[] {
   // An intent's status notification (`PUT /intents/…`); other PUTs (anchor forwarding) keep their place.
   const statusCall = (x: any) => x.req?.method === 'PUT' && /\/intents\//.test(String(x.req.url))
   const intentOfEntry = new Map<string, string>()
+  // An intent the ledger bridge made downstream (`<entry>-prepare|commit|abort`) belongs
+  // to the entry it carries out.
+  const downEntry = (x: any) => String(x.downstream).replace(/-[a-z]+$/, '')
+  const downPhase = (x: any) => String(x.downstream).replace(/^.*-/, '')
   const intentOf = (x: any): string => {
     if (x.proof) return intentOfEntry.get(x.proof.handle) ?? ''
+    if (x.downstream) return intentOfEntry.get(downEntry(x)) ?? ''
     // Token requests are ordered among themselves, ahead of the calls they authorise.
     if (x.token) return 'token'
     const d = x.req.body?.data
@@ -149,6 +154,7 @@ function canonicalBridge(log: Exchange[]): Exchange[] {
   }
   const rank = (x: any): number => {
     if (x.proof) return ['prepared', 'failed'].includes(x.proof.status) ? 1 : 4
+    if (x.downstream) return downPhase(x) === 'prepare' ? 1 : 4
     if (x.token) return 0
     if (statusCall(x)) return x.req.body?.meta?.status === 'prepared' ? 2 : 5
     return x.req.body?.data?.action ? 3 : 0
@@ -161,18 +167,22 @@ function canonicalBridge(log: Exchange[]): Exchange[] {
     const d = x.req?.body?.data
     if (d?.handle && Array.isArray(d.inputs)) inputsOf.set(d.handle, JSON.stringify(d.inputs))
   }
-  const entryOf = (x: any): string => x.proof?.handle ?? String(x.req?.url).match(/(?:deb|cre)_[A-Za-z0-9]{17}/)?.[0] ?? x.req?.body?.data?.handle ?? ''
+  const entryOf = (x: any): string => x.proof?.handle ?? (x.downstream ? downEntry(x) : undefined) ?? String(x.req?.url).match(/(?:deb|cre)_[A-Za-z0-9]{17}/)?.[0] ?? x.req?.body?.data?.handle ?? ''
   const tie = (x: any): string =>
     (x.proof
       ? `${x.bridge ?? ''} ${String(x.proof.handle).slice(0, 3)} ${x.proof.status}`
       : x.token
         ? `${x.bridge ?? ''} token`
-        : `${x.bridge ?? ''} ${String(x.req.url).replace(/(deb|cre)_[A-Za-z0-9]{17}/g, '$1')}`) + ` ${inputsOf.get(entryOf(x)) ?? ''}`
+        : x.downstream
+          ? `${x.bridge ?? ''} ${String(x.downstream).slice(0, 3)} downstream`
+          : `${x.bridge ?? ''} ${String(x.req.url).replace(/(deb|cre)_[A-Za-z0-9]{17}/g, '$1')}`) + ` ${inputsOf.get(entryOf(x)) ?? ''}`
   const order = new Map<string, number>()
   const keyed = log.map((x, i) => {
     const intent = intentOf(x)
     if (!order.has(intent)) order.set(intent, order.size)
-    return { x, i, k: [order.get(intent)!, rank(x)], t: x.bridge ? tie(x) : '' }
+    // One bridge's calls of one phase race as well when an intent has several of its
+    // entries (l9: a debit and a credit aborted together).
+    return { x, i, k: [order.get(intent)!, rank(x)], t: x.bridge || rank(x) === 3 ? tie(x) : '' }
   })
   const sorted = keyed.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.t.localeCompare(b.t) || a.i - b.i).map((e) => e.x)
   // Token requests are compared by form, once each: the reference asked for a token
@@ -206,9 +216,21 @@ const subject = (x: any) =>
       ? { proof: x.proof, answer: x.answer, error: x.error, bridge: x.bridge }
       : x.token
         ? { token: x.token, bridge: x.bridge }
-        : { method: x.req.method, url: x.req.url, body: x.req.body, status: x.res.status, ...(x.seen ? { seen: x.seen } : {}) }
+        : x.downstream
+          ? { downstream: x.downstream, claims: x.claims, answer: x.answer, error: x.error }
+          : x.req === undefined
+            ? x
+            : { method: x.req.method, url: x.req.url, body: x.req.body, status: x.res.status, ...(x.seen ? { seen: x.seen } : {}) }
 const title = (x: any, n: (v: any) => any) =>
-  x.proof ? `proof ${x.bridge ? `${x.bridge} ` : ''}${x.proof.status}` : x.token ? `token ${x.bridge ?? ''}` : `${x.req.method} ${n(x.req.url)}`
+  x.proof
+    ? `proof ${x.bridge ? `${x.bridge} ` : ''}${x.proof.status}`
+    : x.token
+      ? `token ${x.bridge ?? ''}`
+      : x.downstream
+        ? `downstream ${n(x.downstream)}`
+        : x.req === undefined
+          ? `log ${JSON.stringify(x).slice(0, 60)}`
+          : `${x.req.method} ${n(x.req.url)}`
 
 // Reports of several bridges race: adjacent proofs by participants other than the
 // ledger, with the same status, arrive in timing order on the reference as here.

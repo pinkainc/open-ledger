@@ -57,6 +57,16 @@ else
   out=.rec/$LEVEL.candidate.jsonl
 fi
 
+# A scenario that says `needs-local-server` also drives our server (LOCAL) while recording,
+# e.g. to join it to the reference (l9mixed); checking, our server is the target anyway.
+LOCAL=http://127.0.0.1:$SERVER_PORT/api/v2
+if [ "$MODE" = record ] && grep -q needs-local-server conformance/scenarios/$LEVEL.ts; then
+  PORT=$SERVER_PORT npx tsx server/src/main.ts 2>.rec/server.log &
+  pids+=($!)
+  wait_port $SERVER_PORT
+fi
+export LOCAL
+
 rm -f "$out"
 TARGET=$target PORT=$PROXY_PORT OUT=$out npx tsx conformance/proxy.ts 2>.rec/proxy.log &
 pids+=($!)

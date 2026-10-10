@@ -260,8 +260,14 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] `minka bridge events list|show|retry` in the CLI end-to-end
 ## L9 — cross-ledger
 
-- [ ] Two ledgers joined by a bridge (`connecting-systems/cross-ledger-payments.md`): record on
-      the sandbox, then two of our instances, then ours ↔ Minka (plan S6)
+- [x] Two ledgers joined by a bridge (`connecting-systems/cross-ledger-payments.md`): adapter
+      `bridges/ledger-bridge` (2PC calls → intents downstream: hold, destroy, issue); recorded
+      `l9` on two sandbox ledgers, 40/40 + 51/51 on the first run
+- [x] Two of our servers joined by the adapter (`server/test/l9.test.ts`): supply mirror after
+      concurrent random payments, forged call refused (401), entry recovered after a restart
+- [ ] Ours ↔ Minka, both directions (`l9mixed`): record and put in the README
+- [ ] The adapter keeps prepared entries in memory; a restart between prepare and commit
+      recovers them from the intent, but runs in flight are lost (the ledger retries)
 
 ## E2E — the official `minka` CLI
 

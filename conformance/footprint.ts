@@ -119,19 +119,34 @@ function render(): string {
   return out.filter((l, i) => l !== '' || out[i - 1] !== '').join('\n')
 }
 
+/**
+ * Further ledgers a scenario creates, by the suffix it gives the run's ledger handle
+ * (`// footprint-ledger: -mint` in the scenario); each is logged as a run of its own.
+ */
+const extraLedgers = (level: string): string[] => {
+  const f = new URL(`./scenarios/${level}.ts`, import.meta.url).pathname
+  return existsSync(f) ? [...readFileSync(f, 'utf8').matchAll(/^\/\/ footprint-ledger: (\S+)$/gm)].map((m) => m[1]) : []
+}
+
 const [cmd, ...args] = process.argv.slice(2)
 if (cmd === 'start') {
   const [run, level, reference] = args
   const key = await loadOrCreateOperatorKey(process.env.OPEN_LEDGER_OPERATOR_KEY ?? defaultOperatorKeyFile())
-  append({ event: 'start', run, ledger: `open-ledger-conf-${run}`, level, at: new Date().toISOString(), reference, operator: key.public, sdk: sdkVersion() })
+  for (const suffix of ['', ...extraLedgers(level)])
+    append({ event: 'start', run: run + suffix, ledger: `open-ledger-conf-${run}${suffix}`, level, at: new Date().toISOString(), reference, operator: key.public, sdk: sdkVersion() })
 } else if (cmd === 'end') {
   const [run, level, exit, fixture, bridge] = args
-  const ledger = `open-ledger-conf-${run}`
-  append({
-    event: 'end', run, ledger, level, at: new Date().toISOString(), exit: Number(exit),
-    exchanges: lines(fixture).filter((l) => l.includes(ledger)).length,
-    bridgeCalls: bridge ? lines(bridge).length : null,
-  })
+  const extra = extraLedgers(level)
+  for (const suffix of ['', ...extra]) {
+    const ledger = `open-ledger-conf-${run}${suffix}`
+    // The run's own ledger counts the exchanges no further ledger claims.
+    const of = (l: string) => (suffix ? l.includes(ledger) : l.includes(ledger) && !extra.some((x) => l.includes(ledger + x)))
+    append({
+      event: 'end', run: run + suffix, ledger, level, at: new Date().toISOString(), exit: Number(exit),
+      exchanges: lines(fixture).filter(of).length,
+      bridgeCalls: bridge && !suffix ? lines(bridge).length : null,
+    })
+  }
   writeFileSync(DOC, render())
 } else if (cmd === 'render') {
   writeFileSync(DOC, render())

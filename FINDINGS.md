@@ -4,6 +4,33 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Two ledgers joined by a bridge (l9, cross-ledger payments)
+
+Recorded with `l9` (40 exchanges on two ledgers, 51 bridge-log lines; one recording) on
+2.47.4. The scenario's ledger is the clearing house of `connecting-systems/cross-ledger-payments`;
+`<ledger>-mint` is the bank's core. The bridge of wallet `mint` is `bridges/ledger-bridge`,
+which carries every entry of `x@mint` out as intents in the bank's ledger. Our server
+matched on the first run (40/40, 51/51); nothing new had to be built in the server.
+
+- **The docs' "cross-ledger" is one ledger and bridges.** The tutorial has a single
+  cloud ledger; a bank's core is behind a bridge. Two ledgers are joined when that core is
+  a ledger too, and the bridge is the adapter between them. Nothing in the client API
+  links ledgers directly.
+- **The clearing ledger checks a debit of `x@mint` against wallet `mint` first**: with
+  `mint` at 0 the intent fails `core.limit-exceeded … for wallet mint` before the bridge
+  is called (our server; the tests rely on it). A bank never sends more than its position.
+- **A bridge's own reason is kept**: the reference accepts `bridge.account-insufficient-balance`
+  and `bridge.account-not-found` in the bridge's `failed` proof and rejects the intent
+  `core.bridge-prepare-failed` `Bridge(s) failed to process intent: mint`.
+- **An aborted intent whose debit the bridge had prepared** gets the abort call, and the
+  bridge's `aborted` proof (here with the `coreId` of the reversing intent downstream) is
+  appended after `rejected`.
+- **2PC calls carry no token** (`authorization` absent, as in l5). The adapter trusts a call
+  only if its body has a valid proof by the clearing ledger's `system` signer over the
+  entry's hash; `GET /signers/system` gives that key on the reference.
+- A commit or abort call carries only `{action, handle, intent}`. The adapter takes the
+  entry from the prepare it saw, or from the intent's proofs after a restart.
+
 ## 2026-10-10 — Route depth, route targets, anchor calls to bridges (routes2)
 
 Recorded with `routes2` (47 exchanges, 5 bridge calls; one recording) on 2.47.4. Every
