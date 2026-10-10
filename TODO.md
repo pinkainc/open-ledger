@@ -4,6 +4,8 @@ Working list, kept in the repo so progress survives between sessions. Checked it
 are done and verified (tests green + conformance where a scenario exists). Newest
 decisions go into `FINDINGS.md` (reference behaviour) or the README (design).
 
+Plan to full parity, session by session: `docs/2026-10-10-plan-do-paritete.md`.
+
 Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox recording first
 
 ## L0 — ledger, symbol, wallet (records only)
@@ -73,8 +75,6 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Forbidden details: `Cannot <action> <record>.` — no soft `detail` difference left at any level
 - [x] Tests for scope, gate, 403 details, bearer and signer matchers, circles, status policies (`access.test.ts`)
 - [ ] Access policies (`{policy: handle}`) and `access.strategy: policy-based`
-- [ ] Status policies: allowed transitions, quorum (`record.status-policy-violation`, quorum-not-met)
-- [ ] Circles and circle signers (`/circles`, `/circles/{id}/signers`)
 - [x] Claim authorisation: `spend` on the source, `issue`/`destroy` on the symbol, `limit` on the
       wallet, by the intent's signers (impersonated proofs count as the token's signer, with its
       `bearer.*` claims). Without it the intent waits after resolution and expires (access4 14/14)
@@ -181,6 +181,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       expires it (thread stuck); we expire it and abort the thread
 - [ ] Thread lookups scan the ledger's intents (only for threads with a forward); index by
       `meta.thread` in Postgres if it shows up
+- [ ] Reports `$rep` (9 operations) and the reporting bridge protocol (plan S3)
+- [ ] `GET /system/requests[/{id}]`, `POST /ledger`, `DELETE /ledger` (plan S4)
 - [ ] Unsupported list filters → 400 `api.query-malformed` `Unsupported filters: '<f>'`
       (seen for `data.origin` on intents); which fields are supported per kind is unknown (?)
 ## L8 — event delivery, retries, `cancelled` (recorded: `events`, 23/23 + 20/20)
@@ -211,6 +213,9 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] (?) Effect retry of a webhook unreachable on the network (we: `target-unreachable`)
 - [ ] `minka bridge events list|show|retry` in the CLI end-to-end
 ## L9 — cross-ledger
+
+- [ ] Two ledgers joined by a bridge (`connecting-systems/cross-ledger-payments.md`): record on
+      the sandbox, then two of our instances, then ours ↔ Minka (plan S6)
 
 ## E2E — the official `minka` CLI
 
