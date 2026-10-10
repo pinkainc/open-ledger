@@ -32,6 +32,17 @@ function normaliser() {
     // Core ids the test bridge hands out in order of arrival: racing prepares swap them.
     if (/^core-\d+$/.test(v)) return '<core-id>'
     if (/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(v)) return '<moment>'
+    // A JWT the ledger issued (OAuth): compared by its decoded header and claims.
+    if (/^eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+$/.test(v)) {
+      const [h, p] = v.split('.').slice(0, 2).map((x) => JSON.parse(Buffer.from(x, 'base64url').toString('utf8')))
+      for (const k of ['iat', 'exp', 'nbf']) if (typeof p[k] === 'number') p[k] = '<epoch>'
+      return `jwt ${JSON.stringify(walk(h))} ${JSON.stringify(walk(p))}`
+    }
+    // Generated OAuth client credentials (signer factors): id, secret.
+    if (/^[A-Za-z0-9_-]{22}$/.test(v)) return token('client-id', v)
+    if (/^[A-Za-z0-9_-]{43}$/.test(v)) return token('client-secret', v)
+    // Keys made per run that are not ed25519 (an RSA public key in DER, base64).
+    if (/^[A-Za-z0-9+/]{100,}={0,2}$/.test(v)) return token('blob', v)
     if (/^\$[a-z]{3}\.-[\w-]{16}$/.test(v)) return token(`luid:${v.slice(1, 4)}`, v)
     if (/^-[\w-]{16}$/.test(v)) return token('thread', v)
     if (/^\{\{ secret\.[a-z0-9]+ \}\}$/.test(v)) return token('secret', v)

@@ -109,6 +109,34 @@ const trait = {
   oneOf: [{ enum: ['debits', 'credits', 'statuses', 'anchors', 'domains', 'effects', 'ping'] }, { type: 'object' }],
 }
 
+// A signer factor (spec: signer-factor-data, recorded in `factors`): one of three
+// shapes, each closed. A key pair without `public` gets one error per branch: the
+// generic shape's unevaluated `format`, the OAuth shape's schema enum, the key pair's
+// missing `public`, then the anyOf.
+const baseFields = { handle: {}, parent: {}, access: {}, custom: {} }
+const factorData = {
+  anyOf: [
+    { allOf: [{ type: 'object', required: ['signer'], properties: { signer: { type: 'string' }, schema: { type: 'string' } } }, { type: 'object', properties: baseFields, required: ['handle'] }], unevaluatedProperties: false },
+    {
+      allOf: [
+        { type: 'object', required: ['schema', 'signer'], properties: { signer: { type: 'string' }, schema: { type: 'string', enum: ['oauth-client-credentials'] }, clientId: { type: 'string' }, clientSecret: { type: 'string' } } },
+        { type: 'object', properties: baseFields, required: ['handle'] },
+      ],
+      unevaluatedProperties: false,
+    },
+    {
+      allOf: [
+        { type: 'object', required: ['schema', 'signer', 'format', 'public'], properties: { signer: { type: 'string' }, schema: { type: 'string', enum: ['key-pair'] }, format: { type: 'string' }, public: { type: 'string' }, secret: { type: 'string' } } },
+        { type: 'object', properties: baseFields, required: ['handle'] },
+      ],
+      unevaluatedProperties: false,
+    },
+  ],
+}
+
+// A body's hash, when it has one (recorded, oauth: an empty hash is a schema error).
+const hash = { type: 'string', pattern: '^[A-Fa-f0-9]{64}$' }
+
 const DATA = {
   ledgers: { allOf: [{ type: 'object', required: ['handle', 'signer'] }, baseData] },
   symbols: { allOf: [{ type: 'object', required: ['factor'] }, baseData] },
@@ -158,6 +186,7 @@ const DATA = {
   },
   domains: { allOf: [{ type: 'object', properties: { handle: {}, parent: {}, access: {}, custom: {}, schema: {} } }, baseData], unevaluatedProperties: false },
   effects: { allOf: [{ type: 'object', required: ['signal', 'action'], properties: { signal: { enum: SIGNALS }, action: effectAction } }, baseData] },
+  factors: factorData,
 } as const
 
 export type ValidatedKind = keyof typeof DATA
@@ -165,7 +194,7 @@ export type ValidatedKind = keyof typeof DATA
 const validators = Object.fromEntries(
   Object.entries(DATA).map(([k, data]) => [
     k,
-    ('unevaluatedProperties' in data ? ajv2019 : ajv).compile({ type: 'object', allOf: [{ type: 'object' }, { type: 'object', required: ['data'], properties: { data } }] }),
+    (JSON.stringify(data).includes('unevaluatedProperties') ? ajv2019 : ajv).compile({ type: 'object', allOf: [{ type: 'object', properties: { hash } }, { type: 'object', required: ['data'], properties: { data } }] }),
   ]),
 ) as Record<ValidatedKind, ReturnType<typeof ajv.compile>>
 

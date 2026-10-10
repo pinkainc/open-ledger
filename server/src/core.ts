@@ -29,6 +29,7 @@ import { Bridges, type BridgeCall, type BridgeOptions, type Outcome } from './br
 import { createHash } from 'node:crypto'
 import { RoutingError, filterMatches, resolveAddress, route } from './routing.js'
 import { SecretBox, resolveRefs, secretRefs } from './secrets.js'
+import { OAuth2Tokens } from './oauth2.js'
 import { matches, parseQuery } from './query.js'
 
 const entryId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 17)
@@ -88,6 +89,8 @@ export class Core {
   access?: AccessControl
   readonly bridges: Bridges
   readonly secrets: SecretBox
+  /** Tokens of bridges' `oauth2` rules, kept while they live (oauth2.ts). */
+  readonly oauth2 = new OAuth2Tokens()
   private readonly minuteMs: number
   private expiryTimer?: NodeJS.Timeout
 
@@ -110,7 +113,8 @@ export class Core {
   // asks the token endpoint — with Basic `clientId:clientSecret` and a form body
   // `grant_type=client_credentials[&scope=…]` — and sets `Authorization: Bearer`.
   // Recorded: the reference asks for a token before every call, `expires_in` or not;
-  // so do we (a cache is an optimisation the docs promise but the reference lacks).
+  // we keep tokens as the docs promise (oauth2.ts). The comparator folds repeated
+  // identical token requests, so the recording still matches.
   private async authorize(call: BridgeCall): Promise<Record<string, string>> {
     const ledger = call.ledger
     const bridge = ledger ? await this.store.get(ledger, 'bridges', call.bridge) : undefined
@@ -126,7 +130,7 @@ export class Core {
     const headers: Record<string, string> = {}
     for (const rule of resolveRefs(rules, (n) => values.get(n)!)) {
       if (rule.schema === 'header') headers[rule.key] = rule.value
-      if (rule.schema === 'oauth2') headers.Authorization = `Bearer ${await oauthToken(rule)}`
+      if (rule.schema === 'oauth2') headers.Authorization = `Bearer ${await this.oauth2.token(rule)}`
     }
     return headers
   }
@@ -1004,19 +1008,6 @@ function flatFilter(filter: Record<string, unknown>) {
     else out[path] = cond
   }
   return out
-}
-
-async function oauthToken(rule: { clientId: string; clientSecret: string; tokenUrl: string; scope?: string }) {
-  const body = new URLSearchParams({ grant_type: 'client_credentials', ...(rule.scope ? { scope: rule.scope } : {}) })
-  const res = await fetch(rule.tokenUrl, {
-    method: 'POST',
-    headers: { authorization: `Basic ${Buffer.from(`${rule.clientId}:${rule.clientSecret}`).toString('base64')}`, 'content-type': 'application/x-www-form-urlencoded' },
-    body,
-    signal: AbortSignal.timeout(30_000),
-  })
-  const json: any = await res.json().catch(() => undefined)
-  if (!res.ok || typeof json?.access_token !== 'string') throw new Error(`OAuth2 token request to ${rule.tokenUrl} failed with status ${res.status}`)
-  return json.access_token as string
 }
 
 // Parts that were asked to prepare: every debit, and the credits once all debits were

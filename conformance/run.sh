@@ -47,7 +47,9 @@ if [ "$MODE" = record ]; then
   out=conformance/fixtures/$LEVEL.reference.jsonl
 else
   # A recorded one-minute expiry takes a second here; see OPEN_LEDGER_MINUTE_MS in main.ts.
-  PORT=$SERVER_PORT OPEN_LEDGER_MINUTE_MS=${OPEN_LEDGER_MINUTE_MS:-1000} npx tsx server/src/main.ts 2>.rec/server.log &
+  # PUBLIC_URL: the server answers for the reference's address, so a token's `hsh`
+  # (computed over that address by the scenario, HSH_URL) holds for both.
+  PORT=$SERVER_PORT PUBLIC_URL=$REFERENCE/api/v2 OPEN_LEDGER_MINUTE_MS=${OPEN_LEDGER_MINUTE_MS:-1000} npx tsx server/src/main.ts 2>.rec/server.log &
   pids+=($!)
   wait_port $SERVER_PORT
   target=http://127.0.0.1:$SERVER_PORT
@@ -91,7 +93,7 @@ fi
 
 echo "==> $LEVEL against $target (run $RUN)"
 # DIRECT bypasses the proxy, for polling whose count would otherwise depend on timing.
-RUN=$RUN BASE=http://127.0.0.1:$PROXY_PORT/api/v2 DIRECT=$target/api/v2 npx tsx conformance/scenarios/$LEVEL.ts
+RUN=$RUN HSH_URL=$REFERENCE/api/v2 BASE=http://127.0.0.1:$PROXY_PORT/api/v2 DIRECT=$target/api/v2 npx tsx conformance/scenarios/$LEVEL.ts
 
 if [ "$MODE" = record ]; then
   npx tsx conformance/own-ledger.ts "$out" "$RUN"

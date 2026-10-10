@@ -42,7 +42,11 @@
 import { errors } from './errors.js'
 import type { Store, StoredRecord } from './store.js'
 
-export type Principal = { public: string; claims: Record<string, unknown> }
+/**
+ * Who a token speaks for: its key, its claims, and for an OAuth token the signer its
+ * `sub` names and the origin impersonated proofs get (`oauth2-token`).
+ */
+export type Principal = { public: string; claims: Record<string, unknown>; signer?: string; origin?: string }
 
 export type Level = 'record' | 'ledger' | 'server'
 

@@ -18,7 +18,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Ledger-level access rules, anonymous access when a rule names no principal
 - [x] Unit tests: crypto against a real Minka signature, app via the official SDK
 - [x] Pagination: `?page.index=&page.limit=` (recorded in L3), echoed in `page`
-- [ ] Verify the `hsh` token claim (needs the client-visible URL; `PUBLIC_URL` setting)
+- [x] Verify the `hsh` token claim against `PUBLIC_URL` (recorded `hsh` 18/18; run.sh points both at the reference's address)
 
 ## L1 — money moves (one ledger, the ledger is the only participant)
 
@@ -98,6 +98,19 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] (?) What makes a waiting intent proceed once its missing signature arrives? A plain proof did
       not (records2). Try a proof with `custom.status` (`pending`? `created`?) in a recording
 - [ ] `GET /ledgers` — lists every ledger on the sandbox; needs a comparison that ignores others
+## Authentication (recorded: `factors` 43/43, `oauth` 21/21, `hsh` 18/18)
+
+- [x] Signer factors `$snf`: 9 operations, generic lifecycle, `secret: null` on key pairs,
+      generated OAuth client credentials, signer in path vs data, list `total: 0`
+- [x] `POST /oauth/token` (client credentials → RS256 JWT from the provider's key-pair factor)
+- [x] RS256 bearer tokens: `kid` = a provider's key-pair factor; impersonation with
+      `origin: oauth2-token`; external IdPs work the same way (not recorded)
+- [ ] (?) `/oauth/token` with bad credentials and no policy: `invalid_grant` or `invalid_client`? (we: policy first)
+- [ ] (?) Does a read with `include=meta.secret` return the creation's client secret? (we: yes)
+- [ ] (?) An authentication value's `target.schema`; an external IdP token whose `sub` is no signer
+- [ ] (?) Who may `include=meta.secret` (we: `read` on `signer-factor-secret`)
+- [ ] `signer.factor.oauth.allowClientCredentials`: own credentials accepted, not recorded
+
 ## L5 — 2PC with one external participant (bridge), idempotency by handle
 
 - [x] Recording through a tunnel: `conformance/bridge.ts`, `needs-bridge` in run.sh, bridge
@@ -112,9 +125,9 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] `secure` rules `header` and `oauth2`, secrets from `meta.secret` sealed with AES-256-GCM
       under `OPEN_LEDGER_MASTER_KEY` (recorded `secure`, 43/44 + 39/39)
 - [x] `traits`: methods listed, `{method, filter}` on the call's data; no `statuses` → no PUT
-- [ ] OAuth2 token cache (the docs promise one for tokens ≥ 60 s; the reference has none)
+- [x] OAuth2 token cache (`oauth2.ts`: JWT `exp`, else `expires_in`, ≥ 60 s, dropped 30 s early; the reference has none)
 - [ ] Generic `secure` rules (`{schema, public, secret}`, e.g. mtls) are accepted, not applied
-- [ ] Secrets of signer factors (`/signers/{id}/factors`) — factors are not implemented
+- [x] Secrets of signer factors, sealed like bridge secrets; `include=meta.secret` serves them (recorded `factors`)
 - [x] Debit and credit on the same bridge in one intent; grouping (`claims.groupBy`) — l6
 - [x] A commit report that never comes: the intent stays `committed` (recorded, l6; same here)
 - [ ] Bridge proof authorisation: today any signer allowed to sign the intent may report

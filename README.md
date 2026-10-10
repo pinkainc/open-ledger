@@ -99,12 +99,10 @@ only when a scenario changes.
 
 ## Known gaps
 
-- **`hsh` claim is not verified.** It binds a token to method + absolute URL + body.
-  Verifying it behind a reverse proxy needs the URL the client used (the same problem
-  as `Host` in S3 SigV4 signatures). The recording proxy has the same issue, which is
-  why the scenario sends tokens without `hsh`.
-- **Access policies** (`{policy: handle}`, `access.strategy: policy-based`) are not
-  evaluated; a rule naming a policy grants nothing.
+- **`hsh` needs the public address.** The claim binds a token to method + absolute
+  URL + body, as the client saw them. Behind a reverse proxy set `PUBLIC_URL` (the
+  `…/api/v2` clients use), or every token with `hsh` is refused, as the reference
+  refuses a token hashed over any address but its own.
 - **Ledger-wide serialisation.** Intents of one ledger are processed one at a time
   (advisory lock in Postgres). Correct, and far above the reference's ~100 intents/s,
   but per-wallet locking would scale further.

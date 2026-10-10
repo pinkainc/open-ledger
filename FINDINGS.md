@@ -4,6 +4,51 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Authentication: signer factors, OAuth tokens, `hsh`
+
+Recorded with `factors` (43 exchanges), `oauth` (21) and `hsh` (18) on 2.47.4,
+reproduced (`server/test/factors.test.ts`).
+
+- **Factors are records** (`$snf`) under `/signers/{signer}/factors`, with the generic
+  lifecycle: update by parent hash, proofs, access check (`record: signer-factor`),
+  changes, drop. The system schemas `key-pair`, `oauth-client-credentials`, `otp`
+  decide `schema`: none is `record.schema-invalid` (`There are schemas defined for
+  record of type signer-factor…`), an unknown one `record.relation-not-found`. A key
+  pair without `public` gets the three-branch anyOf error of the spec.
+- A path naming another signer than the factor's (read or create): 422
+  `record.invalid` `Signer in the request does not match the signer in the data`. An
+  unknown signer: `record.relation-not-found` `Referenced Signer ghost not found.`
+- A key pair without `secret` is served with **`secret: null`**, outside the hash and
+  not in the changes. So an SDK `from(read).hash().sign()` proof is signed over the
+  wrong hash and refused `crypto.signature-invalid` — on the reference as here.
+- **`oauth-client-credentials`**: the ledger adds `clientId` (22 chars) and
+  `clientSecret: "{{ secret.clientSecret }}"` (value 43 chars base64url) and re-hashes
+  the data; the **client's proofs are dropped**, no status, `owners: []`, one system
+  proof without status. Giving `clientId` is refused (`…allowClientCredentials flag…`).
+- **`?include=meta.secret` reveals secrets in the clear** — a key pair's private key
+  included — on create and read. Without it, never. (We additionally require `read`
+  on `signer-factor-secret`; with the scenario's open ledger rule the reference's own
+  rule could not be told apart.)
+- Lists carry `page.total: 0` whatever they hold. After a drop the changes are gone
+  too: by luid → 404 `Record not found` (the docs say they stay).
+- **`POST /oauth/token`**: RFC 6749 JSON, unsigned. Without an authentication policy
+  400 `invalid_grant` `OAuth is not enabled for this ledger`; missing `grant_type` 400
+  `invalid_request`; another grant 400 `unsupported_grant_type`; no credentials 400
+  `invalid_request`; wrong secret or unknown client 401 `invalid_client`. Form fields
+  work as well as Basic. The token: RS256, `kid` = the provider's key-pair factor
+  handle, claims `iss` provider, `cid` factor, `sub` its signer, `aud` the server's
+  public URL, `exp − iat` = `jwt.ttl`; `expires_in` the same.
+- An OAuth token **impersonates its `sub`** on a token-only mutation: the `system.auth`
+  proof has `origin: oauth2-token`, `issuer: <provider>`, `bearer.cid`. A forged
+  signature: 401 `Invalid token.` An empty `hash` on a body is a schema error
+  (`request/body/hash must match pattern`).
+- **`hsh` is checked**, against the server's **public** address
+  (`https://ldg-stg.one/api/v2/…`): a hash over the address the client actually used
+  (the recording proxy) is refused, as is another path, another `x-ledger` value, a
+  garbage hash, a header named but not sent, a different method or body, or a query
+  left out. An empty `hsh` binds nothing; without protected headers the hash has
+  `headers: null`. The SDK's `createHsh` therefore fails behind any proxy.
+
 ## 2026-10-10 — Claim permissions: destroy, and permissions before limits
 
 Recorded with `conformance/scenarios/claims2.ts` (15 exchanges), reproduced. B has

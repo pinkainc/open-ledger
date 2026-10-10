@@ -1,7 +1,8 @@
 // HTTP surface of the ledger. Routes, envelopes and error codes follow the Minka
 // Ledger API as the official SDK and CLI use it; everything behind them is ours.
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
-import { jwtVerify } from 'jose'
+import { SignJWT, decodeProtectedHeader, jwtVerify } from 'jose'
+import { createPrivateKey, createPublicKey, randomBytes, timingSafeEqual } from 'node:crypto'
 import { customAlphabet } from 'nanoid'
 import { AccessControl, type Access, type Principal } from './access.js'
 import { Core, hasTrait } from './core.js'
@@ -53,6 +54,7 @@ const KINDS = {
   effects: { luid: '$eff', name: 'Effect', record: 'effect' },
   anchors: { luid: '$anc', name: 'Anchor', record: 'anchor' },
   domains: { luid: '$dom', name: 'Domain', record: 'domain' },
+  factors: { luid: '$snf', name: 'Signer Factor', record: 'signer-factor' },
 } as const
 type Kind = keyof typeof KINDS
 
@@ -125,29 +127,84 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
 
   // ---- authentication ------------------------------------------------------------
 
-  // Bearer tokens are EdDSA JWTs signed by the caller; `kid` carries the raw public
-  // key. A request without a token is anonymous — access rules decide what it may do.
-  // A token that is present but does not verify is rejected outright.
-  //
-  // The `hsh` claim binds a token to one request (method, absolute URL, body), which a
-  // server behind a reverse proxy can only check against the URL the client used.
-  // Not verified yet: see README, "Known gaps".
+  // Bearer tokens are JWTs. An EdDSA token is signed by the caller, `kid` carrying the
+  // raw public key. An RS256 token was issued by an OAuth provider (`/oauth/token`, or
+  // an external one): `kid` names the provider's key-pair factor, whose signer an
+  // `authentication` policy must name. A request without a token is anonymous —
+  // access rules decide what it may do. A token that is present but does not verify
+  // is rejected outright.
   async function authenticate(req: FastifyRequest): Promise<Principal | undefined> {
     const header = req.headers.authorization
     if (!header) return undefined
     if (!header.startsWith('Bearer ')) throw errors.unauthorized()
     const token = header.slice(7)
+    let who: Principal
     try {
-      const [h] = token.split('.')
-      const { kid } = JSON.parse(Buffer.from(h, 'base64url').toString('utf8'))
+      const { kid, alg } = decodeProtectedHeader(token)
       if (typeof kid !== 'string') throw new Error('kid')
-      const { payload } = await jwtVerify(token, publicKeyObject(kid), { algorithms: ['EdDSA'] })
-      return { public: kid, claims: payload }
+      if (alg === 'RS256') who = await oauthPrincipal(req, token, kid)
+      else {
+        const { payload } = await jwtVerify(token, publicKeyObject(kid), { algorithms: ['EdDSA'] })
+        who = { public: kid, claims: payload }
+      }
     } catch {
       throw errors.unauthorized()
     }
+    checkHsh(req, who.claims.hsh)
+    return who
   }
 
+  // The `hsh` claim binds a token to one request (about-authentication): sha256 of
+  // `{method, url, headers, body}`, then `:` and the protected header names. The URL is
+  // the absolute one the client used, so behind a proxy the server needs PUBLIC_URL.
+  // Recorded (hsh): checked against the server's public address, query included; an
+  // empty `hsh` binds nothing; a protected header must hash with its value; a body is
+  // `null` when absent. Runs before anything changes the body (impersonation adds proofs).
+  function checkHsh(req: FastifyRequest, hsh: unknown) {
+    if (hsh === undefined || hsh === '') return
+    if (typeof hsh !== 'string') throw errors.unauthorized()
+    const at = hsh.indexOf(':')
+    const hash = at < 0 ? hsh : hsh.slice(0, at)
+    const names = at < 0 ? [] : hsh.slice(at + 1).split(',').filter(Boolean)
+    const headers = names.length ? Object.fromEntries(names.map((n) => [n, req.headers[n.toLowerCase()]])) : null
+    const body = req.body && typeof req.body === 'object' && Object.keys(req.body).length ? req.body : null
+    let url: string
+    try {
+      url = decodeURIComponent(publicBase(req) + req.url.slice('/api/v2'.length))
+    } catch {
+      throw errors.unauthorized()
+    }
+    if (hashData({ method: req.method, url, body, headers }) !== hash) throw errors.unauthorized()
+  }
+
+  // The `oauth2` values of the ledger's authentication policies (authenticate-with-oauth);
+  // a policy counts unless it is inactive.
+  async function oauthProviders(scope: string): Promise<any[]> {
+    const policies = (await store.list(scope, 'policies')).filter((p) => p.data.schema === 'authentication' && p.meta.status !== 'inactive')
+    return policies.flatMap((p) => (p.data.values ?? []).filter((v: any) => v?.schema === 'oauth2' && typeof v.signer?.handle === 'string'))
+  }
+
+  // An RS256 token: verified with the public key (SPKI DER, base64) of the key-pair
+  // factor its `kid` names, which must belong to a provider signer. The principal is
+  // the signer the token's `sub` names, when the ledger has it.
+  async function oauthPrincipal(req: FastifyRequest, token: string, kid: string): Promise<Principal> {
+    const scope = req.headers['x-ledger']
+    if (typeof scope !== 'string' || !scope) throw new Error('no ledger')
+    const factor = await store.get(scope, 'factors', kid)
+    if (factor?.data.schema !== 'key-pair' || !(await oauthProviders(scope)).some((v) => v.signer.handle === factor.data.signer)) throw new Error('kid')
+    const key = createPublicKey({ key: Buffer.from(String(factor.data.public), 'base64'), format: 'der', type: 'spki' })
+    const { payload } = await jwtVerify(token, key, { algorithms: ['RS256'] })
+    const sub = typeof payload.sub === 'string' ? await store.get(scope, 'signers', payload.sub) : undefined
+    return { public: sub?.data.public ?? '', claims: payload, origin: 'oauth2-token', ...(sub ? { signer: sub.data.handle } : {}) }
+  }
+
+  // The address clients use, `…/api/v2`: PUBLIC_URL, or the request's own host.
+  function publicBase(req: FastifyRequest) {
+    const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0] ?? req.protocol
+    return server.url ?? `${proto}://${req.headers.host}/api/v2`
+  }
+
+  const IMPERSONATED = new Set(['self-signed-token', 'oauth2-token'])
   const proofKeys = (body: any): string[] => (body?.meta?.proofs ?? []).map((p: any) => p.public)
 
   // ---- token impersonation -------------------------------------------------------
@@ -158,14 +215,15 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // claims as `bearer.*`, `origin: self-signed-token`, and the signer and issuer
   // handles. Observed (access3): it is added even when the client signed the body
   // itself, and its key becomes an owner. A token whose key is not a signer record
-  // impersonates nothing (access, l0).
+  // impersonates nothing (access, l0). An OAuth token impersonates the signer its `sub`
+  // names, with `origin: oauth2-token` and the provider as issuer (recorded, oauth).
   //
   // Partial proofs — without `public` — are templates: each becomes an impersonated
   // proof carrying its `custom`. A body with no proofs and no hash is hashed here.
   // Returns the keys access rules see: the token's key stands for the proofs made
   // on its behalf.
   async function impersonate(body: any, ledger: string, who: Principal | undefined, status?: string): Promise<string[]> {
-    const signer = who && (await signerByKey(ledger, who.public))
+    const signer = who && (who.signer ?? (await signerByKey(ledger, who.public)))
     const auth = signer && (await store.getKey(ledger, 'system.auth'))
     if (!who || !signer || !auth) return proofKeys(body)
     body.hash ??= hashData(body.data)
@@ -178,7 +236,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const bearer = Object.fromEntries(Object.keys(who.claims).sort().map((k) => [`bearer.${k}`, who.claims[k]]))
     const made = templates.map((t) => ({
       ...serverProof(body.hash, { moment: now(), ...t.custom, ...bearer }, auth, signer),
-      origin: 'self-signed-token',
+      origin: who.origin ?? 'self-signed-token',
       ...(issuer ? { issuer } : {}),
     }))
     body.meta.proofs = [...full, ...made]
@@ -230,7 +288,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const signers = ledger ? await store.list(ledger, 'signers') : []
     const auth = ledger ? (await store.getKey(ledger, 'system.auth'))?.public : undefined
     return proofs.map((p: any) => {
-      if (auth && p.public === auth && p.origin === 'self-signed-token') return p
+      if (auth && p.public === auth && IMPERSONATED.has(p.origin)) return p
       const { origin: _o, signer: _s, issuer: _i, ...plain } = p
       const signer = signers.find((s) => s.data.public === p.public)?.data.handle
       return { ...plain, ...(origin ? { origin: 'key-pair' } : {}), ...(signer ? { signer } : {}) }
@@ -475,8 +533,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // Server information, unsigned (no ledger is addressed). `minka server connect`
   // reads it and refuses a server that does not answer.
   const info = async (req: FastifyRequest) => {
-    const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0] ?? req.protocol
-    const url = server.url ?? `${proto}://${req.headers.host}/api/v2`
+    const url = publicBase(req)
     const data = { handle: server.handle ?? 'open-ledger', server: url, semver: SEMVER, status: 'UP' }
     return { hash: hashData(data), data, meta: { moment: now() } }
   }
@@ -695,8 +752,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // Drop: signed like an update (data.parent = current hash), 204, then gone (a read
   // is 404). What may not be dropped (recorded): a wallet that still holds a balance,
   // a bridge a wallet names (`drops`). System policies may be (`drops`).
-  const dropOf = (kind: 'wallets' | 'effects' | 'bridges' | 'policies' | 'anchors', guard?: (scope: string, found: StoredRecord) => Promise<void>) =>
-    async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+  type DropParams = { Params: { id: string; signer?: string } }
+  const dropOf = (kind: 'wallets' | 'effects' | 'bridges' | 'policies' | 'anchors' | 'factors', guard?: (scope: string, found: StoredRecord, req: FastifyRequest<DropParams>) => Promise<void>) =>
+    async (req: FastifyRequest<DropParams>, reply: FastifyReply) => {
       validateBody('drop', req.body)
       const who = await authenticate(req)
       const { ledger, found } = await existing(req, kind, req.params.id)
@@ -705,9 +763,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       await acl.authorize('drop', KINDS[kind].record, { who, proofs: keys }, { ledger, record: found })
       if (body.data.parent !== found.hash) throw errors.parentHashInvalid()
       verifyProofs(body)
-      await guard?.(ledger.data.handle, found)
+      await guard?.(ledger.data.handle, found, req)
       await store.remove(ledger.data.handle, kind, found.data.handle)
-      if (kind === 'effects') await raise(ledger.data.handle, 'effects', 'dropped', { effect: found }, found)
+      if (kind === 'effects' || kind === 'factors') await raise(ledger.data.handle, kind, 'dropped', { [KINDS[kind].record]: found }, found)
       reply.status(204).send()
     }
   const drops = {
@@ -733,6 +791,188 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     app.delete<{ Params: { id: string } }>(`/api/v2/${kind}/:id`, handler)
     app.post<{ Params: { id: string } }>(`/api/v2/${kind}/:id/drop`, handler)
   }
+
+
+  // ---- signer factors (recorded, factors) ----------------------------------------------
+
+  // A factor (`$snf`) is a record of the ledger under its signer, `data.signer`, with
+  // the generic lifecycle. A path naming another signer than the factor's is
+  // `record.invalid`. What differs from other records (recorded):
+  // - a key pair without `secret` is served with `secret: null`, outside its hash and
+  //   not in its changes (like a ledger's `config`);
+  // - an `oauth-client-credentials` factor gets a generated `clientId` and
+  //   `clientSecret` (a sealed secret); its data is re-hashed, the client's proofs are
+  //   dropped, and it has no status and no owners;
+  // - `?include=meta.secret` serves the secrets in the clear, the private key of a key
+  //   pair included. We ask `read` on `signer-factor-secret` for it (the access record
+  //   type exists for this; the reference's rule for it was not recorded).
+  // Lists come with `total: 0`. A dropped factor is gone, its changes too (404 by luid).
+  type FP = { Params: { signer: string; id: string } }
+  const signerMismatch = () => new LedgerError(422, 'record.invalid', 'Signer in the request does not match the signer in the data')
+  const factorNotFound = () => new LedgerError(404, 'record.not-found', 'Signerfactor not found')
+
+  async function factorTarget(req: FastifyRequest<FP>, read = false): Promise<Target> {
+    const t = await (read ? readable(req, 'factors', req.params.id) : target(req, 'factors', req.params.id)).catch((e) => {
+      throw e instanceof LedgerError && e.status === 404 ? factorNotFound() : e
+    })
+    if (t.found.data.signer !== req.params.signer) throw signerMismatch()
+    return t
+  }
+
+  const servedFactor = (r: StoredRecord): StoredRecord =>
+    r.data.schema === 'key-pair' && !('secret' in r.data) ? { ...r, data: { ...r.data, secret: null } } : r
+
+  const wantsSecrets = (req: FastifyRequest) =>
+    Object.entries((req.query as Record<string, unknown>) ?? {}).some(([k, v]) => k.startsWith('include') && [v].flat().includes('meta.secret'))
+
+  async function openSecret(scope: string, handle: string, name: string) {
+    const at = `signer-factor/${handle}/${name}`
+    const sealed = await store.getSecret(scope, at)
+    return sealed === undefined ? undefined : core.secrets.open(sealed, `${scope}/${at}`)
+  }
+
+  async function presentFactor(req: FastifyRequest, ledger: StoredRecord, r: StoredRecord, who?: Principal) {
+    const out = servedFactor(r)
+    if (!wantsSecrets(req)) return out
+    await acl.authorize('read', 'signer-factor-secret', { who }, { ledger, record: r })
+    const secret: Record<string, string> = {}
+    for (const name of secretRefs(r.data)) {
+      const value = await openSecret(ledger.data.handle, r.data.handle, name)
+      if (value !== undefined) secret[name] = value
+    }
+    return { ...out, meta: { ...out.meta, secret } }
+  }
+
+  // Credentials are the ledger's to make unless the ledger allows clients to bring
+  // their own (`signer.factor.oauth.allowClientCredentials`; then a secret comes as
+  // `{{ secret.clientSecret }}` with its value in `meta.secret`).
+  async function createOauthFactor(ledger: StoredRecord, key: KeyPair, req: FastifyRequest) {
+    const body = req.body as any
+    const scope = ledger.data.handle
+    verifyProofs(body)
+    const own = body.data.clientId !== undefined || body.data.clientSecret !== undefined
+    if (own && ledger.data.config?.['signer.factor.oauth.allowClientCredentials'] !== true)
+      throw new LedgerError(
+        422,
+        'record.invalid',
+        'Providing clientId or clientSecret is not allowed. Leave the fields blank and ledger will generate the credentials instead.Enable the signer.factor.oauth.allowClientCredentials flag to use be able to provide credentials.',
+      )
+    const given = secretsOf(body.data, body.meta)
+    const clientSecret = given.find(([n]) => n === 'clientSecret')?.[1] ?? randomBytes(32).toString('base64url')
+    const { handle, schema, signer, clientId: _id, clientSecret: _secret, ...rest } = body.data
+    const data = { handle, schema, signer, clientId: body.data.clientId ?? customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-', 22)(), clientSecret: '{{ secret.clientSecret }}', ...rest }
+    const hash = hashData(data)
+    const luid = newLuid('$snf')
+    const moment = now()
+    const record: StoredRecord = { hash, data, luid, meta: { proofs: [serverProof(hash, { luid, moment: now() }, key, 'system')], moment, owners: [] } }
+    if (!(await store.insert(scope, 'factors', record))) throw errors.duplicated(KINDS.factors.name, handle)
+    await keepSecrets(scope, 'factors', handle, [...given.filter(([n]) => n !== 'clientSecret'), ['clientSecret', clientSecret]])
+    await addChange(scope, 'factors', record, 'create')
+    await raise(scope, 'factors', 'created', { 'signer-factor': record }, record)
+    return record
+  }
+
+  app.post<{ Params: { signer: string } }>('/api/v2/signers/:signer/factors', async (req, reply) => {
+    validateBody('factors', req.body)
+    const who = await authenticate(req)
+    const ledger = await hostedLedger(req)
+    const scope = ledger.data.handle
+    const data = (req.body as any).data
+    if (data.signer !== req.params.signer) throw signerMismatch()
+    if (!(await store.get(scope, 'signers', data.signer))) throw new LedgerError(422, 'record.relation-not-found', `Referenced Signer ${data.signer} not found.`)
+    const keys = await impersonate(req.body, scope, who, 'created')
+    await acl.authorize('create', 'signer-factor', { who, proofs: keys }, { ledger })
+    await related('factors', scope, data)
+    const record = data.schema === 'oauth-client-credentials' ? await createOauthFactor(ledger, req.ledgerKey!, req) : await create('factors', scope, req.ledgerKey!, req)
+    reply.status(201).send(await presentFactor(req, ledger, record, who))
+  })
+
+  app.get<{ Params: { signer: string } }>('/api/v2/signers/:signer/factors', async (req) => {
+    const who = await authenticate(req)
+    const ledger = await hostedLedger(req)
+    await acl.authorize('read', 'signer-factor', { who }, { ledger })
+    const rows = (await store.list(ledger.data.handle, 'factors')).filter((f) => f.data.signer === req.params.signer).map(servedFactor)
+    const page = listPage(req, rows) as ReturnType<typeof listPage> & { page: object }
+    return { ...page, page: { ...page.page, total: 0 } }
+  })
+
+  app.get<FP>('/api/v2/signers/:signer/factors/:id', async (req) => {
+    const t = await factorTarget(req, true)
+    return presentFactor(req, t.ledger, t.found, await authenticate(req))
+  })
+  app.put<FP>('/api/v2/signers/:signer/factors/:id', async (req) => {
+    const t = await factorTarget(req)
+    if ((req.body as any)?.data?.signer !== undefined && (req.body as any).data.signer !== req.params.signer) throw signerMismatch()
+    return servedFactor(await update(req, t))
+  })
+  app.post<FP>('/api/v2/signers/:signer/factors/:id/proofs', async (req) => servedFactor(await addProof(req, await factorTarget(req))))
+  app.post<FP>('/api/v2/signers/:signer/factors/:id/access/!check', async (req) => accessCheck(req, await factorTarget(req)))
+  app.get<FP>('/api/v2/signers/:signer/factors/:id/changes', async (req) => {
+    const t = await factorTarget(req, true)
+    return changePage(req, t.scope, 'factors', keyOf(t.found))
+  })
+  app.get<{ Params: { signer: string; id: string; change: string } }>('/api/v2/signers/:signer/factors/:id/changes/:change', async (req) => {
+    const t = await factorTarget(req, true)
+    const change = (await store.changes(t.scope, 'factors', keyOf(t.found))).find((c) => String(c.meta.change) === req.params.change)
+    if (!change) throw new LedgerError(404, 'record.not-found', 'Signer factor change not found')
+    return change
+  })
+  const dropFactor = dropOf('factors', async (_scope, found, req) => {
+    if (found.data.signer !== req.params.signer) throw signerMismatch()
+  })
+  app.delete<FP>('/api/v2/signers/:signer/factors/:id', dropFactor)
+  app.post<FP>('/api/v2/signers/:signer/factors/:id/drop', dropFactor)
+
+  // ---- OAuth 2.0 client credentials (authenticate-with-oauth; recorded, oauth) --------
+
+  // RFC 6749 §4.4 on the ledger: Basic `clientId:clientSecret` (or form fields) for an
+  // `oauth-client-credentials` factor, answered with an RS256 JWT signed by the private
+  // key of the provider's key-pair factor (`kid` = its handle). Claims as recorded:
+  // `iss` provider, `cid` factor, `sub` the factor's signer, `aud` the server's public
+  // address, `exp` = `iat` + `jwt.ttl` (3600). Answers and errors are plain RFC 6749
+  // JSON, unsigned. Checked in this order (recorded): grant type present, supported,
+  // credentials given; then an authentication policy, then the credentials. A value's
+  // `target.schema` restricts it to signers of that schema.
+  app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, body, done) =>
+    done(null, Object.fromEntries(new URLSearchParams(String(body)))),
+  )
+  app.post('/api/v2/oauth/token', async (req, reply) => {
+    const fail = (status: number, error: string, error_description: string) => reply.status(status).send({ error, error_description })
+    const form = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, string | undefined>
+    if (!form.grant_type) return fail(400, 'invalid_request', 'The request is missing a required parameter: grant_type')
+    if (form.grant_type !== 'client_credentials') return fail(400, 'unsupported_grant_type', 'The authorization grant type is not supported. Expected: client_credentials')
+    let id = form.client_id
+    let secret = form.client_secret
+    const basic = req.headers.authorization
+    if (basic?.startsWith('Basic ')) {
+      const raw = Buffer.from(basic.slice(6), 'base64').toString('utf8')
+      const at = raw.indexOf(':')
+      if (at >= 0) [id, secret] = [raw.slice(0, at), raw.slice(at + 1)]
+    }
+    if (!id || !secret)
+      return fail(400, 'invalid_request', 'Client credentials must be provided either via Basic authentication or as client_id and client_secret in the request body.')
+    const ledger = await hostedLedger(req)
+    const scope = ledger.data.handle
+    const providers = await oauthProviders(scope)
+    if (!providers.length) return fail(400, 'invalid_grant', 'OAuth is not enabled for this ledger')
+    const factors = await store.list(scope, 'factors')
+    const factor = factors.find((f) => f.data.schema === 'oauth-client-credentials' && f.data.clientId === id)
+    const stored = factor && (await openSecret(scope, factor.data.handle, 'clientSecret'))
+    const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
+    if (!factor || stored === undefined || !same(stored, secret)) return fail(401, 'invalid_client', 'Invalid client credentials')
+    const subject = await store.get(scope, 'signers', factor.data.signer)
+    const value = providers.find((v) => !v.target?.schema || v.target.schema === subject?.data.schema)
+    if (!value) return fail(401, 'invalid_client', 'Invalid client credentials')
+    const signing = factors.find((f) => f.data.signer === value.signer.handle && f.data.schema === 'key-pair' && secretRefs(f.data).size)
+    const pem = signing && (await openSecret(scope, signing.data.handle, [...secretRefs(signing.data)][0]))
+    if (!signing || !pem) return fail(500, 'server_error', 'An unexpected error occurred processing the request')
+    const ttl = Number(value.config?.['jwt.ttl'] ?? 3600)
+    const iat = Math.floor(Date.now() / 1000)
+    const access_token = await new SignJWT({ iss: value.signer.handle, cid: factor.data.handle, sub: factor.data.signer, aud: publicBase(req), iat, exp: iat + ttl })
+      .setProtectedHeader({ alg: 'RS256', kid: signing.data.handle })
+      .sign(createPrivateKey(pem))
+    return { access_token, token_type: 'Bearer', expires_in: ttl }
+  })
 
   // ---- event deliveries (inspect-event-deliveries; recorded in `events`, `effects`) --
 

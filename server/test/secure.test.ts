@@ -131,7 +131,7 @@ for (const [storeName, makeStore] of STORES) {
       await s.bridge.from(current).data({ ...current.data, config: { server: `${b.url}` }, custom: { note: 'x' } }).hash().sign(sign()).send()
     })
 
-    test('oauth2: a token from the endpoint, Basic client credentials, before every call', async () => {
+    test('oauth2: a token from the endpoint, Basic client credentials, kept while it lives', async () => {
       const secure = [{ schema: 'oauth2', clientId: 'client-1', clientSecret: '{{ secret.oauth }}', tokenUrl: `${b.base}/oauth/token`, scope: 'ledger' }]
       const { sdk, asBank } = await books(bridgeData('oa', { secure }), { oauth: 'client-secret-789' })
       const before = b.calls.filter((c) => c.url === '/oauth/token').length
@@ -139,7 +139,9 @@ for (const [storeName, makeStore] of STORES) {
       assert.equal((await run(sdk, asBank, h)).meta.status, 'completed')
       await until(() => of(h).filter((c) => c.method === 'PUT').length === 2, 'status notifications')
       const tokens = b.calls.filter((c) => c.url === '/oauth/token').slice(before)
-      assert.equal(tokens.length, of(h).length)
+      // `expires_in: 3600`: one request serves every call (the reference asks each time).
+      assert.ok(of(h).length > 1)
+      assert.equal(tokens.length, 1)
       assert.equal(tokens[0].headers.authorization, `Basic ${Buffer.from('client-1:client-secret-789').toString('base64')}`)
       assert.equal(tokens[0].body, 'grant_type=client_credentials&scope=ledger')
       for (const c of of(h)) assert.equal(c.headers.authorization, 'Bearer tok')

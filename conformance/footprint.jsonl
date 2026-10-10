@@ -43,3 +43,11 @@
 {"event":"end","run":"20261010110702614","ledger":"open-ledger-conf-20261010110702614","level":"limits5","at":"2026-10-10T11:07:14.365Z","exit":0,"exchanges":28,"bridgeCalls":null}
 {"event":"start","run":"20261010111826644","ledger":"open-ledger-conf-20261010111826644","level":"claims2","at":"2026-10-10T11:18:27.184Z","reference":"https://ldg-stg.one","operator":"AJfz5Bl3L24H9pVgJQlyWc0lcFLh1obkwMLqf1RBbYQ=","sdk":"2.47.0"}
 {"event":"end","run":"20261010111826644","ledger":"open-ledger-conf-20261010111826644","level":"claims2","at":"2026-10-10T11:20:09.212Z","exit":0,"exchanges":15,"bridgeCalls":null}
+{"event":"start","run":"20261010134309340","ledger":"open-ledger-conf-20261010134309340","level":"factors","at":"2026-10-10T13:43:10.474Z","reference":"https://ldg-stg.one","operator":"AJfz5Bl3L24H9pVgJQlyWc0lcFLh1obkwMLqf1RBbYQ=","sdk":"2.47.0"}
+{"event":"end","run":"20261010134309340","ledger":"open-ledger-conf-20261010134309340","level":"factors","at":"2026-10-10T13:43:20.283Z","exit":0,"exchanges":43,"bridgeCalls":null}
+{"event":"start","run":"20261010134320353","ledger":"open-ledger-conf-20261010134320353","level":"oauth","at":"2026-10-10T13:43:21.053Z","reference":"https://ldg-stg.one","operator":"AJfz5Bl3L24H9pVgJQlyWc0lcFLh1obkwMLqf1RBbYQ=","sdk":"2.47.0"}
+{"event":"end","run":"20261010134320353","ledger":"open-ledger-conf-20261010134320353","level":"oauth","at":"2026-10-10T13:43:25.972Z","exit":0,"exchanges":19,"bridgeCalls":null}
+{"event":"start","run":"20261010134326321","ledger":"open-ledger-conf-20261010134326321","level":"hsh","at":"2026-10-10T13:43:26.734Z","reference":"https://ldg-stg.one","operator":"AJfz5Bl3L24H9pVgJQlyWc0lcFLh1obkwMLqf1RBbYQ=","sdk":"2.47.0"}
+{"event":"end","run":"20261010134326321","ledger":"open-ledger-conf-20261010134326321","level":"hsh","at":"2026-10-10T13:43:31.032Z","exit":0,"exchanges":18,"bridgeCalls":null}
+{"event":"start","run":"20261010134916256","ledger":"open-ledger-conf-20261010134916256","level":"oauth","at":"2026-10-10T13:49:17.630Z","reference":"https://ldg-stg.one","operator":"AJfz5Bl3L24H9pVgJQlyWc0lcFLh1obkwMLqf1RBbYQ=","sdk":"2.47.0"}
+{"event":"end","run":"20261010134916256","ledger":"open-ledger-conf-20261010134916256","level":"oauth","at":"2026-10-10T13:49:23.323Z","exit":0,"exchanges":21,"bridgeCalls":null}
