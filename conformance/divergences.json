@@ -178,5 +178,26 @@
     "reference": "None: the reference fails before calling the bridge.",
     "ours": "The proof as the ledger stores it, with `origin: key-pair`.",
     "why": "Consequence of the forwarding #63 entry."
+  },
+  {
+    "fixture": "filters",
+    "exchanges": [
+      25,
+      49,
+      73,
+      97,
+      121,
+      145,
+      169,
+      193,
+      217,
+      241,
+      265,
+      289
+    ],
+    "what": "A list filtered by `meta.moment` with a value that is no date (`zz-none`).",
+    "reference": "500 `api.unexpected-error`: the value reaches Postgres and the cast to a timestamp fails (`invalid input syntax for type timestamp`).",
+    "ours": "400 `api.query-malformed` `Invalid date in filter 'meta.moment': '<value>'`.",
+    "why": "A malformed query is the client's error; a 500 tells the client nothing and hides real server faults."
   }
 ]

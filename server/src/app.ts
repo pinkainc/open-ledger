@@ -12,7 +12,7 @@ import { resolveAddress } from './routing.js'
 import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, signDigest, verifyDigest, type KeyPair, type Proof } from './crypto.js'
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
-import { matches, parseQuery } from './query.js'
+import { matches, parseQuery, unsupportedFilters } from './query.js'
 import { validateBody, validateLedgerDrop, validateProcessing, validateReportProof, type ValidatedKind } from './schemas.js'
 import { CAUSED_BY, ForwardedError, aspectFor, forward, type Action, type Aspect } from './forwarding.js'
 import { describe, redact } from './journal.js'
@@ -440,7 +440,11 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const named = proofs.map((p) => p.custom?.domain).find((d) => typeof d === 'string') as string | undefined
     const parts = typeof handle === 'string' ? handle.split('@') : []
     const suffix = parts.length === 2 ? parts[1] : undefined
-    return named ?? (suffix && (await store.list(scope, 'domains')).length ? suffix : undefined)
+    if (named !== undefined) return named
+    // Recorded (domains3): with `domain.resolutionFromHandleEnabled: false` the suffix is
+    // only a part of the handle, neither a domain nor checked; a proof still names one.
+    const byHandle = (await store.get('', 'ledgers', scope))?.data.config?.['domain.resolutionFromHandleEnabled'] !== false
+    return byHandle && suffix && (await store.list(scope, 'domains')).length ? suffix : undefined
   }
   const joining = (scope: string, body: any) => namedDomain(scope, body?.data?.handle, body?.meta?.proofs ?? [])
   async function domainOf(scope: string, handle: unknown, proofs: Proof[]) {
@@ -450,7 +454,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     return domain
   }
 
-  // An intent's `meta.domains`: the domains of the wallets its claims name, in order.
+  // An intent's `meta.domains`: the domains of the wallets its claims name.
   async function intentDomains(scope: string, claims: any[]) {
     const out: string[] = []
     for (const c of claims ?? [])
@@ -460,7 +464,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
         const d = ((await store.get(scope, 'wallets', handle)) ?? (await resolveAddress(store, scope, handle)))?.meta.domain
         if (typeof d === 'string' && !out.includes(d)) out.push(d)
       }
-    return out
+    // Recorded (domains3): a read shows them sorted; lists in no fixed order.
+    return out.sort()
   }
 
   // The ledger publishes its server signers as signer records, each self-signed and
@@ -553,7 +558,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // `GET /policies?data.record.$in[0]=any&…` before every create.
   function listPage(req: FastifyRequest, rows: StoredRecord[]) {
     const p = pageParams(req)
-    const q = parseQuery(req.query as Record<string, unknown>)
+    // Recorded (filters): keys outside `data.` and `meta.` (`luid`, `hash`, …) are ignored.
+    const q = parseQuery(Object.fromEntries(Object.entries((req.query ?? {}) as Record<string, unknown>).filter(([k]) => /^(data|meta)\.|^\$plainTextQuery$/.test(k))))
     const kept = rows.filter((r) => matches(r, q)).reverse()
     // Recorded (uschema2): newest change first — an updated record moves to the top.
     // Records of one moment (a ledger's system records) keep newest-created first.
@@ -694,9 +700,13 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (t.kind !== 'ledgers') await related(t.kind, t.scope, body.data)
     const proofs = await annotate(t.ledger.data.handle, verifyProofs(body))
     const secrets = secretsOf(body.data, body.meta, t.found)
+    // Recorded (domains3): a subdomain keeps its parent. The schema refuses `domain` in an
+    // update, so the version is sent without it and the ledger puts it back, after the
+    // hash was taken (like a ledger's `config` at creation).
+    const kept = t.kind === 'domains' && typeof t.found.data.domain === 'string'
     let updated: StoredRecord = {
       hash: body.hash,
-      data: body.data,
+      data: kept ? { parent: body.data.parent, handle: body.data.handle, domain: t.found.data.domain, ...body.data } : body.data,
       luid: t.found.luid,
       meta: { ...t.found.meta, proofs: [...proofs, serverProof(body.hash, { luid: t.found.luid, moment: now() }, req.ledgerKey!, 'system')], moment: now() },
     }
@@ -999,11 +1009,12 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     app.get(`/api/v2/${kind}`, async (req) => {
       const who = await authenticate(req)
       const ledger = await hostedLedger(req)
-      // Recorded (effects): the reference does not filter effects by signal.
-      if (kind === 'effects' && 'data.signal' in (req.query as object))
-        throw new LedgerError(400, 'api.query-malformed', "Unsupported filters: 'data.signal'")
-      if (kind === 'domains' && 'meta.domain' in (req.query as object))
-        throw new LedgerError(400, 'api.query-malformed', "Unsupported filters: 'meta.domain'")
+      const unsupported = unsupportedFilters(kind, req.query as Record<string, unknown>)
+      if (unsupported.length) throw new LedgerError(400, 'api.query-malformed', `Unsupported filters: ${unsupported.map((f) => `'${f}'`).join(', ')}`)
+      // The reference answers a `meta.moment` that is no date with a 500 (a failed SQL cast).
+      const moment = (req.query as Record<string, unknown>)['meta.moment']
+      if (typeof moment === 'string' && Number.isNaN(Date.parse(moment)))
+        throw new LedgerError(400, 'api.query-malformed', `Invalid date in filter 'meta.moment': '${moment}'`)
       await acl.authorizeQuery(record, { who }, { ledger })
       const rows: StoredRecord[] = []
       for (const r of await store.list(ledger.data.handle, kind)) if (await acl.allowed('read', record, { who }, { ledger, record: r })) rows.push(r)

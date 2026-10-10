@@ -129,3 +129,36 @@ export function matches(record: unknown, q: Query): boolean {
   if (q.text !== undefined && !words(record).has(q.text.toLowerCase())) return false
   return q.filters.every((f) => test(f, valuesAt(record, f.path)))
 }
+
+// Which filters a record list accepts (recorded, filters): `data.handle`,
+// `data.schema` (not on schemas), `data.custom.*`, `meta.status` and `meta.domain`
+// (not on domains) everywhere, plus a few fields per kind; anything else under `data.`
+// or `meta.` is 400 `api.query-malformed` naming every such filter, operator included
+// (`data.handle.$foo`). Keys outside `data.`/`meta.` (`luid`, `hash`, others) pass.
+const EXTRA_FILTERS: Record<string, string[]> = {
+  policies: ['data.record'],
+  schemas: ['data.record'],
+  anchors: ['data.record', 'data.symbol', 'data.wallet', 'data.target'],
+  signers: ['data.public'],
+  intents: ['meta.domains'],
+}
+export function unsupportedFilters(kind: string, query: Record<string, unknown>): string[] {
+  const out: string[] = []
+  for (const raw of Object.keys(query ?? {})) {
+    if (IGNORED.test(raw) || !/^(data|meta)\./.test(raw)) continue
+    const m = /^(.*?)(?:\.(\$[a-zA-Z]+))?(?:\[(\d*)\])?$/.exec(raw)!
+    const [, path, op] = m
+    const ok =
+      (op === undefined || OPERATORS.has(op)) &&
+      (path === 'data.handle' ||
+        (path === 'data.schema' && kind !== 'schemas') ||
+        path.startsWith('data.custom.') ||
+        path === 'meta.status' ||
+        path === 'meta.moment' ||
+        (path === 'meta.domain' && kind !== 'domains') ||
+        (EXTRA_FILTERS[kind] ?? []).includes(path))
+    const name = raw.replace(/\[\d*\]$/, '')
+    if (!ok && !out.includes(name)) out.push(name)
+  }
+  return out
+}

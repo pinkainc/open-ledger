@@ -605,17 +605,25 @@ export class Core {
     if ((await threadOf(tx, ledger, intent)).length + forwards.length > MAX_THREAD) return false
     await tx.once(ledger, threadKey(intent))
     for (const { e, target } of forwards) {
+      // Recorded (domains3): the forward intent takes the first one's `access`, and its
+      // `meta.domains` are those of its two wallets, sorted, as for any intent.
       const data = {
         handle: entryId(),
         claims: [{ action: 'transfer', amount: e.amount, source: { handle: e.wallet }, symbol: { handle: e.symbol }, target: { handle: target } }],
+        ...(intent.data.access !== undefined ? { access: intent.data.access } : {}),
         origin: intent.data.handle,
+      }
+      const domains: string[] = []
+      for (const h of [e.wallet, target]) {
+        const d = (await tx.get(ledger, 'wallets', h))?.meta.domain
+        if (typeof d === 'string' && !domains.includes(d)) domains.push(d)
       }
       const hash = hashData(data)
       const luid = newLuid('$int')
       const moment = run.now()
       const { signer: _s, origin: _o, ...created } = serverProof(hash, { moment, status: 'created' }, run.system, 'system')
       const proofs = [created as Proof, serverProof(hash, { moment: run.now(), status: 'pending' }, run.system, 'system'), serverProof(hash, { luid, moment: run.now(), status: 'pending' }, run.system, 'system')]
-      const record: StoredRecord = { hash, data, luid, meta: { proofs, status: 'pending', thread: intent.meta.thread, domains: [], moment, owners: [run.system.public] } }
+      const record: StoredRecord = { hash, data, luid, meta: { proofs, status: 'pending', thread: intent.meta.thread, domains: domains.sort(), moment, owners: [run.system.public] } }
       await tx.insert(ledger, 'intents', record)
       await tx.addChange(ledger, 'intents', data.handle, { ...record, meta: { ...record.meta, change: 1, action: 'create', labels: null } })
       run.spawned.push(data.handle)

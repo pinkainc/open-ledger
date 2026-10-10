@@ -91,6 +91,8 @@ function normaliser() {
         // The anchors a wallet drop names: the reference orders them by luid, random
         // within a second (anchors: oldest first; routes2: newest first). A set here.
         if (k === 'anchors' && x.reason === undefined && Array.isArray(v) && v.every((a: unknown) => typeof a === 'string')) v = [...v].sort()
+        // An intent's `meta.domains`: sorted on a read, in no fixed order in a list (domains3).
+        if (k === 'domains' && Array.isArray(v) && v.every((a: unknown) => typeof a === 'string')) v = [...v].sort()
         // An error `custom` that held only the trace is empty once the trace is gone.
         if (k === 'custom' && v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length) continue
         out[k] = v
