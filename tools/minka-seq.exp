@@ -64,6 +64,17 @@ foreach step [split $steps ";"] {
             after 150
             send "\r"
         }
+        "@CHECK*" {
+            # Checkbox prompt: tick the first <n> entries ("@CHECK2": debits and
+            # credits of the bridge traits), then confirm.
+            set n [string range $value 6 end]
+            for {set i 0} {$i < $n} {incr i} {
+                if {$i > 0} { send "\033\[B"; after 120 }
+                send " "
+                after 150
+            }
+            send "\r"
+        }
         "@DOWN*" {
             # List prompts (inquirer) only respond to arrow keys, not typed text.
             # "@DOWN2" means: move down twice, then select.
