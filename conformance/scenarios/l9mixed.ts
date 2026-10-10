@@ -86,6 +86,7 @@ async function mirror(name: string, clearingServer: string, clearingLedger: stri
   let supply = 0
   for (const w of ['treasury', 'transit', 'account:1', 'account:2']) supply += await balance(coreServer, coreLedger, w)
   console.log(`      mirror ${name}: mint ${position}, bank supply ${supply} ${position === supply ? 'ok' : 'MISMATCH'}`)
+  if (position !== supply) process.exitCode = 1
 }
 
 let seq = 0
@@ -118,7 +119,8 @@ const port2 = await bridge2.listen(0)
 const local2 = sdkOn(LOCAL, LOCAL_CLEARING)
 await quiet(() => makeLedger(LOCAL, LOCAL_CLEARING))
 await clearing(local2, 'local', key2, `http://127.0.0.1:${port2}/v2`, (_, f) => quiet(f))
-for (const [name, handle, claims] of flows) {
+for (const [name, first, claims] of flows) {
+  const handle = `l-${first}`
   await quiet(() => local2.intent.init().data({ handle, claims }).hash().sign([{ keyPair }]).send())
   console.log(`      local ${name} settled: ${await settle(LOCAL, LOCAL_CLEARING, handle)}`)
   await bridge2.idle()

@@ -265,7 +265,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       `l9` on two sandbox ledgers, 40/40 + 51/51 on the first run
 - [x] Two of our servers joined by the adapter (`server/test/l9.test.ts`): supply mirror after
       concurrent random payments, forged call refused (401), entry recovered after a restart
-- [ ] Ours ↔ Minka, both directions (`l9mixed`): record and put in the README
+- [x] Ours ↔ Minka, both directions (`l9mixed`, 31/31 + 78/78): Minka clears for our bank
+      ledger and ours for a Minka bank ledger; mirror holds both ways; in the README
 - [ ] The adapter keeps prepared entries in memory; a restart between prepare and commit
       recovers them from the intent, but runs in flight are lost (the ledger retries)
 

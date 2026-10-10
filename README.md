@@ -52,8 +52,28 @@ a bank are recorded too (`fixtures/*.bridge.jsonl`).
 | **Routes** | addresses `schema:handle@parent`, wallet routes `credit`, `debit`, `accept`, `forward` | — | **62/62** client exchanges, **18/18** bridge calls |
 | **L8** (bridges) | event deliveries: outbox, attempt proofs, 501 → cancelled, retry, resume | bridges 11/14 | **23/23** client exchanges, **20/20** bridge calls |
 | **L7** (part) | intent expiry (also of intents waiting for a bridge) | — | covered by access4 |
+| **L9** | two ledgers joined by a bridge (`bridges/ledger-bridge`): cross-ledger payments | — | `l9` **40/40** client exchanges, **51/51** bridge log; `l9mixed` **31/31**, **78/78** |
 
 (L2, multi-claim atomicity, is covered by the L1 and L3 scenarios.)
+
+### Interoperability with Minka itself
+
+`bridges/ledger-bridge` joins two ledgers the way
+[cross-ledger payments](https://docs.minka.io/ledger/connecting-systems/cross-ledger-payments)
+joins a clearing house and a bank: the clearing ledger sees it as the bridge of the bank's
+wallet, and it carries every two-phase-commit call out as intents in the bank's own
+ledger. It does not care whose ledger is on either side. `conformance/scenarios/l9mixed.ts`
+runs it both ways against the public Minka sandbox:
+
+| Clearing house | Bank's ledger | Result |
+| --- | --- | --- |
+| Minka sandbox | open-ledger | top-up, payments in and out, a refused debit, an abort after a prepared debit; the bank's supply equals its clearing position (325 = 325) |
+| open-ledger | Minka sandbox | the same flows; 325 = 325 |
+
+Minka calls our adapter through a tunnel, and the adapter writes to our ledger with the
+official SDK. In the other direction our ledger calls the adapter, and the adapter writes to
+Minka. Both directions are recorded, and `npm run check` replays them against our server
+alone (31/31 exchanges, 78/78 bridge log).
 
 The official `minka` CLI runs a whole flow against the server — connect, signer, ledger,
 symbol, wallets, issue, transfer, balances, filtered lists — in `scripts/cli-e2e.sh`,

@@ -28,6 +28,10 @@ matched on the first run (40/40, 51/51); nothing new had to be built in the serv
 - **2PC calls carry no token** (`authorization` absent, as in l5). The adapter trusts a call
   only if its body has a valid proof by the clearing ledger's `system` signer over the
   entry's hash; `GET /signers/system` gives that key on the reference.
+- **Mixed, recorded with `l9mixed`** (31 exchanges, 78 bridge-log lines): the same adapter
+  between the sandbox and our server, both ways. The sandbox clears for a bank ledger on our
+  server, and our server clears for a bank ledger on the sandbox. Both end with the bank's
+  supply equal to its clearing position.
 - A commit or abort call carries only `{action, handle, intent}`. The adapter takes the
   entry from the prepare it saw, or from the intent's proofs after a restart.
 

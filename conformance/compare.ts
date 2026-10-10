@@ -174,15 +174,16 @@ function canonicalBridge(log: Exchange[]): Exchange[] {
       : x.token
         ? `${x.bridge ?? ''} token`
         : x.downstream
-          ? `${x.bridge ?? ''} ${String(x.downstream).slice(0, 3)} downstream`
+          ? `${x.bridge ?? ''} ${String(x.downstream).slice(0, 3)} 0downstream`
           : `${x.bridge ?? ''} ${String(x.req.url).replace(/(deb|cre)_[A-Za-z0-9]{17}/g, '$1')}`) + ` ${inputsOf.get(entryOf(x)) ?? ''}`
   const order = new Map<string, number>()
   const keyed = log.map((x, i) => {
     const intent = intentOf(x)
     if (!order.has(intent)) order.set(intent, order.size)
-    // One bridge's calls of one phase race as well when an intent has several of its
-    // entries (l9: a debit and a credit aborted together).
-    return { x, i, k: [order.get(intent)!, rank(x)], t: x.bridge || rank(x) === 3 ? tie(x) : '' }
+    // One bridge's calls and reports of one phase race as well when an intent has several
+    // of its entries (l9: a debit and a credit aborted together); a downstream intent
+    // goes before the report it leads to.
+    return { x, i, k: [order.get(intent)!, rank(x)], t: x.bridge || (intent && rank(x) >= 3) ? tie(x) : '' }
   })
   const sorted = keyed.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.t.localeCompare(b.t) || a.i - b.i).map((e) => e.x)
   // Token requests are compared by form, once each: the reference asked for a token
