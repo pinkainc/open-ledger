@@ -40,6 +40,8 @@ export type BridgeSpec = {
   lists?: (method: string, path: string, body: any) => unknown[] | undefined
   /** HTTP status for an effect call `POST /v2/effects/{effect}` (trait `events`); default 202. */
   effect?: (effect: string, event: any) => number
+  /** After answering an effect call 2xx: what the bridge then does, e.g. sign proofs on a report (reports). */
+  afterEffect?: (effect: string, event: any, bridge: { sdk: any; keyPair: any; log: (x: unknown) => void }) => Promise<void>
 }
 
 export type BridgeOptions = {
@@ -73,6 +75,8 @@ export async function startBridges(o: {
   bridges: BridgeSpec[]
   /** Webhook endpoints of effects, under `/hooks/` on the same port: the HTTP status to answer. */
   hooks?: (path: string, event: any) => number
+  /** Files served by `GET /files/<name>` on the same port (report assets), logged like hooks. */
+  files?: Record<string, string>
 }) {
   let seq = 0
   const many = o.bridges.length > 1
@@ -120,6 +124,15 @@ export async function startBridges(o: {
       res.end(JSON.stringify(tokenOf.token))
       return
     }
+    if (url.startsWith('/files/')) {
+      const file = o.files?.[decodeURIComponent(url.slice('/files/'.length))]
+      const status = req.method === 'GET' && file !== undefined ? 200 : 404
+      appendFileSync(o.out, JSON.stringify({ seq: seq++, file: url, req: { method: req.method, url, headers: req.headers }, res: { status } }) + '\n')
+      res.statusCode = status
+      if (status === 200) res.setHeader('content-type', 'text/csv')
+      res.end(status === 200 ? file : undefined)
+      return
+    }
     if (url.startsWith('/hooks/')) {
       const status = req.method === 'POST' ? (o.hooks?.(url, body) ?? 202) : 404
       appendFileSync(o.out, JSON.stringify({ seq: seq++, hook: url, req: { method: req.method, url, headers: req.headers, body }, res: { status } }) + '\n')
@@ -162,7 +175,9 @@ export async function startBridges(o: {
         else if (report) after = send
       }
     } else if (req.method === 'POST' && path.startsWith('/v2/effects/')) {
-      status = b.effect?.(decodeURIComponent(path.slice('/v2/effects/'.length)), body) ?? 202
+      const effect = decodeURIComponent(path.slice('/v2/effects/'.length))
+      status = b.effect?.(effect, body) ?? 202
+      if (b.afterEffect && status < 300) after = () => b.afterEffect!(effect, body, { sdk: sdks.get(b.handle), keyPair: b.keyPair, log: (x) => log(b, x) })
     } else if (req.method === 'PUT' && path.startsWith('/v2/intents/')) {
       status = 200
     }
