@@ -60,7 +60,8 @@ for (const [storeName, makeStore] of STORES) {
     })
 
     test('a bearer rule matches the token signer, for reads', async () => {
-      const { handle, sdk } = await newLedger(server.base, a, [only(a, { record: 'any' })])
+      // Everyone may enter: without `access` the wallet's rule would not help (policies2 #5).
+      const { handle, sdk } = await newLedger(server.base, a, [only(a, { record: 'any' }), { action: 'access' }])
       await wallet(sdk, a, 'alice', [{ action: 'read', bearer: { $signer: { public: b.public } } }])
       await sdkFor(server.base, handle, b).wallet.read('alice')
       const other = await newKeyPair()
@@ -186,6 +187,92 @@ for (const [storeName, makeStore] of STORES) {
         const w = await raw(sdkFor(server.base, handle, a).wallet.read('w'))
         assert.equal(w.meta.proofs.length, 2)
         assert.equal((await setStatus(handle, a, 'w', 'active')).meta.status, 'active')
+      })
+    })
+
+    describe('access policies', () => {
+      const readA = { action: 'read', record: 'any', bearer: { $signer: { public: '' } } }
+      const policy = (sdk: any, data: Record<string, unknown>) =>
+        sdk.policy.init().data({ schema: 'access', ...data }).hash().sign([{ keyPair: a }]).send()
+      async function policyStatus(sdk: any, handle: string, status: string) {
+        const cur = await raw(sdk.policy.read(handle))
+        return sdk.policy.from(cur).sign([{ keyPair: a, custom: { status } }]).send()
+      }
+      const update = async (ledger: string, k: KeyPair, handle: string) => {
+        const cur = await raw(sdkFor(server.base, ledger, a).wallet.read(handle))
+        return (sdkFor(server.base, ledger, k) as any).wallet.from(cur).data({ custom: { n: Math.random() } }).hash().sign([{ keyPair: k }]).send()
+      }
+      async function setup(config?: Record<string, unknown>) {
+        const rules = [only(a, { record: 'any' }), { ...readA, bearer: { $signer: { public: a.public } } }, { action: 'access', signer: { public: b.public } }]
+        const l = await newLedger(server.base, a, rules, config)
+        await signer(l.sdk, 'b', b)
+        await (l.sdk as any).circle.init().data({ handle: 'bank' }).hash().sign([{ keyPair: a }]).send()
+        await (l.sdk as any).circle.with('bank').signer.init().data({ circle: 'bank', signer: 'b' }).hash().sign([{ keyPair: a }]).send()
+        await policy(l.sdk, { handle: 'reader', record: 'any', values: [{ action: 'read', bearer: { $signer: { $circle: 'bank' } } }] })
+        await policy(l.sdk, { handle: 'updater', extend: 'reader', record: 'wallet', values: [{ action: 'update', signer: { $circle: 'bank' } }] })
+        return l
+      }
+
+      test('a `{policy}` rule stands for the values of the policy and of the one it extends', async () => {
+        const { handle, sdk } = await setup()
+        await wallet(sdk, a, 'w1', [{ policy: 'updater' }, only(a)])
+        await wallet(sdk, a, 'w2', [only(a)])
+        await wallet(sdk, a, 'w3', [{ policy: 'nope' }, only(a)]) // an unknown policy is accepted, grants nothing
+        await sdkFor(server.base, handle, b).wallet.read('w1')
+        await update(handle, b, 'w1')
+        assert.equal((await failure(update(handle, b, 'w2'))).detail, 'Cannot update wallet.')
+        assert.equal((await failure(sdkFor(server.base, handle, b).wallet.read('w3'))).detail, 'Cannot read wallet.')
+        // Values default `record` to their policy's; signer and bearer are not shown.
+        const check = await raw((sdkFor(server.base, handle, b) as any).wallet.with('w1').access.check().data({ action: 'update' }).hash().sign([{ keyPair: b }]).send())
+        assert.deepEqual(check.data.map((r: any) => r.data), [{ action: 'update', record: 'wallet' }])
+        // In a record-based ledger the policy's status does not matter.
+        await policyStatus(sdk, 'updater', 'inactive')
+        await update(handle, b, 'w1')
+      })
+
+      test('a policy for wallets does not apply to a symbol that names it', async () => {
+        const { handle, sdk } = await setup()
+        await (sdk as any).symbol.init().data({ handle: 'usd', factor: 100, access: [{ policy: 'updater' }, only(a)] }).hash().sign([{ keyPair: a }]).send()
+        const cur = await raw(sdk.symbol.read('usd'))
+        const e = await failure((sdkFor(server.base, handle, b) as any).symbol.from(cur).data({ custom: { n: 1 } }).hash().sign([{ keyPair: b }]).send())
+        assert.equal(e.detail, 'Cannot update symbol.')
+      })
+
+      test('policy-based: only active policies count, the gate included; record and ledger rules do not', async () => {
+        const { handle, sdk } = await setup()
+        await policy(sdk, { handle: 'admin', record: 'any', values: [only(a), { action: 'any', bearer: { $signer: { public: a.public } } }] })
+        await policyStatus(sdk, 'admin', 'active')
+        await policyStatus(sdk, 'updater', 'active')
+        await wallet(sdk, a, 'w', [only(a), { action: 'any', signer: { public: b.public } }])
+        const cur = await raw(sdk.ledger.read())
+        await (sdk as any).ledger.from(cur).data({ config: { 'access.strategy': 'policy-based' } }).hash().sign([{ keyPair: a }]).send()
+        // B's ledger `access` rule and the wallet's rule for B no longer count.
+        assert.equal((await failure(update(handle, b, 'w'))).detail, 'Cannot update wallet.')
+        await policy(sdk, { handle: 'enter', record: 'ledger', values: [{ action: 'access', signer: { $circle: 'bank' } }] })
+        await policyStatus(sdk, 'enter', 'active')
+        await update(handle, b, 'w')
+        // `reader` is not active, but `updater` extends it.
+        await sdkFor(server.base, handle, b).wallet.read('w')
+        await policyStatus(sdk, 'updater', 'inactive')
+        assert.equal((await failure(update(handle, b, 'w'))).detail, 'Cannot update wallet.')
+        // The migration is not one-way on the reference; owners are still stored.
+        await wallet(sdk, a, 'w4', [only(a)])
+        assert.deepEqual((await raw(sdk.wallet.read('w4'))).meta.owners, [a.public])
+        const now = await raw(sdk.ledger.read())
+        await (sdk as any).ledger.from(now).data({ config: { 'access.strategy': 'record-based' } }).hash().sign([{ keyPair: a }]).send()
+        await update(handle, b, 'w')
+      })
+
+      test('a read needs `access` unless a ledger rule grants the read itself', async () => {
+        const c = await newKeyPair()
+        const { handle, sdk } = await newLedger(server.base, a, [only(a, { record: 'any' }), { action: 'access', signer: { public: b.public } }])
+        await wallet(sdk, a, 'w', [only(a), { action: 'read', bearer: { $signer: { public: c.public } } }, { action: 'read', bearer: { $signer: { public: b.public } } }])
+        assert.equal((await failure(sdkFor(server.base, handle, c).wallet.read('w'))).detail, 'Cannot read wallet.')
+        // B's `access` is a signer rule; the token's key satisfies it.
+        await sdkFor(server.base, handle, b).wallet.read('w')
+        const open = await newLedger(server.base, a, [only(a, { record: 'any' }), { action: 'read', record: 'any' }])
+        await wallet(open.sdk, a, 'w', [only(a)])
+        await sdkFor(server.base, open.handle, c).wallet.read('w')
       })
     })
   })

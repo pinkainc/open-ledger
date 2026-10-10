@@ -21,6 +21,21 @@
 //            ledger's own rules. With `{action: create, record: intent}` open to all,
 //            a signer without `access` still cannot create an intent.
 //
+// Access policies (scenarios policies, policies2). A rule `{policy: handle}` stands for
+// the values of that `schema: access` policy and of the policies it `extend`s, each
+// value defaulting `record` to its policy's `record`. In a record-based ledger the
+// policy's status does not matter and an unknown handle grants nothing. In a ledger
+// with `access.strategy: policy-based` the ledger's and records' own rules no longer
+// count: the rules in force are the values of the **active** access policies (an
+// extended policy contributes whatever its status); not even the server's default
+// `{read, record: ledger}` counts (policies2: C may enter but not read the ledger). The gate then
+// needs an active policy granting `access` on the ledger (record `ledger` or `any`).
+//
+// The gate applies to reads as well, but a read also passes it when the ledger's or
+// the server's rules grant that read directly: a wallet rule letting C read does not
+// help C without `access` (policies2), a ledger rule `{read, record: any}` lets anyone
+// read without `access` (access4), and so does the server's `{read, record: ledger}`.
+//
 // Signer matchers: `public`, `handle` (a signer record of this ledger), `$circle`
 // (membership through circle-signer records), `$record: owner` (a key in the record's
 // `meta.owners`), `$ledger: owner` (a key in the ledger's owners), and `$in` of those.
@@ -92,7 +107,7 @@ export class AccessControl {
    * attached to: the record itself, the ledger, or the server.
    */
   async grants(r: any, action: string, record: string, { who, proofs = [] }: Access, scope: Scope, level: Level = 'record') {
-    if (r.policy !== undefined) return false // access policies: not yet
+    if (r.policy !== undefined) return false // expanded by `rules`
     if (r.action !== 'any' && !matchValue(r.action, action)) return false
     if (r.record === undefined) {
       if (level === 'ledger' && record !== 'ledger') return false
@@ -111,37 +126,77 @@ export class AccessControl {
     return true
   }
 
+  /** The values a policy stands for, its `extend` chain included, with `record` defaulted. */
+  private async policyValues(ledger: string, handle: string, seen = new Set<string>()): Promise<any[]> {
+    if (seen.has(handle)) return []
+    seen.add(handle)
+    const p = (await this.store.list(ledger, 'policies')).find((x) => x.data.handle === handle && x.data.schema === 'access')
+    if (!p) return []
+    const own = (p.data.values ?? []).map((v: any) => (v.record === undefined && p.data.record !== undefined ? { ...v, record: p.data.record } : v))
+    return [...(p.data.extend ? await this.policyValues(ledger, p.data.extend, seen) : []), ...own]
+  }
+
+  private async expand(ledger: string, rules: any[], level: Level): Promise<[any, Level][]> {
+    const out: [any, Level][] = []
+    for (const r of rules) {
+      if (r?.policy !== undefined) for (const v of await this.policyValues(ledger, r.policy)) out.push([v, level])
+      else out.push([r, level])
+    }
+    return out
+  }
+
+  static policyBased = (ledger: StoredRecord) => ledger.data.config?.['access.strategy'] === 'policy-based'
+
+  /** Values of the active access policies: the rules of a policy-based ledger. */
+  private async activePolicies(ledger: string): Promise<any[]> {
+    const active = (await this.store.list(ledger, 'policies')).filter((p) => p.data.schema === 'access' && p.meta.status === 'active')
+    const out: any[] = []
+    for (const p of active) out.push(...(await this.policyValues(ledger, p.data.handle)))
+    return out
+  }
+
   /** Rules in force for a scope, with their level: the record's, the ledger's, the server's. */
-  rules(scope: Partial<Scope>): [any, Level][] {
+  async rules(scope: Scope): Promise<[any, Level][]> {
+    const ledger = scope.ledger.data.handle
+    const server = this.serverRules.map((r) => [r, 'server'] as [any, Level])
+    if (AccessControl.policyBased(scope.ledger)) return (await this.activePolicies(ledger)).map((r) => [r, 'ledger'] as [any, Level])
     // The ledger record's own rules are its ledger-level rules; don't count them twice.
     const own = scope.record && scope.record !== scope.ledger ? (scope.record.data.access ?? []) : []
-    return [
-      ...own.map((r: any) => [r, 'record'] as [any, Level]),
-      ...(scope.ledger?.data.access ?? []).map((r: any) => [r, 'ledger'] as [any, Level]),
-      ...this.serverRules.map((r) => [r, 'server'] as [any, Level]),
-    ]
+    return [...(await this.expand(ledger, own, 'record')), ...(await this.expand(ledger, scope.ledger.data.access ?? [], 'ledger')), ...server]
   }
 
   /** The rules that grant, each with the level it lives on. */
   async matching(action: string, record: string, access: Access, scope: Scope): Promise<[any, Level][]> {
     const out: [any, Level][] = []
-    for (const [r, level] of this.rules(scope)) if (await this.grants(r, action, record, access, scope, level)) out.push([r, level])
+    for (const [r, level] of await this.rules(scope)) if (await this.grants(r, action, record, access, scope, level)) out.push([r, level])
     return out
   }
 
   async allowed(action: string, record: string, access: Access, scope: Scope) {
-    for (const [r, level] of this.rules(scope)) if (await this.grants(r, action, record, access, scope, level)) return true
+    for (const [r, level] of await this.rules(scope)) if (await this.grants(r, action, record, access, scope, level)) return true
     return false
   }
 
   /** The ledger gate: `access` on the ledger, from the ledger's own rules. */
   async entered(access: Access, scope: Scope) {
-    for (const r of scope.ledger.data.access ?? []) if (await this.grants(r, 'access', 'ledger', access, scope, 'ledger')) return true
+    const ledger = scope.ledger.data.handle
+    const rules = AccessControl.policyBased(scope.ledger)
+      ? (await this.activePolicies(ledger)).map((r) => [r, 'ledger'] as [any, Level])
+      : await this.expand(ledger, scope.ledger.data.access ?? [], 'ledger')
+    // A token's key counts as a signer here: `{access, signer: B}` lets B read with a
+    // token (policies #12), although a signer rule never grants the read itself.
+    const keys = { ...access, proofs: [...(access.proofs ?? []), ...(access.who ? [access.who.public] : [])] }
+    for (const [r] of rules) if (await this.grants(r, 'access', 'ledger', keys, scope, 'ledger')) return true
     return false
   }
 
   async authorize(action: string, record: string, access: Access, scope: Scope) {
-    if (action !== 'read' && !(await this.entered(access, scope))) throw errors.forbidden(action, record)
+    const through = async () => {
+      for (const [r, level] of await this.rules(scope)) if (level !== 'record' && (await this.grants(r, action, record, access, scope, level))) return true
+      return false
+    }
+    const open = action === 'read' && !AccessControl.policyBased(scope.ledger) && (await through())
+    if (!(await this.entered(access, scope)) && !open) throw errors.forbidden(action, record)
     if (!(await this.allowed(action, record, access, scope))) throw errors.forbidden(action, record)
   }
 

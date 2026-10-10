@@ -4,6 +4,36 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Access policies and the policy-based strategy
+
+Recorded with `conformance/scenarios/policies.ts` (65 exchanges) and the follow-up
+`policies2.ts` (36) on 2.47.4, both reproduced. Several docs claims do not hold.
+
+- **`{policy: handle}` in a record's or the ledger's `access`** stands for the values
+  of that `schema: access` policy and of the policies it `extend`s (the extended
+  policy's own `record` applies to its values). A value without `record` takes the
+  policy's `record`: `wallet-updater` (record `wallet`) attached to a symbol grants
+  nothing on the symbol.
+- A handle that names no policy is accepted on create (201) and grants nothing.
+- **Record-based: the policy's status does not matter** (inactive still grants).
+- **`access.strategy: policy-based`**: the ledger's and the records' own rules no
+  longer count, **the server's default `{read, record: ledger}` neither**. The rules
+  are the values of the **active** access policies; an extended policy contributes
+  even when it is not active. Entering the ledger (the gate) needs an active policy
+  granting `access` (record `ledger` or `any`).
+- **The migration is not one-way** (docs: it is): `PUT /ledger` back to `record-based`
+  is 200. Owners are still stored on new records (docs: they are not).
+- **The gate applies to reads**: a wallet rule `{read, bearer: C}` does not let C read
+  without `access` on the ledger. A read passes the gate anyway when a ledger (or
+  server) rule grants that read itself (`{read, record: any}`, access4). A signer rule
+  `{access, signer: B}` is satisfied by B's **token** key for reads.
+- **Access check** lists rules without `signer` **and `bearer`**, a policy as its
+  values; it needs no `read` on the record (B, who may not read `w2`, got `[]`).
+- Policy create carries `status: created` in both proofs; status proofs on access
+  policies (`active`/`inactive`) go through `access-policy:status` (empty quorum).
+
+Not recorded: domain-specific policies (`handle@domain`), value `filter`, `invoke`.
+
 ## 2026-10-09 — Domains
 
 Recorded with `conformance/scenarios/domains.ts` on 2.47.4 (31 exchanges), reproduced.

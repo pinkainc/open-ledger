@@ -558,19 +558,19 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
 
   // Access check: the rules that grant an action on this record to the signers of the
   // check request — for reads too. Answered as a list of signed rules without a page,
-  // ledger rules first, then the record's own. Observed (records, records2): a rule is
-  // shown without its `signer`, and a record rule without `record` names the record's
+  // ledger rules first, then the record's own. Observed (records, records2, policies): a
+  // rule is shown without its `signer` and `bearer`, a policy as its values, and a record rule without `record` names the record's
   // kind (`{any, signer: A}` on a symbol comes back as `{any, record: symbol}`). Server
   // rules were never listed.
   async function accessCheck(req: FastifyRequest, t: Target) {
     const who = await authenticate(req)
     const record = KINDS[t.kind].record
-    await acl.authorize('read', record, { who }, { ledger: t.ledger, record: t.found })
+    // Not even `read` on the record is needed: B, who could not read w2, got `[]` (policies #56).
     const body = req.body as any
     const action = body?.data?.action ?? 'read'
     const matching = await acl.matching(action, record, { who, proofs: proofKeys(body) }, { ledger: t.ledger, record: t.found })
     const shown = [...matching.filter(([, l]) => l === 'ledger'), ...matching.filter(([, l]) => l === 'record')].map(([rule, level]) => {
-      const { signer: _s, ...rest } = rule
+      const { signer: _s, bearer: _b, ...rest } = rule
       return level === 'record' && rest.record === undefined ? { ...rest, record } : rest
     })
     return envelope(req.ledgerKey, shown.map((rule) => envelope(req.ledgerKey, rule)))

@@ -75,7 +75,9 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       only the run's own ledger when recording (`conformance/own-ledger.ts`)
 - [x] Forbidden details: `Cannot <action> <record>.` — no soft `detail` difference left at any level
 - [x] Tests for scope, gate, 403 details, bearer and signer matchers, circles, status policies (`access.test.ts`)
-- [ ] Access policies (`{policy: handle}`) and `access.strategy: policy-based`
+- [x] Access policies (`{policy: handle}`, `extend`) and `access.strategy: policy-based`
+      (recorded `policies` 65/65, `policies2` 36/36); the gate applies to reads
+- [ ] (?) Domain-specific access policies (`handle@domain`), policy value `filter`, `invoke`
 - [x] Claim authorisation: `spend` on the source, `issue`/`destroy` on the symbol, `limit` on the
       wallet, by the intent's signers (impersonated proofs count as the token's signer, with its
       `bearer.*` claims). Without it the intent waits after resolution and expires (access4 14/14)
