@@ -263,6 +263,65 @@ for (const [storeName, makeStore] of STORES) {
         await update(handle, b, 'w')
       })
 
+      // policies3, policies4: a policy-based ledger where K enters and gets only what follows.
+      async function policyBased() {
+        const k = await newKeyPair()
+        const l = await newLedger(server.base, a, [only(a, { record: 'any' }), { ...readA, bearer: { $signer: { public: a.public } } }])
+        const active = async (data: Record<string, unknown>) => {
+          await policy(l.sdk, { access: [only(a)], ...data })
+          await policyStatus(l.sdk, data.handle as string, 'active')
+        }
+        await active({ handle: 'admin', record: 'any', values: [only(a), { action: 'any', bearer: { $signer: { public: a.public } } }] })
+        await active({ handle: 'enter', record: 'ledger', values: [{ action: 'access', signer: { public: k.public } }, { action: 'access', bearer: { $signer: { public: k.public } } }] })
+        const cur = await raw(l.sdk.ledger.read())
+        await (l.sdk as any).ledger.from(cur).data({ config: { 'access.strategy': 'policy-based' } }).hash().sign([{ keyPair: a }]).send()
+        return { ...l, k, asK: sdkFor(server.base, l.handle, k) as any, active }
+      }
+
+      test('a policy in a domain holds for that domain only; a list shows what `any` grants', async () => {
+        const { sdk, k, asK, active } = await policyBased()
+        for (const d of ['payments', 'other']) await (sdk as any).domain.init().data({ handle: d }).hash().sign([{ keyPair: a }]).send()
+        await active({ handle: 'pay@payments', record: 'wallet', values: [{ action: 'any', signer: { public: k.public } }, { action: 'read', bearer: { $signer: { public: k.public } } }] })
+        await wallet(asK, k, 'k1@payments', [])
+        assert.equal((await failure(wallet(asK, k, 'k2@other', []))).detail, 'Cannot create wallet.')
+        assert.equal((await failure(wallet(asK, k, 'k3', []))).detail, 'Cannot create wallet.')
+        await wallet(sdk, a, 'a2@other', [])
+        assert.equal((await failure(asK.wallet.read('a2@other'))).detail, 'Cannot read wallet.')
+        assert.deepEqual((await raw(asK.wallet.list())).data.map((w: any) => w.data.handle), ['k1@payments'])
+      })
+
+      test('a value\'s filter is relative to data, takes operators, and its keys are checked; lists ignore read values', async () => {
+        const { sdk, k, asK, active } = await policyBased()
+        for (const [h, schema] of [['usd', 'fiat'], ['btc', 'crypto']]) await (sdk as any).symbol.init().data({ handle: h, factor: 100, custom: { schema } }).hash().sign([{ keyPair: a }]).send()
+        await active({ handle: 'fiat', record: 'symbol', values: [{ action: 'read', bearer: { $signer: { public: k.public } }, filter: { 'custom.schema': { $in: ['fiat'] } } }] })
+        await asK.symbol.read('usd')
+        assert.equal((await failure(asK.symbol.read('btc'))).detail, 'Cannot read symbol.')
+        assert.deepEqual((await raw(asK.symbol.list())).data, [])
+        const bad = await failure(policy(sdk, { handle: 'bad', record: 'wallet', values: [{ action: 'read', filter: { 'data.handle': 'x' } }] }))
+        assert.equal(bad.reason, 'record.schema-invalid')
+        assert.match(bad.detail, /^Cannot define access filter key "data.handle" for record "wallet". Allowed keys: \["\^handle\$"/)
+      })
+
+      test('invoke: canSpendEveryClaimWallet asks the sources, canReadAnyClaimWallet any wallet, canSpendAllChangedRouteTargets the new routes', async () => {
+        const { sdk, k, asK, active } = await policyBased()
+        for (const h of ['b1', 'b2', 'b3']) await wallet(sdk, a, h, [])
+        await (sdk as any).symbol.init().data({ handle: 'usd', factor: 100 }).hash().sign([{ keyPair: a }]).send()
+        await active({ handle: 'k-wallets', record: 'wallet', values: [{ action: 'spend', signer: { public: k.public }, filter: { handle: { $in: ['b1', 'b2'] } } }, { action: 'read', bearer: { $signer: { public: k.public } }, filter: { handle: 'b1' } }] })
+        await active({ handle: 'k-intents', record: 'intent', values: [{ action: 'create', signer: { public: k.public }, invoke: 'intent.canSpendEveryClaimWallet' }, { action: 'read', bearer: { $signer: { public: k.public } }, invoke: 'intent.canReadAnyClaimWallet' }] })
+        await active({ handle: 'k-create', record: 'wallet', values: [{ action: 'create', signer: { public: k.public }, invoke: 'wallet.canSpendAllChangedRouteTargets' }] })
+        const move = (sdkOf: any, key: KeyPair, handle: string, source: string, target: string) =>
+          sdkOf.intent.init().data({ handle, claims: [{ action: 'transfer', source: { handle: source }, target: { handle: target }, symbol: { handle: 'usd' }, amount: 1 }] }).hash().sign([{ keyPair: key }]).send()
+        await move(asK, k, 'k-13', 'b1', 'b3')
+        assert.equal((await failure(move(asK, k, 'k-31', 'b3', 'b1'))).detail, 'Cannot create intent.')
+        await move(sdk, a, 'a-12', 'b1', 'b2')
+        await move(sdk, a, 'a-23', 'b2', 'b3')
+        await asK.intent.read('a-12')
+        assert.equal((await failure(asK.intent.read('a-23'))).detail, 'Cannot read intent.')
+        await asK.wallet.init().data({ handle: 'r-ok', routes: [{ action: 'forward', target: 'b2' }] }).hash().sign([{ keyPair: k }]).send()
+        const refused = await failure(asK.wallet.init().data({ handle: 'r-no', routes: [{ action: 'forward', target: 'b3' }] }).hash().sign([{ keyPair: k }]).send())
+        assert.equal(refused.detail, 'Cannot create wallet.')
+      })
+
       test('a read needs `access` unless a ledger rule grants the read itself', async () => {
         const c = await newKeyPair()
         const { handle, sdk } = await newLedger(server.base, a, [only(a, { record: 'any' }), { action: 'access', signer: { public: b.public } }])

@@ -6,7 +6,7 @@ import { createPrivateKey, createPublicKey, randomBytes, timingSafeEqual } from 
 import { customAlphabet } from 'nanoid'
 import { createReadStream, existsSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
-import { AccessControl, type Access, type Principal } from './access.js'
+import { AccessControl, validateAccessFilters, type Access, type Principal } from './access.js'
 import { Core, hasTrait } from './core.js'
 import { resolveAddress } from './routing.js'
 import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, signDigest, verifyDigest, type KeyPair, type Proof } from './crypto.js'
@@ -636,6 +636,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (kind === 'schemas') return checkContent(data.schema)
     if (kind === 'policies' && data.schema === 'processing') validateProcessing(data)
     if (kind === 'policies') validatePolicyValues(data)
+    if (kind === 'policies') validateAccessFilters(data)
     const record = KINDS[kind].record
     if (typeof data.schema === 'string') {
       const schema = await store.get(scope, 'schemas', data.schema)
@@ -697,7 +698,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const who = await authenticate(req)
     const body = req.body as any
     const keys = await impersonate(body, t.ledger.data.handle, who)
-    await acl.authorize('update', KINDS[t.kind].record, { who, proofs: keys }, { ledger: t.ledger, record: t.found })
+    await acl.authorize('update', KINDS[t.kind].record, { who, proofs: keys }, { ledger: t.ledger, record: t.found, subject: { data: body.data, meta: t.found.meta } })
     if (body.data.parent !== t.found.hash) throw errors.parentHashInvalid()
     if (t.kind !== 'ledgers') await related(t.kind, t.scope, body.data)
     const proofs = await annotate(t.ledger.data.handle, verifyProofs(body))
@@ -1002,7 +1003,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       const keys = await impersonate(req.body, ledger.data.handle, who, 'created')
       // A record is judged by the domain it joins (domains2); a subdomain by the ledger's rules alone.
       const domain = kind === 'domains' ? undefined : await joining(ledger.data.handle, req.body)
-      await acl.authorize('create', record, { who, proofs: keys }, { ledger, domain })
+      const subject = { data: (req.body as any)?.data ?? {}, meta: domain ? { domain } : {} }
+      await acl.authorize('create', record, { who, proofs: keys }, { ledger, domain, subject })
       await related(kind, ledger.data.handle, (req.body as any).data)
       const aspect = kind === 'anchors' ? await aspectFor(store, ledger.data.handle, 'create') : undefined
       reply.status(201).send(aspect ? await createAnchor(req, ledger, aspect) : await create(kind, ledger.data.handle, req.ledgerKey!, req))
@@ -1019,7 +1021,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
         throw new LedgerError(400, 'api.query-malformed', `Invalid date in filter 'meta.moment': '${moment}'`)
       await acl.authorizeQuery(record, { who }, { ledger })
       const rows: StoredRecord[] = []
-      for (const r of await store.list(ledger.data.handle, kind)) if (await acl.allowed('read', record, { who }, { ledger, record: r })) rows.push(r)
+      const policyBased = AccessControl.policyBased(ledger)
+      for (const r of await store.list(ledger.data.handle, kind))
+        if (policyBased ? await acl.listable(record, { who }, { ledger, record: r }) : await acl.allowed('read', record, { who }, { ledger, record: r })) rows.push(r)
       return kind === 'anchors' ? listAnchors(req, () => listPage(req, rows)) : listPage(req, rows)
     })
 

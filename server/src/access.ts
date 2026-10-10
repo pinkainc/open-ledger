@@ -64,7 +64,52 @@ export type Access = { who?: Principal; proofs?: string[] }
  * Where it is evaluated: the ledger, and the record when there is one. `domain` is the
  * domain a record being created joins; an existing record's is its `meta.domain`.
  */
-export type Scope = { ledger: StoredRecord; record?: StoredRecord; domain?: string }
+export type Scope = { ledger: StoredRecord; record?: StoredRecord; domain?: string; subject?: { data: any; meta?: any } }
+
+/** The record a rule's `filter` and `invoke` look at: the one read or changed, or the one being created. */
+const subjectOf = (scope: Scope) => scope.record ?? scope.subject
+
+/**
+ * A policy value's `filter` (recorded, policies3/4): keys name data fields relative to
+ * `data` (`handle`, `schema`, `custom.x`) or `meta.*`; values are plain or operators
+ * (`{$in: […]}`). Allowed keys per record kind are checked when the policy is made.
+ */
+function filterMatches(filter: Record<string, unknown>, subject: { data: any; meta?: any } | undefined) {
+  if (!subject) return false
+  return Object.entries(filter).every(([key, cond]) => {
+    const [root, path] = key.startsWith('meta.') ? [subject.meta ?? {}, key.slice(5)] : [subject.data ?? {}, key]
+    const v = path.split('.').reduce((o: any, k) => (o == null ? undefined : o[k]), root)
+    if (cond !== null && typeof cond === 'object' && !Array.isArray(cond)) {
+      const c = cond as Record<string, any>
+      if (Array.isArray(c.$in) && !c.$in.includes(v)) return false
+      if (Array.isArray(c.$nin) && c.$nin.includes(v)) return false
+      if ('$eq' in c && c.$eq !== v) return false
+      if ('$ne' in c && c.$ne === v) return false
+      if (typeof c.$regex === 'string' && !(typeof v === 'string' && new RegExp(c.$regex).test(v))) return false
+      return true
+    }
+    return v === cond
+  })
+}
+
+// Allowed `filter` keys of an access policy value, per record kind (recorded, policies3/4;
+// other kinds were not recorded and are not checked).
+const FILTER_KEYS: Record<string, string[]> = {
+  symbol: ['^handle$', '^schema$', '^factor$', '^custom..+$', '^meta.domain$', '^meta.labels$', '^meta.status$'],
+  wallet: ['^handle$', '^schema$', '^bridge$', '^custom..+$', '^meta.domain$', '^meta.labels$', '^meta.status$'],
+  intent: ['^handle$', '^schema$', '^custom..+$', '^meta.domain$', '^meta.labels$', '^meta.status$', '^meta.thread$'],
+}
+export function validateAccessFilters(policy: any) {
+  if (policy?.schema !== 'access') return
+  for (const v of Array.isArray(policy.values) ? policy.values : []) {
+    const record = v?.record ?? policy.record
+    const allowed = FILTER_KEYS[record]
+    if (!allowed || !v?.filter || typeof v.filter !== 'object') continue
+    for (const key of Object.keys(v.filter))
+      if (!allowed.some((re) => new RegExp(re).test(key)))
+        throw new LedgerError(422, 'record.schema-invalid', `Cannot define access filter key "${key}" for record "${record}". Allowed keys: ${JSON.stringify(allowed)}`)
+  }
+}
 
 const isDomain = (r?: StoredRecord) => typeof r?.luid === 'string' && r.luid.startsWith('$dom.')
 
@@ -122,7 +167,8 @@ export class AccessControl {
    * `level` is where the rule lives. A rule without `record` covers the record it is
    * attached to: the record itself, the ledger, or the server.
    */
-  async grants(r: any, action: string, record: string, { who, proofs = [] }: Access, scope: Scope, level: Level = 'record') {
+  async grants(r: any, action: string, record: string, access: Access, scope: Scope, level: Level = 'record') {
+    const { who, proofs = [] } = access
     if (r.policy !== undefined) return false // expanded by `rules`
     if (r.action !== 'any' && !matchValue(r.action, action)) return false
     if (r.record === undefined) {
@@ -130,6 +176,8 @@ export class AccessControl {
       if (level === 'domain' && record !== 'domain') return false
       if (level === 'server' && record !== 'server' && action !== 'access') return false
     } else if (!matchValue(r.record, record)) return false
+    if (r.filter && typeof r.filter === 'object' && !filterMatches(r.filter, subjectOf(scope))) return false
+    if (typeof r.invoke === 'string' && !(await this.invoke(r.invoke, access, scope))) return false
     if (r.signer) {
       const keys = level === 'domain' && who ? [...proofs, who.public] : proofs
       for (const k of keys) if (await this.keyMatches(r.signer, k, scope)) return true
@@ -165,19 +213,101 @@ export class AccessControl {
 
   static policyBased = (ledger: StoredRecord) => ledger.data.config?.['access.strategy'] === 'policy-based'
 
-  /** Values of the active access policies: the rules of a policy-based ledger. */
-  private async activePolicies(ledger: string): Promise<any[]> {
+  /**
+   * Values of the active access policies: the rules of a policy-based ledger. A policy in
+   * a domain (`pay@payments`; recorded, policies3) holds only for records of that domain
+   * and the domains below it: K, granted everything on wallets there, could neither
+   * create a wallet outside it nor read one.
+   */
+  private async activePolicies(ledger: string, scope?: Scope): Promise<any[]> {
     const active = (await this.store.list(ledger, 'policies')).filter((p) => p.data.schema === 'access' && p.meta.status === 'active')
+    const chain = scope ? await this.domainChain(ledger, scope) : []
     const out: any[] = []
-    for (const p of active) out.push(...(await this.policyValues(ledger, p.data.handle)))
+    for (const p of active) if (p.meta.domain === undefined || chain.includes(p.meta.domain)) out.push(...(await this.policyValues(ledger, p.data.handle)))
     return out
+  }
+
+  /** The domain of the record (or of the one being created) and the domains above it. */
+  private async domainChain(ledger: string, scope: Scope): Promise<string[]> {
+    const out: string[] = []
+    for (let d = scope.domain ?? scope.record?.meta?.domain; typeof d === 'string' && !out.includes(d); ) {
+      out.push(d)
+      d = (await this.store.get(ledger, 'domains', d))?.data.domain
+    }
+    return out
+  }
+
+  /**
+   * Built-in checks a policy value may `invoke` (about-policies; recorded, policies3/4).
+   * `intent.canSpendEveryClaimWallet` let K move from a wallet it may spend to one it may
+   * not: only the claims' sources are asked for.
+   */
+  private async invoke(name: string, access: Access, scope: Scope): Promise<boolean> {
+    const ledger = scope.ledger.data.handle
+    const subject = subjectOf(scope)
+    const may = async (action: string, handle: unknown) => {
+      if (typeof handle !== 'string') return false
+      const wallet = await this.store.get(ledger, 'wallets', handle)
+      return !!wallet && (await this.allowed(action, 'wallet', access, { ledger: scope.ledger, record: wallet }))
+    }
+    const claimsOf = (i: any): any[] => (Array.isArray(i?.data?.claims) ? i.data.claims : [])
+    const wallets = (claims: any[], ends: ('source' | 'target')[]) => claims.flatMap((c) => ends.map((e) => c?.[e]?.handle)).filter((h) => typeof h === 'string')
+    const thread = async () => {
+      const t = subject?.meta?.thread
+      if (!t) return claimsOf(subject)
+      return (await this.store.list(ledger, 'intents')).filter((i) => i.meta.thread === t).flatMap(claimsOf)
+    }
+    const some = async (action: string, hs: string[]) => {
+      for (const h of hs) if (await may(action, h)) return true
+      return false
+    }
+    const every = async (action: string, hs: string[]) => {
+      for (const h of hs) if (!(await may(action, h))) return false
+      return true
+    }
+    switch (name) {
+      case 'intent.canReadAnyClaimWallet':
+        return some('read', wallets(claimsOf(subject), ['source', 'target']))
+      case 'intent.canReadAnyClaimWalletInThread':
+        return some('read', wallets(await thread(), ['source', 'target']))
+      case 'intent.canSpendEveryClaimWallet':
+        return every('spend', wallets(claimsOf(subject), ['source']))
+      case 'intent.canSpendAnyClaimWallet':
+        return some('spend', wallets(claimsOf(subject), ['source', 'target']))
+      case 'intent.canSpendAnyClaimWalletInThread':
+        return some('spend', wallets(await thread(), ['source', 'target']))
+      case 'wallet.canSpendAllChangedRouteTargets': {
+        // Routes that forward or debit, new in this version, need `spend` on their target.
+        const before = new Set(((scope.record?.data?.routes ?? []) as any[]).map((r) => JSON.stringify(r)))
+        const routes = ((scope.subject?.data?.routes ?? scope.record?.data?.routes ?? []) as any[]).filter((r) => ['forward', 'debit'].includes(r?.action) && !before.has(JSON.stringify(r)))
+        return every('spend', routes.map((r) => r.target))
+      }
+      default:
+        return false
+    }
+  }
+
+  /**
+   * A policy-based ledger's list (recorded, policies3/4) keeps a record only for a value
+   * granting `query` (or `any`) whose signer or bearer names the caller's token key: a
+   * `read` value, filtered or not, shows nothing in a list.
+   */
+  async listable(record: string, access: Access, scope: Scope) {
+    const key = access.who?.public
+    if (!key) return false
+    for (const r of await this.activePolicies(scope.ledger.data.handle, scope)) {
+      const principal = r.signer ?? r.bearer?.$signer
+      if (!principal || !(await this.grants({ ...r, signer: undefined, bearer: undefined }, 'query', record, {}, scope, 'ledger'))) continue
+      if (await this.keyMatches(principal, key, scope)) return true
+    }
+    return false
   }
 
   /** Rules in force for a scope, with their level: the record's, the ledger's, the server's. */
   async rules(scope: Scope): Promise<[any, Level][]> {
     const ledger = scope.ledger.data.handle
     const server = this.serverRules.map((r) => [r, 'server'] as [any, Level])
-    if (AccessControl.policyBased(scope.ledger)) return (await this.activePolicies(ledger)).map((r) => [r, 'ledger'] as [any, Level])
+    if (AccessControl.policyBased(scope.ledger)) return (await this.activePolicies(ledger, scope)).map((r) => [r, 'ledger'] as [any, Level])
     // The ledger record's own rules are its ledger-level rules; don't count them twice.
     const own = scope.record && scope.record !== scope.ledger ? (scope.record.data.access ?? []) : []
     return [
@@ -226,7 +356,7 @@ export class AccessControl {
   async entered(access: Access, scope: Scope) {
     const ledger = scope.ledger.data.handle
     const rules = AccessControl.policyBased(scope.ledger)
-      ? (await this.activePolicies(ledger)).map((r) => [r, 'ledger'] as [any, Level])
+      ? (await this.activePolicies(ledger, scope)).map((r) => [r, 'ledger'] as [any, Level])
       : await this.expand(ledger, scope.ledger.data.access ?? [], 'ledger')
     // A token's key counts as a signer here: `{access, signer: B}` lets B read with a
     // token (policies #12), although a signer rule never grants the read itself.
