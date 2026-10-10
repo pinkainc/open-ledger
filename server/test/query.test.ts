@@ -2,7 +2,7 @@
 // create: server info, system schemas, filtered lists.
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { matches, parseQuery } from '../src/query.js'
+import { likePattern, matches, parseQuery } from '../src/query.js'
 import { STORES, newKeyPair, ref, newLedger, sendIntent, settle, setupBooks, startServer, type KeyPair } from './helpers.js'
 
 const intent = {
@@ -44,6 +44,17 @@ describe('query filters', () => {
     assert.ok(q({ 'data.claims.target.handle': 'carol' }))
     assert.ok(q({ 'data.handle.$regex': '^ac' }))
     assert.ok(!q({ 'data.claims.action': 'destroy' }))
+  })
+
+  test('a list\'s $regex is a LIKE-style substring match (filters2)', () => {
+    const hits = (p: string) => ['w1', 'Wx', 'a.b', 'w%'].filter((h) => likePattern(p).test(h))
+    assert.deepEqual(hits('w'), ['w1', 'w%'])
+    assert.deepEqual(hits('^w'), [])
+    assert.deepEqual(hits('w.*'), ['w1', 'w%'])
+    assert.deepEqual(hits('%w%'), ['w1', 'w%'])
+    assert.deepEqual(hits('a\\.b'), ['a.b'])
+    assert.deepEqual(hits('W'), ['Wx'])
+    assert.deepEqual(hits('[aw]'), [])
   })
 
   test('$plainTextQuery matches whole words and address parts', () => {

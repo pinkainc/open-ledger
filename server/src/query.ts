@@ -6,7 +6,7 @@
 // it is a numeric index (`data.claims.0.amount`). Query values arrive as strings and
 // are compared as the field's own type: a number field against Number(value).
 
-const OPERATORS = new Set(['$eq', '$gt', '$gte', '$lt', '$lte', '$in', '$ne', '$nin', '$regex'])
+const OPERATORS = new Set(['$eq', '$gt', '$gte', '$lt', '$lte', '$in', '$ne', '$nin', '$regex', '$like'])
 const IGNORED = /^page[.[]/
 
 export type Filter = { path: string[]; op: string; value: unknown }
@@ -86,6 +86,10 @@ function test(f: Filter, fields: unknown[]): boolean {
       const re = new RegExp(String(f.value))
       return any((x) => typeof x === 'string' && re.test(x))
     }
+    case '$like': {
+      const re = likePattern(String(f.value))
+      return any((x) => typeof x === 'string' && re.test(x))
+    }
     default: {
       const ok = { $gt: (c: number) => c > 0, $gte: (c: number) => c >= 0, $lt: (c: number) => c < 0, $lte: (c: number) => c <= 0 }[f.op]!
       return any((x) => {
@@ -162,3 +166,24 @@ export function unsupportedFilters(kind: string, query: Record<string, unknown>)
   }
   return out
 }
+
+/**
+ * `$regex` in a record list (recorded, filters2) is no regular expression: it matches a
+ * substring, case-sensitively, like SQL `LIKE '%…%'`, where `.*` and `%` stand for any
+ * run of characters, `.` and `_` for one, a backslash escapes the next character, and
+ * everything else (`^`, `$`, `[`) is itself: `^w` finds nothing, `w.*` and `w%` find
+ * `w1`, `a\.b` finds `a.b`. Lists ask for it as `$like`.
+ */
+export function likePattern(p: string): RegExp {
+  let out = ''
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i]
+    if (c === '\\' && i + 1 < p.length) out += escapeRe(p[++i])
+    else if (c === '.' && p[i + 1] === '*') (out += '[\\s\\S]*'), i++
+    else if (c === '%') out += '[\\s\\S]*'
+    else if (c === '.' || c === '_') out += '[\\s\\S]'
+    else out += escapeRe(c)
+  }
+  return new RegExp(out)
+}
+const escapeRe = (c: string) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

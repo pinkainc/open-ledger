@@ -560,7 +560,14 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   function listPage(req: FastifyRequest, rows: StoredRecord[]) {
     const p = pageParams(req)
     // Recorded (filters): keys outside `data.` and `meta.` (`luid`, `hash`, …) are ignored.
-    const q = parseQuery(Object.fromEntries(Object.entries((req.query ?? {}) as Record<string, unknown>).filter(([k]) => /^(data|meta)\.|^\$plainTextQuery$/.test(k))))
+    // `$regex` here is the reference's LIKE-like match (filters2), `$like` in query.ts.
+    const q = parseQuery(
+      Object.fromEntries(
+        Object.entries((req.query ?? {}) as Record<string, unknown>)
+          .filter(([k]) => /^(data|meta)\.|^\$plainTextQuery$/.test(k))
+          .map(([k, v]) => [k.replace(/\.\$regex(?=\[|$)/, '.$like'), v]),
+      ),
+    )
     const kept = rows.filter((r) => matches(r, q)).reverse()
     // Recorded (uschema2): newest change first — an updated record moves to the top.
     // Records of one moment (a ledger's system records) keep newest-created first.
