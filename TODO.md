@@ -50,8 +50,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Credits never offset debits (docs say otherwise; reference and we agree)
 - [x] maxBalance checked before prepare — deliberate divergence from a reference bug
 - [x] Divergence register `conformance/divergences.json`, reported by the comparator
-- [ ] `dailyAmount`, `dailyCount` (need `limits.aggregated.enabled`) — record reference (?)
-- [ ] (?) A limit on a wallet with no balance row: does the reference create one?
+- [x] `dailyAmount`, `dailyCount` (need `limits.aggregated.enabled`): recorded `limits2`–`limits5`;
+      stuck intents of the reference rejected by us (divergences.json)
+- [ ] (?) The daily window: rolling 24 hours (ours) or a UTC day; a destroy towards dailyAmount
+- [ ] Daily limits read every completed intent of the ledger per check; keep aggregates instead
+- [x] A limit on a wallet with no balance row creates an `available` row of 0 (`limits2`); a daily one does not
 - [ ] Balance reservations visible while an intent is in flight (only matters once
       intents wait on external participants, L5)
 ## L4 — signatures, quorum, status policies, record-level access

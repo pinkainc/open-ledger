@@ -43,5 +43,53 @@
     "reference": "Caught the last status notification in flight: `running`, replay 0, no proofs.",
     "ours": "The same delivery already `delivered` (replay 1). We set `running` too while an attempt is under way; this read just comes later.",
     "why": "Timing, not behaviour: which state a list catches a delivery in depends on when it is read."
+  },
+  {
+    "fixture": "limits2",
+    "exchanges": [
+      12
+    ],
+    "what": "A dailyCount limit claim while `limits.aggregated.enabled` is off.",
+    "reference": "The intent stays `committed` forever with core.unexpected-error `Ledger failed to commit intent`; the limit is not stored.",
+    "ours": "Rejects it with the same reason and detail: failed → aborted → rejected; the limit is not stored.",
+    "why": "An intent that can never reach a final status is a defect, not a contract."
+  },
+  {
+    "fixture": "limits2",
+    "exchanges": [
+      31,
+      33,
+      41,
+      43,
+      44
+    ],
+    "what": "Transfers past alice's dailyCount, and alice's balances after them.",
+    "reference": "Checks daily limits only after commit: the intent stays `committed` forever with a core.limit-exceeded proof (`Daily transactions|amount limit exceeded for wallet <w>`), its debit stays reserved, and it does not count towards later checks.",
+    "ours": "Checks daily limits with the other limits before preparing and rejects the intent: failed (same reason and detail) → aborted → rejected; nothing stays reserved.",
+    "why": "Same as the maxBalance entry for l3: an intent that can never reach a final status holds funds forever."
+  },
+  {
+    "fixture": "limits3",
+    "exchanges": [
+      22,
+      24,
+      26
+    ],
+    "what": "Transfers past gina's dailyAmount, and gina's balances after them.",
+    "reference": "Checks daily limits only after commit: the intent stays `committed` forever with a core.limit-exceeded proof (`Daily transactions|amount limit exceeded for wallet <w>`), its debit stays reserved, and it does not count towards later checks.",
+    "ours": "Checks daily limits with the other limits before preparing and rejects the intent: failed (same reason and detail) → aborted → rejected; nothing stays reserved.",
+    "why": "Same as the maxBalance entry for l3: an intent that can never reach a final status holds funds forever."
+  },
+  {
+    "fixture": "limits4",
+    "exchanges": [
+      13,
+      15,
+      16
+    ],
+    "what": "Transfers past hank's dailyAmount (one out, one in), and hank's balances after them.",
+    "reference": "Checks daily limits only after commit: the intent stays `committed` forever with a core.limit-exceeded proof (`Daily transactions|amount limit exceeded for wallet <w>`), its debit stays reserved, and it does not count towards later checks.",
+    "ours": "Checks daily limits with the other limits before preparing and rejects the intent: failed (same reason and detail) → aborted → rejected; nothing stays reserved.",
+    "why": "Same as the maxBalance entry for l3: an intent that can never reach a final status holds funds forever."
   }
 ]

@@ -4,6 +4,34 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Aggregated limits (`dailyCount`, `dailyAmount`)
+
+Recorded with `limits2` (67 exchanges), `limits3` (27), `limits4` (17) and `limits5`
+(28) on 2.47.4; each follow-up settled what the one before left ambiguous. Reproduced,
+with the stuck intents listed in `divergences.json`.
+
+- Only with ledger config `limits.aggregated.enabled: true` (set by `PUT /ledger`).
+  With it off, a `dailyCount` limit claim leaves the intent **`committed` forever** with
+  `core.unexpected-error` `Ledger failed to commit intent`; the limit is not stored.
+- **Counting starts with the intent that sets the limit** (transfers before it do not
+  count, even with the config on) and the limit intent itself counts for
+  `dailyCount`, as does every later limit intent on the wallet (raising 3 → 6 left
+  room for two more, not three).
+- `dailyCount`: one per intent that transfers the symbol through the wallet, **either
+  way** (a credit from carol was refused), however many claims (a two-claim intent
+  counted once). **Issues do not count.**
+- `dailyAmount`: sum of transfers through the wallet, either way, **in minor units**
+  (limit 400: 350 out then 100 out refused; 100 in refused as well). Issues do not
+  count (bob: 300 issued + 301 out + 1 in under 500 passed).
+- Both bounds are inclusive. Details: `Daily transactions limit exceeded for wallet
+  <w>`, `Daily amount limit exceeded for wallet <w>`, reason `core.limit-exceeded`.
+- **Like `maxBalance`, checked only after commit**: a breaking intent stays
+  `committed` forever, its debit reserved; it does not count towards later checks.
+- A daily limit touches no balance row. **A `minBalance` limit on a wallet without a
+  balance creates an `available` row of 0** (no `parent`).
+- The 24-hour window and its boundary (rolling or UTC day) are not recorded; we use
+  a rolling 24 hours.
+
 ## 2026-10-10 — Access policies and the policy-based strategy
 
 Recorded with `conformance/scenarios/policies.ts` (65 exchanges) and the follow-up

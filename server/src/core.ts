@@ -440,6 +440,7 @@ export class Core {
       // Bridges get the intent as it was resolved, before the core's own prepare.
       const resolved = run.snapshot('pending')
       await this.checkLimits(tx, ledger, run.books, entries, !intent.data.origin)
+      await this.checkDaily(tx, ledger, intent, entries)
       // The ledger core takes part as a participant only when balances are spent — and
       // not in an intent a forward route made (recorded: no core proofs, no reservation).
       if (debits.length && !intent.data.origin) {
@@ -519,7 +520,7 @@ export class Core {
     const tc = run.now()
     for (const l of limits) {
       run.limitWrites.push(await this.limitRow(tx, ledger, l, run.system, tc))
-      await run.books.touch(l.wallet, l.symbol, tc)
+      if (!DAILY.includes(l.metric)) await run.books.touch(l.wallet, l.symbol, tc)
     }
     const debits = entries.filter((e) => e.schema === 'debit')
     const reserved = debits.length > 0 && !intent.data.origin
@@ -805,6 +806,9 @@ export class Core {
       if (!(await tx.get(ledger, 'symbols', symbol))) throw new Rejection('core.symbol-invalid', `Symbol ${symbol} not found.`)
 
       if (c.action === 'limit') {
+        // Recorded (limits2): with `limits.aggregated.enabled` off the reference leaves
+        // such an intent `committed` with this reason; we reject it (divergences.json).
+        if (DAILY.includes(c.metric) && !(await aggregated(tx, ledger))) throw new Rejection('core.unexpected-error', 'Ledger failed to commit intent')
         limits.push({ wallet: c.wallet.handle, symbol, metric: c.metric, amount: c.amount })
         continue
       }
@@ -870,7 +874,50 @@ export class Core {
       }
     }
   }
+
+  // Aggregated limits (limits2–limits5), only with `limits.aggregated.enabled`:
+  //   dailyCount   intents that move the symbol through the wallet, either way, one per
+  //                intent however many claims; every limit intent on the wallet and
+  //                symbol counts too, the one that set this limit included
+  //   dailyAmount  the sum of those movements, in minor units, either way
+  // Counting starts with the intent that set the limit and covers 24 hours; issues and
+  // destroys do not count, neither do rejected intents. Bounds are inclusive. The
+  // reference checks after commit and leaves a breaking intent `committed` forever; we
+  // check before prepare and reject (divergences.json, as for maxBalance).
+  private async checkDaily(tx: Store, ledger: string, intent: StoredRecord, entries: Entry[]) {
+    if (!(await aggregated(tx, ledger))) return
+    const claims: any[] = intent.data.claims
+    const moving = entries.filter((e) => claims[e.input]?.action === 'transfer')
+    const pairs = new Map(moving.map((e) => [`${e.wallet}\u0000${e.symbol}`, e] as const))
+    if (!pairs.size) return
+    let history: StoredRecord[] | undefined
+    for (const e of pairs.values()) {
+      const rows = (await tx.limits(ledger, e.wallet)).filter((r) => r.data.symbol === e.symbol && DAILY.includes(r.data.metric))
+      if (!rows.length) continue
+      history ??= (await tx.list(ledger, 'intents')).filter((i) => i.meta.status === 'completed')
+      const since = Date.now() - 24 * 3600_000
+      for (const row of rows) {
+        const touches = (i: StoredRecord, action?: string) =>
+          (i.data.claims as any[]).filter((c) => c.symbol?.handle === e.symbol && (action === undefined || c.action === action) &&
+            (c.action === 'limit' ? c.wallet?.handle === e.wallet : [c.source?.handle, c.target?.handle].includes(e.wallet)))
+        const start = history.find((i) => touches(i, 'limit').some((c) => c.metric === row.data.metric))
+        if (!start) continue
+        const counted = history.filter((i) => i.meta.moment >= start.meta.moment && Date.parse(i.meta.moment) >= since)
+        const now = moving.filter((m) => m.wallet === e.wallet && m.symbol === e.symbol)
+        if (row.data.metric === 'dailyCount') {
+          const n = counted.filter((i) => touches(i).some((c) => c.action === 'transfer' || c.action === 'limit')).length + 1
+          if (n > row.data.amount) throw new Rejection('core.limit-exceeded', `Daily transactions limit exceeded for wallet ${e.wallet}`)
+        } else {
+          const sum = counted.flatMap((i) => touches(i, 'transfer')).reduce((t, c) => t + c.amount, 0) + now.reduce((t, m) => t + m.amount, 0)
+          if (sum > row.data.amount) throw new Rejection('core.limit-exceeded', `Daily amount limit exceeded for wallet ${e.wallet}`)
+        }
+      }
+    }
+  }
 }
+
+const DAILY = ['dailyCount', 'dailyAmount']
+const aggregated = async (tx: Store, ledger: string) => (await tx.get('', 'ledgers', ledger))?.data.config?.['limits.aggregated.enabled'] === true
 
 type Stage = { proofs: number; status: string; routed: boolean }
 
@@ -1220,12 +1267,13 @@ class Books {
 
   // Setting a limit re-saves an existing available row the way a reservation does
   // (`parent: ""`, new moment) without changing its amount. Observed on the reference:
-  // the row's moment equals the limit's. A wallet without a row gets none.
+  // the row's moment equals the limit's. A wallet without a row gets one of 0, without
+  // `parent` (limits2, dave). Daily limits touch no row (limits2, bob).
   async touch(wallet: string, symbol: string, moment: string) {
     await this.load(wallet)
     const key = `${wallet}\u0000${symbol}\u0000available`
     const row = this.rows.get(key)
-    if (!row) return
+    if (!row) return this.move(wallet, symbol, 'available', 0, moment, false)
     if (row.data.parent === undefined) row.data = { parent: '', ...row.data }
     row.meta.moment = moment
     this.dirty.add(key)

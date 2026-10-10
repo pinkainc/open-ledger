@@ -105,5 +105,68 @@ for (const [storeName, makeStore] of STORES) {
       const byLuid: any = await sdk.intent.read(done.luid)
       assert.equal(byLuid.intent.handle, done.intent.handle)
     })
+
+    describe('aggregated limits', () => {
+      async function aggregatedBooks(wallets = ['alice', 'bob', 'carol']) {
+        const b = await books(wallets)
+        const cur = (await b.sdk.ledger.read()).response.data as any
+        await (b.sdk as any).ledger.from(cur).data({ config: { ...cur.data.config, 'limits.aggregated.enabled': true } }).hash().sign([{ keyPair: kp }]).send()
+        await b.run(...wallets.map((w) => issue(w, 10000)))
+        return b
+      }
+
+      test('a daily limit claim fails while the config is off (deliberate divergence)', async () => {
+        const { sdk, run } = await books()
+        const r = await run(limit('alice', 'dailyCount', 1))
+        assert.equal(r.meta.status, 'rejected')
+        assert.deepEqual([failed(r).reason, failed(r).detail], ['core.unexpected-error', 'Ledger failed to commit intent'])
+        assert.deepEqual((await sdk.wallet.getLimits('alice')).limits ?? [], [])
+      })
+
+      test('dailyCount counts the limit intent, one per intent, both ways, not issues, not rejected', async () => {
+        const { run } = await aggregatedBooks()
+        await run(limit('alice', 'dailyCount', 4)) // 1
+        assert.equal((await run(transfer('alice', 'bob', 1), transfer('alice', 'carol', 1))).meta.status, 'completed') // 2
+        assert.equal((await run(issue('alice', 5))).meta.status, 'completed') // not counted
+        assert.equal((await run(transfer('bob', 'alice', 1))).meta.status, 'completed') // 3, a credit
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'completed') // 4: the bound is inclusive
+        const r = await run(transfer('alice', 'bob', 1))
+        assert.deepEqual([r.meta.status, failed(r).detail], ['rejected', 'Daily transactions limit exceeded for wallet alice'])
+        // A new limit intent counts too: 4 + 1 = 5 of 6, so one more passes and the next does not.
+        await run(limit('alice', 'dailyCount', 6))
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'completed')
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'rejected')
+      })
+
+      test('dailyAmount sums transfers both ways in minor units, not issues; inclusive', async () => {
+        const { sdk, run } = await aggregatedBooks()
+        await run(limit('alice', 'dailyAmount', 400))
+        assert.equal((await run(transfer('alice', 'bob', 300))).meta.status, 'completed')
+        assert.equal((await run(issue('alice', 1000))).meta.status, 'completed')
+        assert.equal((await run(transfer('bob', 'alice', 100))).meta.status, 'completed') // 400
+        const r = await run(transfer('bob', 'alice', 1))
+        assert.deepEqual([r.meta.status, failed(r).detail], ['rejected', 'Daily amount limit exceeded for wallet alice'])
+        assert.equal((await balanceOf(sdk, 'bob')).reserved, 0)
+      })
+
+      test('transfers before the limit was set do not count', async () => {
+        const { run } = await aggregatedBooks()
+        for (let i = 0; i < 3; i++) await run(transfer('alice', 'bob', 1))
+        await run(limit('alice', 'dailyCount', 2))
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'completed')
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'rejected')
+      })
+    })
+
+    test('a limit on a wallet without a balance creates an available row of 0; a daily one does not', async () => {
+      const { sdk, run } = await books(['alice', 'bob'])
+      const rows = async (w: string) => ((await sdk.wallet.getBalances(w)) as any).response.data.data.map((r: any) => [r.data.schema, r.data.amount])
+      await run(limit('alice', 'minBalance', -100))
+      assert.deepEqual(await rows('alice'), [['available', 0]])
+      const cur = (await sdk.ledger.read()).response.data as any
+      await (sdk as any).ledger.from(cur).data({ config: { ...cur.data.config, 'limits.aggregated.enabled': true } }).hash().sign([{ keyPair: kp }]).send()
+      await run(limit('bob', 'dailyAmount', 100))
+      assert.deepEqual(await rows('bob'), [])
+    })
   })
 }
