@@ -221,6 +221,36 @@ for (const [storeName, makeStore] of STORES) {
       assert.equal((await token(form)).status, 200)
       const off = await oauthLedger(false)
       await expect(off.token('grant_type=client_credentials', off.basic()), 400, 'invalid_grant')
+      // Recorded (auth2): credentials are checked before the policy.
+      await expect(off.token('grant_type=client_credentials', off.basic(off.creds.data.clientId, 'wrong')), 401, 'invalid_client')
+    })
+
+    test('a value whose target.schema is another signer schema is as good as no policy (auth2)', async () => {
+      const l = await oauthLedger(false)
+      await l.s.policy.init()
+        .data({ handle: 'oauth', schema: 'authentication', record: 'any', access: mine(), values: [{ schema: 'oauth2', signer: { handle: 'prov' }, target: { schema: 'service' } }] })
+        .hash()
+        .sign([{ keyPair: owner }])
+        .send()
+      const r = await l.token('grant_type=client_credentials', l.basic())
+      assert.deepEqual([r.status, ((await r.json()) as any).error], [400, 'invalid_grant'])
+    })
+
+    test('include=meta.secret needs a signer rule matching the token key; a bearer read rule is not enough (auth2)', async () => {
+      const { factors, handle } = await withSigner()
+      await factors().init()
+        .data({ handle: 'sealed', signer: 'admin', schema: 'key-pair', format: 'ed25519-raw', public: (await newKeyPair()).public, secret: '{{ secret.private }}', access: mine() })
+        .meta({ proofs: [], secret: { private: 'PEM' } })
+        .hash()
+        .sign([{ keyPair: owner }])
+        .send()
+      const k = await newKeyPair()
+      const asK: any = new LedgerSdk({ server: server.base, ledger: handle, secure: { iss: k.public, sub: `signer:${k.public}`, aud: handle, exp: 3600, kid: k.public, keyPair: k } as any })
+      // The test ledger is open (`{any, record: any}`): K may read, but no signer rule names K.
+      assert.equal((await raw(asK.signer.with('admin').factor.read('sealed'))).data.handle, 'sealed')
+      const refused = await failure(asK.signer.with('admin').factor.read('sealed', { query: { include: ['meta.secret'] } }))
+      assert.deepEqual([refused.status, refused.reason, refused.detail], [403, 'auth.forbidden', 'Missing permissions'])
+      assert.deepEqual((await raw(factors().read('sealed', { query: { include: ['meta.secret'] } }))).meta.secret, { private: 'PEM' })
     })
 
     test('a forged RS256 token, or one whose kid is no provider key, is refused', async () => {

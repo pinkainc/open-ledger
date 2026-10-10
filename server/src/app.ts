@@ -1126,8 +1126,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   //   `clientSecret` (a sealed secret); its data is re-hashed, the client's proofs are
   //   dropped, and it has no status and no owners;
   // - `?include=meta.secret` serves the secrets in the clear, the private key of a key
-  //   pair included. We ask `read` on `signer-factor-secret` for it (the access record
-  //   type exists for this; the reference's rule for it was not recorded).
+  //   pair included, and the creation's client secret again; only for a signer rule
+  //   matching the caller's token key (recorded, auth2; `acl.authorizeReveal`).
   // Lists come with `total: 0`. A dropped factor is gone, its changes too (404 by luid).
   type FP = { Params: { signer: string; id: string } }
   const signerMismatch = () => new LedgerError(422, 'record.invalid', 'Signer in the request does not match the signer in the data')
@@ -1156,7 +1156,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   async function presentFactor(req: FastifyRequest, ledger: StoredRecord, r: StoredRecord, who?: Principal) {
     const out = servedFactor(r)
     if (!wantsSecrets(req)) return out
-    await acl.authorize('read', 'signer-factor-secret', { who }, { ledger, record: r })
+    await acl.authorizeReveal('signer-factor', { who }, { ledger, record: r })
     const secret: Record<string, string> = {}
     for (const name of secretRefs(r.data)) {
       const value = await openSecret(ledger.data.handle, r.data.handle, name)
@@ -1252,9 +1252,10 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // key of the provider's key-pair factor (`kid` = its handle). Claims as recorded:
   // `iss` provider, `cid` factor, `sub` the factor's signer, `aud` the server's public
   // address, `exp` = `iat` + `jwt.ttl` (3600). Answers and errors are plain RFC 6749
-  // JSON, unsigned. Checked in this order (recorded): grant type present, supported,
-  // credentials given; then an authentication policy, then the credentials. A value's
-  // `target.schema` restricts it to signers of that schema.
+  // JSON, unsigned. Checked in this order (recorded, oauth and auth2): grant type
+  // present, supported, credentials given, credentials valid; then a value of an
+  // authentication policy for the client's signer (`target.schema` restricts a value to
+  // signers of that schema).
   app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, body, done) =>
     done(null, Object.fromEntries(new URLSearchParams(String(body)))),
   )
@@ -1275,16 +1276,16 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       return fail(400, 'invalid_request', 'Client credentials must be provided either via Basic authentication or as client_id and client_secret in the request body.')
     const ledger = await hostedLedger(req)
     const scope = ledger.data.handle
-    const providers = await oauthProviders(scope)
-    if (!providers.length) return fail(400, 'invalid_grant', 'OAuth is not enabled for this ledger')
     const factors = await store.list(scope, 'factors')
     const factor = factors.find((f) => f.data.schema === 'oauth-client-credentials' && f.data.clientId === id)
     const stored = factor && (await openSecret(scope, factor.data.handle, 'clientSecret'))
     const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
     if (!factor || stored === undefined || !same(stored, secret)) return fail(401, 'invalid_client', 'Invalid client credentials')
+    // Recorded (auth2): no value for the client's signer (none at all, or only values whose
+    // `target.schema` is another) is the same answer as no policy.
     const subject = await store.get(scope, 'signers', factor.data.signer)
-    const value = providers.find((v) => !v.target?.schema || v.target.schema === subject?.data.schema)
-    if (!value) return fail(401, 'invalid_client', 'Invalid client credentials')
+    const value = (await oauthProviders(scope)).find((v) => !v.target?.schema || v.target.schema === subject?.data.schema)
+    if (!value) return fail(400, 'invalid_grant', 'OAuth is not enabled for this ledger')
     const signing = factors.find((f) => f.data.signer === value.signer.handle && f.data.schema === 'key-pair' && secretRefs(f.data).size)
     const pem = signing && (await openSecret(scope, signing.data.handle, [...secretRefs(signing.data)][0]))
     if (!signing || !pem) return fail(500, 'server_error', 'An unexpected error occurred processing the request')

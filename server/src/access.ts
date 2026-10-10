@@ -46,7 +46,7 @@
 // Signer matchers: `public`, `handle` (a signer record of this ledger), `$circle`
 // (membership through circle-signer records), `$record: owner` (a key in the record's
 // `meta.owners`), `$ledger: owner` (a key in the ledger's owners), and `$in` of those.
-import { errors } from './errors.js'
+import { errors, LedgerError } from './errors.js'
 import type { Store, StoredRecord } from './store.js'
 
 /**
@@ -256,6 +256,22 @@ export class AccessControl {
       for (const [r, level] of await this.rules(scope)) if ((level === 'ledger' || level === 'server') && (await this.grants(r, 'read', record, access, scope, level))) return
     }
     throw errors.forbidden('query', record)
+  }
+
+  /**
+   * Secrets in the clear (`include=meta.secret`; recorded, auth2): only a rule with a
+   * `signer` whose key is the caller's token key, for `reveal` (or `any`). A bearer rule,
+   * even `read` on `signer-factor-secret`, does not count. Refused with one error per
+   * signer rule that would have granted for another key.
+   */
+  async authorizeReveal(record: string, access: Access, scope: Scope) {
+    const errors: string[] = []
+    for (const [r, level] of await this.rules(scope)) {
+      if (!r.signer || !(await this.grants({ ...r, signer: undefined }, 'reveal', record, {}, scope, level))) continue
+      if (access.who && (await this.keyMatches(r.signer, access.who.public, scope))) return
+      errors.push('Cannot find required signer.')
+    }
+    throw new LedgerError(403, 'auth.forbidden', 'Missing permissions', { errors })
   }
 
   /** Server rules alone, for operations above any ledger (creating one). */
