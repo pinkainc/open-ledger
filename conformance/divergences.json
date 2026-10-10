@@ -234,5 +234,15 @@
     "reference": "Failing with `delivery.target-unreachable` `getaddrinfo ENOTFOUND <quick tunnel host>`: the recording's tunnel did not resolve from the sandbox at that moment.",
     "ours": "Delivered to the webhook on the bridge port.",
     "why": "A recording artefact, not behaviour; reports5 recorded the same event delivered (17/17 + 1/1)."
+  },
+  {
+    "fixture": "cli",
+    "exchanges": [
+      0
+    ],
+    "what": "`GET /api/v2`, the server information `minka server connect` reads.",
+    "reference": "`handle: \"stg\"`, the sandbox's own name.",
+    "ours": "`handle` from `SERVER_HANDLE` (default `open-ledger`); `server` is the public address and `semver` the version we follow.",
+    "why": "A server names itself; nothing else in the flow depends on it."
   }
 ]
