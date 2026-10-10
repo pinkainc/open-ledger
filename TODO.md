@@ -160,18 +160,18 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       reservation, no permission check
 - [x] Spend permission on the wallet an address resolves to
 - [x] Balance rows: `parent: ""` on every update, not only reservations (all recordings)
-- [ ] (?) Route depth beyond 3: our wording `… routing depth 3 exceeded …` is a guess
-- [ ] (?) Debit routing cycle wording (we mirror the credit one)
+- [x] Route depth: three hops resolve, a fourth is `Max wallet routing depth reached for intent …` (routes2)
+- [x] Debit routing cycle wording mirrors the credit one (routes2)
 - [x] A forward intent that fails rejects its thread, the first intent too (recorded, l7)
-- [ ] (?) Route target that does not resolve: our message reuses the unresolved-wallet one
+- [x] Route target that does not resolve: `Credit routed wallet not resolved … Parent wallet: <route's wallet>` (routes2)
 - [x] Anchors as records (`$anc`, full surface, drop), wallet required and existing,
       `GET /wallets/{h}/anchors` local; a wallet with anchors is not dropped (recorded `anchors` 29/29)
-- [ ] (?) Wallet drop with anchors when `anchor.walletRequired` is off (we refuse always)
+- [x] Wallet drop with anchors is refused with `walletRequired` off too, anchors newest first (routes2)
 - [x] Wallet anchors and domains from a bridge (traits `anchors`, `domains`), resolved by
       address; `POST /wallets/{h}/anchors/!lookup` (recorded `anchors2` 19/19 + 6/6)
-- [ ] (?) Lookup on a wallet without a bridge: we filter its anchors by the given fields
-- [ ] (?) Bridge `secure` headers on anchor/domain calls (the reference sent the client's token)
-- [ ] (?) Is the bridge's list signature verified? (we check the shape only)
+- [x] Lookup on a wallet without a bridge: always `[]`, local anchors or not (routes2)
+- [x] Bridge `secure` headers apply on anchor/domain calls, beside the client's token (routes2)
+- [x] The bridge's list signature and hash are not verified (routes2)
 - [x] Who may report on an entry: `create` on `intent-proof` from the ledger's rules, any
       such key (not only the bridge's); `sign` is no access action, every `access` is
       validated against the spec (recorded `bproofs` 45/45 + 20/20)

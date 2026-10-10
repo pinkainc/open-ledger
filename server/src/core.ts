@@ -144,6 +144,15 @@ export class Core {
     return out
   }
 
+  /**
+   * Headers a bridge's `secure` rules add to a call the ledger makes in a request
+   * (anchors and domains of a wallet; recorded, routes2: a header rule applies there too).
+   */
+  async secureHeaders(ledger: string, bridge: StoredRecord): Promise<Record<string, string>> {
+    const { headers } = await this.authorize({ bridge: bridge.data.handle, server: String(bridge.data.config?.server ?? ''), method: 'POST', path: '', body: undefined, ledger })
+    return Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]))
+  }
+
   /** Process an intent after the current request has been answered. */
   schedule(ledger: string, handle: string) {
     setImmediate(() => void this.process(ledger, handle).catch((e) => console.error(`intent ${ledger}/${handle}:`, e)))

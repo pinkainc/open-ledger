@@ -88,6 +88,23 @@ for (const [storeName, makeStore] of STORES) {
       assert.equal(failure(out).detail, `No matching in route found for intent ${out.intent.handle}.`)
     })
 
+    // Recorded (routes2): three hops resolve; the fourth, and a route to nothing, reject the intent.
+    test('credit routes chain three hops deep; a fourth, or a target that is nothing, is refused', async () => {
+      const { sdk } = await newLedger(server.base, kp)
+      const s: any = sdk
+      const w = (handle: string, target?: string) => s.wallet.init().data({ handle, ...(target ? { routes: [{ action: 'credit', target }] } : {}) }).hash().sign([{ keyPair: kp }]).send()
+      for (const [h, t] of [['end'], ['d4', 'end'], ['d3', 'd4'], ['d2', 'd3'], ['d1', 'd2'], ['lost', 'nothing']] as const) await w(h, t)
+      await s.symbol.init().data({ handle: 'usd', factor: 100 }).hash().sign([{ keyPair: kp }]).send()
+      const send = async (handle: string, target: string) => {
+        await s.intent.init().data({ handle, claims: [{ action: 'issue', target: { handle: target }, symbol: { handle: 'usd' }, amount: 1 }] }).hash().sign([{ keyPair: kp }]).send()
+        return settle(s, handle)
+      }
+      assert.equal((await send('i3', 'd2')).meta.status, 'completed')
+      const deep = await send('i4', 'd1')
+      assert.deepEqual([deep.meta.status, failure(deep).detail], ['rejected', 'Max wallet routing depth reached for intent i4. Original source wallet: "", original target wallet: "d1".'])
+      assert.equal(failure(await send('i5', 'lost')).detail, 'Credit routed wallet not resolved for the address nothing - does not resolve to any existing wallet. Parent wallet: lost')
+    })
+
     test('a routing cycle is refused', async () => {
       const sdk = await books({ cyc2: [{ action: 'credit', target: 'cyc1' }], cyc1: [{ action: 'credit', target: 'cyc2' }] })
       const i = await run(sdk, [t('alice', 'cyc1', 1)])

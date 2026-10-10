@@ -66,10 +66,11 @@ for (const [storeName, makeStore] of STORES) {
 
     test('a wallet with anchors cannot be dropped until they are', async () => {
       const { s, anchor } = await books()
-      await anchor({ handle: 'b1', wallet: 'bob', target: 't' })
-      await anchor({ handle: 'b2', wallet: 'bob', target: 't' })
+      const luids: Record<string, string> = {}
+      for (const h of ['b1', 'b2']) luids[h] = (await anchor({ handle: h, wallet: 'bob', target: 't' })).luid
+      // Named by luid, as the reference does.
       const f = await failure(s.wallet.drop('bob').hash().sign([{ keyPair: kp }]).send())
-      assert.deepEqual([f.reason, f.detail, f.body.data.custom.anchors], ['record.drop-rejected', "Cannot drop wallet 'bob' with anchors associated with it", ['b1', 'b2']])
+      assert.deepEqual([f.reason, f.detail, f.body.data.custom.anchors], ['record.drop-rejected', "Cannot drop wallet 'bob' with anchors associated with it", ['b1', 'b2'].sort((x, y) => (luids[x] < luids[y] ? -1 : 1))])
       for (const h of ['b1', 'b2']) await s.anchor.drop(h).hash().sign([{ keyPair: kp }]).send()
       assert.equal((await failure(s.anchor.read('b1'))).detail, 'Anchor not found')
       await s.wallet.drop('bob').hash().sign([{ keyPair: kp }]).send()
@@ -123,8 +124,9 @@ for (const [storeName, makeStore] of STORES) {
       assert.deepEqual((await raw(s.wallet.getDomains('acc'))).data, [])
       const f = await failure(raw(s.wallet.with('acc').anchor.lookup().data({ wallet: 'other' }).hash().sign([{ keyPair: kp }]).send()))
       assert.deepEqual([f.status, f.reason, f.detail], [422, 'record.invalid', 'Address in the request does not match the address in the data'])
+      // Recorded (routes2): a lookup the ledger answers itself finds nothing, local anchors or not.
       const local = await raw(s.wallet.with('acc').anchor.lookup().data({ wallet: 'acc', target: 't' }).hash().sign([{ keyPair: kp }]).send())
-      assert.deepEqual(local.data.map((a: any) => a.data.handle), ['local-1'])
+      assert.deepEqual(local.data, [])
       assert.equal(bridge.calls.length, n)
     })
   })

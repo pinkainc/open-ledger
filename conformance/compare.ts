@@ -87,7 +87,10 @@ function normaliser() {
       for (const k of Object.keys(x).sort()) {
         if (k === 'trace') continue
         // Token times (epoch seconds) copied into impersonated proofs as `bearer.*`.
-        const v = /^bearer\.(iat|exp|nbf)$/.test(k) && typeof x[k] === 'number' ? '<epoch>' : walk(x[k])
+        let v = /^bearer\.(iat|exp|nbf)$/.test(k) && typeof x[k] === 'number' ? '<epoch>' : walk(x[k])
+        // The anchors a wallet drop names: the reference orders them by luid, random
+        // within a second (anchors: oldest first; routes2: newest first). A set here.
+        if (k === 'anchors' && x.reason === undefined && Array.isArray(v) && v.every((a: unknown) => typeof a === 'string')) v = [...v].sort()
         // An error `custom` that held only the trace is empty once the trace is gone.
         if (k === 'custom' && v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length) continue
         out[k] = v

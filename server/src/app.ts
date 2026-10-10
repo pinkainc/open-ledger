@@ -1045,7 +1045,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       const anchors = (await store.list(scope, 'anchors')).filter((a) => a.data.wallet === found.data.handle)
       if (anchors.length)
         throw new LedgerError(422, 'record.drop-rejected', `Cannot drop wallet '${found.data.handle}' with anchors associated with it`, {
-          anchors: anchors.map((a) => a.data.handle),
+          // By luid, as the reference (anchors, routes2); its luids are random within a second.
+          anchors: anchors.sort((a, b) => (a.luid < b.luid ? -1 : a.luid > b.luid ? 1 : 0)).map((a) => a.data.handle),
         })
     }),
     bridges: dropOf('bridges', async (scope, found) => {
@@ -1338,9 +1339,11 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const auth = req.headers.authorization
     let body: any
     try {
+      // The bridge's `secure` rules apply as on any call to it (routes2), beside the client's token.
+      const secured = await core.secureHeaders(scope, bridge)
       const res = await fetch(`${bridge.data.config?.server}/wallets/${address}/${what}${lookup ? '/!lookup' : ''}`, {
         method: lookup ? 'POST' : 'GET',
-        headers: { ...(auth ? { authorization: auth } : {}), 'x-ledger': scope, ...(lookup ? { 'content-type': 'application/json' } : {}) },
+        headers: { ...(auth ? { authorization: auth } : {}), ...secured, 'x-ledger': scope, ...(lookup ? { 'content-type': 'application/json' } : {}) },
         body: lookup ? JSON.stringify(lookup) : undefined,
         signal: AbortSignal.timeout(30_000),
       })
@@ -1386,8 +1389,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const forwarded = { hash: body.hash, data: body.data, meta: { proofs: [serverProof(body.hash, { moment: now() }, req.ledgerKey!, 'system')] } }
     const bridged = await fromBridge(req, scope, req.params.id, 'anchors', forwarded)
     if (bridged) return envelope(req.ledgerKey, bridged)
-    const { wallet: _w, access: _a, custom: _c, ...fields } = body.data
-    return envelope(req.ledgerKey, (await localAnchors(scope, req.params.id)).filter((a) => Object.entries(fields).every(([k, v]) => a.data[k] === v)))
+    // Recorded (routes2): without a bridge to ask, nothing is found, whatever anchors the wallet has.
+    return envelope(req.ledgerKey, [])
   })
 
   app.get<{ Params: { id: string } }>('/api/v2/wallets/:id/domains', async (req) => {

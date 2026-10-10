@@ -4,6 +4,30 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Route depth, route targets, anchor calls to bridges (routes2)
+
+Recorded with `routes2` (47 exchanges, 5 bridge calls; one recording) on 2.47.4. Every
+route resolves inside one intent; nothing forwards.
+
+- **Credit routes chain three hops** (`e1 → e2 → e3 → end` completes); a fourth fails
+  the intent `core.routing-failed` `Max wallet routing depth reached for intent
+  i-depth4. Original source wallet: "alice", original target wallet: "d1".`
+- A debit route cycle: `Debit routing cycle detected for the address dc1.` A route to
+  an address that resolves to nothing: `Credit routed wallet not resolved for the address
+  nothing-here - does not resolve to any existing wallet. Parent wallet: lost` — the
+  wallet whose route it is.
+- **A bridge's `secure` rules apply to the anchor and domain calls** (`GET
+  …/wallets/<w>/anchors|domains`, `POST …/anchors/!lookup`): `x-api-key` from a header
+  rule arrives beside the client's own `authorization`.
+- **The bridge's list is not verified**: a wrong signature, or a hash of zeros, is
+  accepted and the data listed.
+- **A lookup on a wallet without a bridge finds nothing** (`[]`), though the wallet
+  has anchors matching the lookup.
+- A wallet with anchors cannot be dropped while `anchor.walletRequired` is off either.
+  `custom.anchors` is ordered by luid: oldest first in `anchors`, newest first here.
+  The reference's luids are time-prefixed but random within a second, so we sort by
+  ours, and the comparison treats the list as a set.
+
 ## 2026-10-10 — Access inherited through domains
 
 Recorded with `domains2` (43 exchanges, one recording) on 2.47.4, on a ledger that is

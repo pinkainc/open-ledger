@@ -50,3 +50,18 @@ najširem, i iza svakog koraka napravi pokušaj.
 - Odluke koje snimka ne pokriva su u FINDINGS: zadane strategije prema docsu,
   synchronize na drop/query, kada fallback lista pita bridge. `filter` policyja još se
   ne primjenjuje (TODO).
+
+## Nastavak S5: domene i `(?)` iz Routes
+
+- **`domains2`** je snimljen iz prve (43/43 nakon gradnje). U `access.ts` je nova
+  razina `domain` između pravila zapisa i ledgera: pravila domene i svih domena iznad
+  nje. Novi zapis se procjenjuje prema domeni u koju ulazi, a zapisi domena ne
+  nasljeđuju ništa. U domeni signer pravilo prihvaća i ključ tokena, pa daje i read. To
+  je prva snimka liste iz koje je skriveno ono što pozivatelj ne smije čitati.
+- **`routes2`** (47/47 + 5/5): dubina ruta je tri skoka, a uz to tekst za
+  nerazriješen cilj rute. `secure` pravila bridgea vrijede i za pozive za anchore i
+  domene. Lista koju vrati bridge ne provjerava se. Lookup na walletu bez bridgea vraća
+  `[]`. Drop walleta s anchorima odbija se i kad je `walletRequired` isključen. Sve
+  bez petlji: svaka ruta se razriješi unutar jednog intenta.
+- Dvije snimke u ovom dijelu (`domains2`, `routes2`, nijedna ponovljena) i dva trajna
+  ledgera u footprintu.

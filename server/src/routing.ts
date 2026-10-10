@@ -79,11 +79,16 @@ export async function route(tx: Store, ledger: string, intent: StoredRecord, cla
     if (r.action === 'accept') return { wallet }
     if (r.action === 'forward') return { wallet, forward: r.target }
     const next = await resolveAddress(tx, ledger, r.target)
+    // Recorded (routes2): names the route's target and the wallet whose route it is.
     if (!next)
-      throw new RoutingError(`${side} wallet not resolved for the address ${r.target} - does not resolve to any existing wallet. Parent wallet: ${r.target}`)
+      throw new RoutingError(`${input ? 'Debit' : 'Credit'} routed wallet not resolved for the address ${r.target} - does not resolve to any existing wallet. Parent wallet: ${wallet.data.handle}`)
     if (next.data.handle === wallet.data.handle) return { wallet }
     if (seen.has(next.data.handle)) throw new RoutingError(`${input ? 'Debit' : 'Credit'} routing cycle detected for the address ${address}.`)
-    if (depth + 1 > MAX_DEPTH) throw new RoutingError(`${input ? 'Debit' : 'Credit'} routing depth ${MAX_DEPTH} exceeded for the address ${address}.`)
+    // Recorded (routes2): three hops resolve, a fourth is refused with the claim's wallets.
+    if (depth + 1 > MAX_DEPTH)
+      throw new RoutingError(
+        `Max wallet routing depth reached for intent ${intent.data.handle}. Original source wallet: "${claim.source?.handle ?? ''}", original target wallet: "${claim.target?.handle ?? ''}".`,
+      )
     seen.add(next.data.handle)
     wallet = next
   }
