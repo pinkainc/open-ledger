@@ -68,7 +68,7 @@ povijest.
 | S4 | Ledger i sustav → 146/146 | gotovo | `0232437` | **146/146**, 115 potvrđeno; `ledgers` 43/43, `uschema2` 28/28, `secure2` 23/23; drop ledgera i journal isključeni kao na referenci (zastavice); mtls namjerno radi; točka 6 (bridge proofovi) prebačena u S5 |
 | S5 | Usmjeravanje i domene | gotovo | `46630a7` | 146/146, 117 potvrđeno; bridge proofovi (`bproofs`), anchor forwarding (`forwarding` 65/67 + 29/30, synchronize `sign` je bug reference), nasljeđivanje pravila domena (`domains2` 43/43), `routes2` 47/47 + 5/5; DTC u S10 |
 | S6 | L9 cross-ledger | gotovo | `fcd8aa7` | 146/146, 117 potvrđeno; `bridges/ledger-bridge`, `l9` 40/40 + 51/51 (dva sandbox ledgera), `l9mixed` 31/31 + 78/78 (Minka ↔ naš, oba smjera), e2e dvije instance; server bez promjena |
-| S7 | Snimke `(?)`, 2PC i signali | otvoreno | | |
+| S7 | Snimke `(?)`, 2PC i signali | gotovo | `39797e6` | 146/146, 117 potvrđeno; `waits` 28/28, `edges2pc` 27/27 + 28/28, `signals2` 37/37 + 46/46; 0 `(?)` u L4, L6, L8; `*-proofs-added` po verziji, `wallet-limited`, 10 retryja za mrežu; domain access policies premještene u S8 |
 | S8 | Snimke `(?)`, domene, CLI | otvoreno | | |
 | S9 | Testna pokrivenost i jezgra | otvoreno | | |
 | S10 | Rezerva | otvoreno | | samo ako zatreba |
