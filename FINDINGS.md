@@ -4,6 +4,24 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Generic `secure` rules (mtls)
+
+Recorded with `secure2` (23 exchanges, no bridge call reached the tunnel) on 2.47.4,
+twice: with a secret that is no key, then with a valid self-signed certificate and key.
+
+- **A generic rule is validated** (`{schema, public, secret}`, `secret` a secret
+  reference, nothing else): a plain secret, a missing `public`, an extra field are
+  `record.schema-invalid` listing every `oneOf` branch; an unexpected property is
+  named in `path` (`/body/data/secure/0/ca`). A reference without `meta.secret` is
+  `record.invalid`, as for header rules.
+- **The reference cannot call a bridge with a generic rule**, `mtls` included, valid
+  key or not. Nothing is sent; each attempt fails `delivery.unexpected-error` with no
+  detail, six times, then `cancelled delivery.retry-cap-exhausted`; the intent stays
+  `pending`, noted `core.bridge-unreachable` `No handler found for security rule
+  schema 'mtls' in bridge 'mt' (rule #0)`.
+- Ours does the same for a schema it does not know and for mtls over plain http, and
+  presents the certificate and key on https (deliberate, `divergences.json`).
+
 ## 2026-10-10 — Schema `extend`; list order
 
 Recorded with `uschema2` (28 exchanges) on 2.47.4 (`server/test/uschema.test.ts`).

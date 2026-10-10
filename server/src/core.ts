@@ -25,7 +25,7 @@ import { newLuid } from './ids.js'
 import type { BalanceRow, LimitRow, Store, StoredRecord } from './store.js'
 import { hashData } from './crypto.js'
 import type { AccessControl, Principal } from './access.js'
-import { Bridges, type BridgeCall, type BridgeOptions, type Outcome } from './bridges.js'
+import { Bridges, RuleError, type Authorization, type BridgeCall, type BridgeOptions, type Outcome } from './bridges.js'
 import { createHash } from 'node:crypto'
 import { RoutingError, filterMatches, resolveAddress, route } from './routing.js'
 import { SecretBox, resolveRefs, secretRefs } from './secrets.js'
@@ -115,11 +115,18 @@ export class Core {
   // Recorded: the reference asks for a token before every call, `expires_in` or not;
   // we keep tokens as the docs promise (oauth2.ts). The comparator folds repeated
   // identical token requests, so the recording still matches.
-  private async authorize(call: BridgeCall): Promise<Record<string, string>> {
+  //
+  // Any other rule is generic, `{schema, public, secret}`. `mtls` (about-bridges)
+  // presents `public` as the client certificate and `secret` as its key, on an https
+  // server only. Recorded (secure2): the reference makes no call at all for a bridge
+  // with a generic rule — mtls included, a valid certificate and key too — and each
+  // attempt fails `delivery.unexpected-error`. We do the same for a schema we do not
+  // know, and for mtls over plain http; mtls itself is ours (divergences.json).
+  private async authorize(call: BridgeCall): Promise<Authorization> {
     const ledger = call.ledger
     const bridge = ledger ? await this.store.get(ledger, 'bridges', call.bridge) : undefined
     const rules: any[] = bridge?.data.secure ?? []
-    if (!ledger || !rules.length) return {}
+    if (!ledger || !rules.length) return { headers: {} }
     const values = new Map<string, string>()
     for (const name of secretRefs(rules)) {
       const at = `bridge/${call.bridge}/${name}`
@@ -127,12 +134,14 @@ export class Core {
       if (sealed === undefined) throw new Error(`secret ${name} of bridge ${call.bridge} is missing`)
       values.set(name, this.secrets.open(sealed, `${ledger}/${at}`))
     }
-    const headers: Record<string, string> = {}
-    for (const rule of resolveRefs(rules, (n) => values.get(n)!)) {
-      if (rule.schema === 'header') headers[rule.key] = rule.value
-      if (rule.schema === 'oauth2') headers.Authorization = `Bearer ${await this.oauth2.token(rule)}`
+    const out: Authorization = { headers: {} }
+    for (const [i, rule] of resolveRefs(rules, (n) => values.get(n)!).entries()) {
+      if (rule.schema === 'header') out.headers[rule.key] = rule.value
+      else if (rule.schema === 'oauth2') out.headers.Authorization = `Bearer ${await this.oauth2.token(rule)}`
+      else if (rule.schema === 'mtls' && call.server.startsWith('https:')) out.tls = { cert: rule.public, key: rule.secret }
+      else throw new RuleError(`No handler found for security rule schema '${rule.schema}' in bridge '${call.bridge}' (rule #${i})`)
     }
-    return headers
+    return out
   }
 
   /** Process an intent after the current request has been answered. */
@@ -265,18 +274,18 @@ export class Core {
       d.meta.status = status
       d.meta.moment = new Date(Date.parse(moment) + 1).toISOString()
       await tx.update(ledger, 'events', d)
-      if (status === 'cancelled' && d.data.record === 'intent' && !d.data.effect) await this.noteUnreachable(tx, ledger, d, key)
+      if (status === 'cancelled' && d.data.record === 'intent' && !d.data.effect) await this.noteUnreachable(tx, ledger, d, key, call.ruleError)
     })
   }
 
   // A delivery the ledger gave up on is noted on its intent (recorded, events): a
   // `system` proof with status `error` that changes nothing else — the intent keeps
   // waiting, and a retry of the delivery can still complete it.
-  private async noteUnreachable(tx: Store, ledger: string, d: StoredRecord, key: KeyPair) {
+  private async noteUnreachable(tx: Store, ledger: string, d: StoredRecord, key: KeyPair, ruleError?: string) {
     const intent = await tx.get(ledger, 'intents', d.data.linked)
     if (!intent || FINAL.has(intent.meta.status)) return
     const httpStatus = [...d.meta.proofs].reverse().find((p: Proof) => p.custom?.status === 'failed')?.custom?.detail?.httpStatus
-    const detail = httpStatus ? `Request failed with status code ${httpStatus}` : 'Bridge unreachable'
+    const detail = ruleError ?? (httpStatus ? `Request failed with status code ${httpStatus}` : 'Bridge unreachable')
     const moment = new Date().toISOString()
     intent.meta.proofs.push(serverProof(intent.hash, { detail, moment, reason: 'core.bridge-unreachable', status: 'error' }, key, 'system'))
     const n = (await tx.changes(ledger, 'intents', intent.data.handle)).length

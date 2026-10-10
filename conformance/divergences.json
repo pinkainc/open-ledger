@@ -149,5 +149,13 @@
     "reference": "A report without meta.assets, or an asset handle it does not have: 500 (`Cannot read properties of undefined (reading 'find'/'output')`). An asset the ledger accepted whose file is not in its bucket: the connection is dropped, 503 from the gateway.",
     "ours": "404 record.not-found: `Asset {handle} not found`, or `Asset {handle} is not stored on this server` when no file is found under OPEN_LEDGER_REPORTS_DIR.",
     "why": "Missing things are 404s. Report files live in the deployment’s storage (Minka: its GCS bucket), outside the client API; this server serves them from a configured directory."
+  },
+  {
+    "fixture": "secure2",
+    "exchanges": [],
+    "what": "A bridge on an https server with an `mtls` secure rule `{schema: mtls, public: <certificate>, secret: <key>}` (about-bridges).",
+    "reference": "Makes no call: each attempt fails `delivery.unexpected-error`, the delivery is cancelled after six, and the intent is noted `No handler found for security rule schema 'mtls' in bridge '<b>' (rule #0)` — with a valid certificate and key too (recorded).",
+    "ours": "Calls the bridge presenting the certificate and key (server/test/mtls.test.ts). Over plain http, and for a generic schema we do not know, we do what the reference does; that is all a recording through the tunnel can see, so no recorded exchange differs.",
+    "why": "The docs describe mtls as a way to secure a bridge; a rule that can never be satisfied leaves every payment to such a bridge pending."
   }
 ]

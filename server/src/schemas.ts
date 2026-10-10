@@ -206,7 +206,8 @@ const validators = Object.fromEntries(
 const messageOf = (e: ErrorObject) => (e.keyword === 'enum' ? `${e.message}: ${(e.params as any).allowedValues.join(', ')}` : (e.message ?? ''))
 
 function toWire(e: ErrorObject) {
-  const missing = e.keyword === 'required' ? `/${(e.params as any).missingProperty}` : ''
+  // Recorded (secure2): an unexpected property is named in `path` too.
+  const missing = e.keyword === 'required' ? `/${(e.params as any).missingProperty}` : e.keyword === 'additionalProperties' ? `/${(e.params as any).additionalProperty}` : ''
   return {
     path: `/body${e.instancePath}${missing}`,
     message: messageOf(e),

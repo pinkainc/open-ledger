@@ -143,7 +143,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       under `OPEN_LEDGER_MASTER_KEY` (recorded `secure`, 43/44 + 39/39)
 - [x] `traits`: methods listed, `{method, filter}` on the call's data; no `statuses` → no PUT
 - [x] OAuth2 token cache (`oauth2.ts`: JWT `exp`, else `expires_in`, ≥ 60 s, dropped 30 s early; the reference has none)
-- [ ] Generic `secure` rules (`{schema, public, secret}`, e.g. mtls) are accepted, not applied
+- [x] Generic `secure` rules — recorded (`secure2`): the reference makes no call for any generic rule (mtls too, valid key too): `delivery.unexpected-error` ×6, then cancelled, intent noted `No handler found for security rule schema …`. Ours the same for unknown schemas and mtls over http; mtls over https presents the certificate (divergences.json, `server/test/mtls.test.ts`); `OPEN_LEDGER_BRIDGE_CA` for a private CA
+- [ ] Bridge proof authorization: may a signer that is not the bridge report `prepared`/`committed` for a bridge's entry? (plan S4 item 6, moved to S5)
 - [x] Secrets of signer factors, sealed like bridge secrets; `include=meta.secret` serves them (recorded `factors`)
 - [x] Debit and credit on the same bridge in one intent; grouping (`claims.groupBy`) — l6
 - [x] A commit report that never comes: the intent stays `committed` (recorded, l6; same here)

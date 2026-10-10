@@ -1,5 +1,6 @@
 // Entry point. Each ledger holds its own signers (created with the ledger), so the
 // server itself has no key. Postgres when DATABASE_URL is set, memory otherwise.
+import { readFileSync } from 'node:fs'
 import { buildApp } from './app.js'
 import { Core } from './core.js'
 import { PgStore } from './pg-store.js'
@@ -17,7 +18,9 @@ const secrets = new SecretBox()
 if (secrets.ephemeral && url) console.error('warning: OPEN_LEDGER_MASTER_KEY is not set; secrets stored now cannot be read after a restart')
 // OPEN_LEDGER_DELIVERY_MAX_RETRIES: retries of a call to a bridge before giving up (5).
 const maxRetries = process.env.OPEN_LEDGER_DELIVERY_MAX_RETRIES ? Number(process.env.OPEN_LEDGER_DELIVERY_MAX_RETRIES) : undefined
-const core = new Core(store, { minuteMs, secrets, bridges: { maxRetries } })
+// OPEN_LEDGER_BRIDGE_CA: a PEM file of certificates trusted for bridges on mtls calls.
+const ca = process.env.OPEN_LEDGER_BRIDGE_CA ? readFileSync(process.env.OPEN_LEDGER_BRIDGE_CA, 'utf8') : undefined
+const core = new Core(store, { minuteMs, secrets, bridges: { maxRetries, ca } })
 // PUBLIC_URL: the address clients use (…/api/v2), when behind a proxy.
 // OPEN_LEDGER_REPORTS_BUCKET: the bucket report assets must name; OPEN_LEDGER_REPORTS_DIR:
 // where their files are served from (reports.ts).
