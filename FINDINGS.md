@@ -4,12 +4,16 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
-## 2026-10-10 — Anchor forwarding by processing policies (recorded, not yet built)
+## 2026-10-10 — Anchor forwarding by processing policies
 
 Recorded with `forwarding` (third recording kept: 66 client exchanges, 29 bridge calls)
 on 2.47.4. The bridge `dir` is a small alias directory in the scenario; it echoes what it
-is sent, appends its proof, and misbehaves for chosen handles. `conformance/pending.json`
-holds the level until we implement it.
+is sent, appends its proof, and misbehaves for chosen handles. Built in S5 continued
+(`server/src/forwarding.ts`): 65/67 + 29/30, the rest is the synchronize `sign` bug below
+(divergences.json). Not recorded, decided: without `config.strategy` reads fall back and
+writes validate (the docs); `synchronize` on drop means validate, on query fallback; a
+fallback list asks the bridge only when the ledger's own (filtered) list is empty; a
+policy's `filter` is not applied yet.
 
 **Policy** (`schema: processing`, `record: anchor`, `values` of `{schema: aspect,
 action, invoke: {bridge}, config: {strategy}}`):

@@ -32,6 +32,9 @@ function normaliser() {
     // Core ids the test bridge hands out in order of arrival: racing prepares swap them.
     if (/^core-\d+$/.test(v)) return '<core-id>'
     if (/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(v)) return '<moment>'
+    // A bearer header carrying one (anchor forwarding: the ledger's token, the client's).
+    const bearer = v.match(/^Bearer (eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+)$/)
+    if (bearer) return `Bearer ${value(bearer[1])}`
     // A JWT the ledger issued (OAuth): compared by its decoded header and claims.
     if (/^eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+$/.test(v)) {
       const [h, p] = v.split('.').slice(0, 2).map((x) => JSON.parse(Buffer.from(x, 'base64url').toString('utf8')))
@@ -61,8 +64,9 @@ function normaliser() {
     const bridgeUrl = v.match(/^(?:https:\/\/[a-z0-9-]+\.trycloudflare\.com|http:\/\/127\.0\.0\.1:\d+)((?:\/[a-z0-9]+)?)\/v2$/)
     if (bridgeUrl) return `<bridge-url>${bridgeUrl[1]}`
     // Other addresses on the bridge's host, e.g. an OAuth2 token endpoint.
-    const bridgeHost = v.match(/^(?:https:\/\/[a-z0-9-]+\.trycloudflare\.com|http:\/\/127\.0\.0\.1:\d+)(\/.*)$/)
-    if (bridgeHost) return `<bridge-host>${bridgeHost[1]}`
+    // Or the host alone (anchor forwarding: `{server}/v2/anchors…`).
+    const bridgeHost = v.match(/^(?:https:\/\/[a-z0-9-]+\.trycloudflare\.com|http:\/\/127\.0\.0\.1:\d+)(\/.*)?$/)
+    if (bridgeHost) return `<bridge-host>${bridgeHost[1] ?? ''}`
     const lh = v.match(ledgerHandle)
     if (lh) v = v.replace(lh[0], '<ledger>')
     // Entry handles inside paths, e.g. /v2/credits/cre_…/commit; ledger-made intent
@@ -128,20 +132,22 @@ function canonical(all: Exchange[]): Exchange[] {
 }
 
 function canonicalBridge(log: Exchange[]): Exchange[] {
+  // An intent's status notification (`PUT /intents/…`); other PUTs (anchor forwarding) keep their place.
+  const statusCall = (x: any) => x.req?.method === 'PUT' && /\/intents\//.test(String(x.req.url))
   const intentOfEntry = new Map<string, string>()
   const intentOf = (x: any): string => {
     if (x.proof) return intentOfEntry.get(x.proof.handle) ?? ''
     // Token requests are ordered among themselves, ahead of the calls they authorise.
     if (x.token) return 'token'
     const d = x.req.body?.data
-    const handle = d?.intent?.data?.handle ?? (x.req.method === 'PUT' ? d?.handle : '')
+    const handle = d?.intent?.data?.handle ?? (statusCall(x) ? d?.handle : '')
     if (d?.handle && d?.intent) intentOfEntry.set(d.handle, handle)
     return handle
   }
   const rank = (x: any): number => {
     if (x.proof) return ['prepared', 'failed'].includes(x.proof.status) ? 1 : 4
     if (x.token) return 0
-    if (x.req.method === 'PUT') return x.req.body?.meta?.status === 'prepared' ? 2 : 5
+    if (statusCall(x)) return x.req.body?.meta?.status === 'prepared' ? 2 : 5
     return x.req.body?.data?.action ? 3 : 0
   }
   // With several bridges, calls of one phase go out in parallel: bridge, then the

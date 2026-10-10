@@ -35,9 +35,12 @@ export function generateKeyPair(): KeyPair {
   return { public: pub.toString('base64'), secret: sec.toString('base64'), format: 'ed25519-raw' }
 }
 
+export function privateKeyObject(keyPair: KeyPair) {
+  return createPrivateKey({ key: Buffer.concat([PKCS8, Buffer.from(keyPair.secret, 'base64')]), format: 'der', type: 'pkcs8' })
+}
+
 export function signDigest(digest: string, keyPair: KeyPair): string {
-  const key = createPrivateKey({ key: Buffer.concat([PKCS8, Buffer.from(keyPair.secret, 'base64')]), format: 'der', type: 'pkcs8' })
-  return sign(null, Buffer.from(digest, 'hex'), key).toString('base64')
+  return sign(null, Buffer.from(digest, 'hex'), privateKeyObject(keyPair)).toString('base64')
 }
 
 export function verifyDigest(digest: string, publicRaw: string, result: string): boolean {

@@ -13,7 +13,8 @@ import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, sig
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
 import { matches, parseQuery } from './query.js'
-import { validateBody, validateLedgerDrop, validateReportProof, type ValidatedKind } from './schemas.js'
+import { validateBody, validateLedgerDrop, validateProcessing, validateReportProof, type ValidatedKind } from './schemas.js'
+import { CAUSED_BY, ForwardedError, aspectFor, forward, type Action, type Aspect } from './forwarding.js'
 import { describe, redact } from './journal.js'
 import { keyOf, type Store, type StoredRecord } from './store.js'
 import { applyStatus } from './status.js'
@@ -128,6 +129,12 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const e = toLedgerError(err)
     const data: Record<string, unknown> = { reason: e.reason, detail: e.detail }
     if (e.custom) data.custom = e.custom
+    // A bridge's error (forwarding.ts): its proofs, then the ledger's naming the cause.
+    if (e instanceof ForwardedError && req.ledgerKey) {
+      const hash = hashData(data)
+      const moment = now()
+      return reply.status(e.status).send({ hash, data, meta: { proofs: [...e.proofs, serverProof(hash, { moment, causedBy: CAUSED_BY }, req.ledgerKey, 'system')], moment } })
+    }
     reply.status(e.status).send(envelope(req.ledgerKey, data))
   })
   app.setNotFoundHandler((req, reply) => {
@@ -356,7 +363,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
 
   // Stores a new record and returns it; the caller answers only after everything the
   // record depends on is written, so a client's next request never outruns it.
-  async function create(kind: Kind, scope: string, key: KeyPair, req: FastifyRequest) {
+  // `finish` sees the record before it is stored and may replace it (anchor forwarding).
+  async function create(kind: Kind, scope: string, key: KeyPair, req: FastifyRequest, finish?: (r: StoredRecord) => Promise<StoredRecord>) {
     const body = req.body as any
     const proofs = verifyProofs(body)
     const secrets = kind === 'intents' ? [] : secretsOf(body.data, body.meta)
@@ -408,6 +416,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
           ...(domain ? { domain } : {}),
         },
       }
+    if (finish) record = await finish(record)
     if (!(await store.insert(scope, kind, record))) throw errors.duplicated(KINDS[kind].name, body.data.handle)
     await keepSecrets(scope, kind, keyOf(record), secrets)
     await addChange(scope, kind, record, 'create')
@@ -609,6 +618,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (kind === 'anchors' && !(typeof data.wallet === 'string' && (await store.get(scope, 'wallets', data.wallet))))
       throw new LedgerError(422, 'record.relation-not-found', `Cannot find anchor wallet '${data.wallet}'`)
     if (kind === 'schemas') return checkContent(data.schema)
+    if (kind === 'policies' && data.schema === 'processing') validateProcessing(data)
     const record = KINDS[kind].record
     if (typeof data.schema === 'string') {
       const schema = await store.get(scope, 'schemas', data.schema)
@@ -664,7 +674,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
 
   // Update: a new version whose data names the current hash as `parent`. The record
   // keeps its luid, status and owners; the ledger countersigns with luid only.
-  async function update(req: FastifyRequest, t: Target) {
+  // `finish` sees the new version before it is stored and may replace it (anchor forwarding).
+  async function update(req: FastifyRequest, t: Target, finish?: (r: StoredRecord) => Promise<StoredRecord>) {
     validateBody(t.kind as ValidatedKind, req.body)
     const who = await authenticate(req)
     const body = req.body as any
@@ -674,12 +685,13 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (t.kind !== 'ledgers') await related(t.kind, t.scope, body.data)
     const proofs = await annotate(t.ledger.data.handle, verifyProofs(body))
     const secrets = secretsOf(body.data, body.meta, t.found)
-    const updated: StoredRecord = {
+    let updated: StoredRecord = {
       hash: body.hash,
       data: body.data,
       luid: t.found.luid,
       meta: { ...t.found.meta, proofs: [...proofs, serverProof(body.hash, { luid: t.found.luid, moment: now() }, req.ledgerKey!, 'system')], moment: now() },
     }
+    if (finish) updated = await finish(updated)
     await store.update(t.scope, t.kind, updated)
     await keepSecrets(t.scope, t.kind, keyOf(updated), secrets)
     await addChange(t.scope, t.kind, updated, 'update')
@@ -692,7 +704,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // the proof as sent and does not countersign. On an intent it is a further signature
   // (action `sign`); observed (records2): it is appended, owners stay, and a waiting
   // intent is not processed again.
-  async function addProof(req: FastifyRequest, t: Target) {
+  // `before` runs once the proof is checked, before it is stored (anchor forwarding).
+  async function addProof(req: FastifyRequest, t: Target, before?: (stored: Proof) => Promise<void>) {
     const who = await authenticate(req)
     const record = KINDS[t.kind].record
     // A proof without `public` is a template the token's signer is impersonated on.
@@ -714,6 +727,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       throw errors.signatureInvalid(proof.public)
     if (t.kind === 'reports') validateReportProof(sent)
     const [stored] = await annotate(t.ledger.data.handle, [proof])
+    await before?.(stored)
     // Intents are also written by the core; append under the ledger's lock.
     let dropped = false
     return store.transaction(t.ledger.data.handle, async (tx) => {
@@ -852,6 +866,103 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await store.insert(scope, 'requests', { luid, hash, data, meta: { status: 'created', moment, owners: [], proofs: [proof] } } as StoredRecord)
   }
 
+  // ---- anchor forwarding (forwarding.ts; recorded, forwarding) ----------------------
+
+  // What the ledger sends is the client's body (or the record it is about to keep) with
+  // the ledger's proof appended: `{moment, status}` for creates and drops, `{moment}`
+  // for updates; a proof goes as the ledger stores it. Local checks come first: a
+  // duplicate is refused without a call.
+  const forwarded = (req: FastifyRequest, ledger: StoredRecord, aspect: Aspect, method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown, list = false) =>
+    forward({ ledger: ledger.data.handle, key: req.ledgerKey!, bridge: aspect.bridge, method, path, body, client: req.headers.authorization }, list)
+  const countersigned = (req: FastifyRequest, body: any, custom: Record<string, unknown>) => ({
+    ...body,
+    meta: { ...body.meta, proofs: [...(body.meta?.proofs ?? []), serverProof(body.hash, { moment: now(), ...custom }, req.ledgerKey!, 'system')] },
+  })
+  const anchorPath = (id: string) => `/${encodeURIComponent(id)}`
+  const anchorAspect = async (req: FastifyRequest, action: Action) => {
+    const ledger = await hostedLedger(req)
+    return { ledger, aspect: await aspectFor(store, ledger.data.handle, action) }
+  }
+
+  // The ledger draws a luid for what it sends; validate keeps the record under another
+  // (recorded). Synchronize keeps what the bridge answered, under a luid drawn again.
+  async function createAnchor(req: FastifyRequest, ledger: StoredRecord, aspect: Aspect) {
+    const body = req.body as any
+    const scope = ledger.data.handle
+    verifyProofs(body)
+    if (aspect.strategy !== 'proxy' && (await store.get(scope, 'anchors', body.data.handle))) throw errors.duplicated('Anchor', body.data.handle)
+    const sent = { ...countersigned(req, body, { status: 'created' }), luid: newLuid('$anc') }
+    if (aspect.strategy === 'proxy') return forwarded(req, ledger, aspect, 'POST', '', sent)
+    if (aspect.strategy === 'validate') {
+      await forwarded(req, ledger, aspect, 'POST', '', sent)
+      return create('anchors', scope, req.ledgerKey!, req)
+    }
+    return create('anchors', scope, req.ledgerKey!, req, async (r) => {
+      const answer = await forwarded(req, ledger, aspect, 'POST', '', countersigned(req, r, { status: 'created' }))
+      return { hash: answer.hash, data: answer.data, luid: newLuid('$anc'), meta: { ...r.meta, proofs: answer.meta.proofs, moment: now() } }
+    })
+  }
+
+  // Proxy answers the bridge's record as it is; fallback the ledger's own when it has it.
+  async function readAnchor(req: FastifyRequest, id: string) {
+    const { ledger, aspect } = await anchorAspect(req, 'read')
+    if (!aspect || (aspect.strategy === 'fallback' && (await find(ledger.data.handle, 'anchors', id)))) return (await readable(req, 'anchors', id)).found
+    const who = await authenticate(req)
+    await acl.authorize('read', 'anchor', { who }, { ledger })
+    return forwarded(req, ledger, aspect, 'GET', anchorPath(id))
+  }
+
+  // The bridge's list is asked for without the query, and comes back with its proofs and the ledger's.
+  async function listAnchors(req: FastifyRequest, local: () => ReturnType<typeof listPage>) {
+    const { ledger, aspect } = await anchorAspect(req, 'query')
+    if (!aspect) return local()
+    if (aspect.strategy === 'fallback') {
+      const page = local()
+      if ((page.data as unknown[]).length) return page
+    }
+    const answer = await forwarded(req, ledger, aspect, 'GET', '', undefined, true)
+    return { hash: answer.hash, data: answer.data, meta: { proofs: [...(answer.meta?.proofs ?? []), serverProof(answer.hash, { moment: now() }, req.ledgerKey!, 'system')] } }
+  }
+
+  async function updateAnchor(req: FastifyRequest, id: string) {
+    const { ledger, aspect } = await anchorAspect(req, 'update')
+    if (!aspect || aspect.strategy !== 'proxy') {
+      const t = await target(req, 'anchors', id)
+      if (!aspect) return update(req, t)
+      if (aspect.strategy === 'validate')
+        return update(req, t, async (r) => {
+          await forwarded(req, ledger, aspect, 'PUT', anchorPath(id), countersigned(req, req.body, {}))
+          return r
+        })
+      return update(req, t, async (r) => {
+        const answer = await forwarded(req, ledger, aspect, 'PUT', anchorPath(id), countersigned(req, r, {}))
+        return { ...r, hash: answer.hash, data: answer.data, meta: { ...r.meta, proofs: answer.meta.proofs, moment: now() } }
+      })
+    }
+    validateBody('anchors', req.body)
+    const who = await authenticate(req)
+    const keys = await impersonate(req.body, ledger.data.handle, who)
+    await acl.authorize('update', 'anchor', { who, proofs: keys }, { ledger })
+    verifyProofs(req.body)
+    return forwarded(req, ledger, aspect, 'PUT', anchorPath(id), countersigned(req, req.body, {}))
+  }
+
+  // Signing under synchronize is a 500 on the reference (a bug, divergences.json); here
+  // it is validate's: the bridge accepts the proof, then the ledger adds it.
+  async function signAnchor(req: FastifyRequest, id: string) {
+    const { ledger, aspect } = await anchorAspect(req, 'sign')
+    if (aspect?.strategy !== 'proxy') {
+      const t = await target(req, 'anchors', id)
+      return addProof(req, t, aspect && (async (stored) => void (await forwarded(req, ledger, aspect, 'POST', `${anchorPath(id)}/proofs`, stored))))
+    }
+    const who = await authenticate(req)
+    const sent = req.body as any
+    const keys = sent?.public ? [sent.public] : await impersonate({ hash: '', data: {}, meta: { proofs: [sent] } }, ledger.data.handle, who)
+    await acl.authorize('update', 'anchor', { who, proofs: keys }, { ledger })
+    const [stored] = await annotate(ledger.data.handle, [sent])
+    return forwarded(req, ledger, aspect, 'POST', `${anchorPath(id)}/proofs`, stored)
+  }
+
   // ---- records -------------------------------------------------------------------
 
   for (const kind of TOP_LEVEL) {
@@ -865,7 +976,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       const keys = await impersonate(req.body, ledger.data.handle, who, 'created')
       await acl.authorize('create', record, { who, proofs: keys }, { ledger })
       await related(kind, ledger.data.handle, (req.body as any).data)
-      reply.status(201).send(await create(kind, ledger.data.handle, req.ledgerKey!, req))
+      const aspect = kind === 'anchors' ? await aspectFor(store, ledger.data.handle, 'create') : undefined
+      reply.status(201).send(aspect ? await createAnchor(req, ledger, aspect) : await create(kind, ledger.data.handle, req.ledgerKey!, req))
     })
 
     app.get(`/api/v2/${kind}`, async (req) => {
@@ -879,10 +991,10 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       await acl.authorizeQuery(record, { who }, { ledger })
       const rows: StoredRecord[] = []
       for (const r of await store.list(ledger.data.handle, kind)) if (await acl.allowed('read', record, { who }, { ledger, record: r })) rows.push(r)
-      return listPage(req, rows)
+      return kind === 'anchors' ? listAnchors(req, () => listPage(req, rows)) : listPage(req, rows)
     })
 
-    app.get<P>(`/api/v2/${kind}/:id`, async (req) => (await readable(req, kind, req.params.id)).found)
+    app.get<P>(`/api/v2/${kind}/:id`, async (req) => (kind === 'anchors' ? readAnchor(req, req.params.id) : (await readable(req, kind, req.params.id)).found))
     app.get<P>(`/api/v2/${kind}/:id/changes`, async (req) => {
       const t = await readable(req, kind, req.params.id)
       return changePage(req, t.scope, kind, keyOf(t.found))
@@ -891,8 +1003,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       changeOf(await readable(req, kind, req.params.id), req.params.change),
     )
     app.post<P>(`/api/v2/${kind}/:id/access/!check`, async (req) => accessCheck(req, await target(req, kind, req.params.id)))
-    app.post<P>(`/api/v2/${kind}/:id/proofs`, async (req) => addProof(req, await target(req, kind, req.params.id)))
-    if ((MUTABLE as readonly string[]).includes(kind)) app.put<P>(`/api/v2/${kind}/:id`, async (req) => update(req, await target(req, kind, req.params.id)))
+    app.post<P>(`/api/v2/${kind}/:id/proofs`, async (req) => (kind === 'anchors' ? signAnchor(req, req.params.id) : addProof(req, await target(req, kind, req.params.id))))
+    if ((MUTABLE as readonly string[]).includes(kind))
+      app.put<P>(`/api/v2/${kind}/:id`, async (req) => (kind === 'anchors' ? updateAnchor(req, req.params.id) : update(req, await target(req, kind, req.params.id))))
   }
 
   // ---- wallets -------------------------------------------------------------------
@@ -932,7 +1045,19 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
         throw errors.dropRejected(`Bridge ${found.data.handle} is in use by wallets. Please remove it from the wallets first.`)
     }),
     policies: dropOf('policies'),
-    anchors: dropOf('anchors'),
+    // Forwarded (forwarding.ts): proxy needs no local anchor; validate drops it once the bridge did.
+    anchors: async (req: FastifyRequest<DropParams>, reply: FastifyReply) => {
+      const { ledger, aspect } = await anchorAspect(req, 'drop')
+      const send = () => forwarded(req, ledger, aspect!, 'DELETE', anchorPath(req.params.id), countersigned(req, req.body, { status: 'dropped' }))
+      if (aspect?.strategy !== 'proxy') return dropOf('anchors', aspect && (async () => void (await send())))(req, reply)
+      validateBody('drop', req.body)
+      const who = await authenticate(req)
+      const keys = await impersonate(req.body, ledger.data.handle, who, 'dropped')
+      await acl.authorize('drop', 'anchor', { who, proofs: keys }, { ledger })
+      verifyProofs(req.body)
+      await send()
+      reply.status(204).send()
+    },
     effects: dropOf('effects'),
     reports: dropOf('reports'),
   }

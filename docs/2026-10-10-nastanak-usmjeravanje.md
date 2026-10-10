@@ -29,3 +29,24 @@ odgovor bi bio „pravilo na ledgeru”. Bez treće ne bismo znali da je zapis `
 zaseban, ni da `record: intent` ne pokriva proof. Pouka za iduće scenarije: kad tražiš
 koje pravilo nešto dopušta, stupnjuj pravila unutar iste snimke, od najužeg prema
 najširem, i iza svakog koraka napravi pokušaj.
+
+## Nastavak S5: anchor forwarding izgrađen
+
+- **`server/src/forwarding.ts`**: traženje aspekta iz `processing` policyja (status
+  nije bitan; dvije vrijednosti za istu akciju i nepostojeći bridge daju 500 tek pri
+  upotrebi), JWT ledgera za bridge (`iss: ledger:<l>`, `sub: system@<l>`, `aud`, 24 h),
+  poziv na `{server}/v2/anchors…` i provjera odgovora (hash, potpisi, 401 → 500, bez
+  recorda → 502, potpisana greška bridgea → `ForwardedError`).
+- **`app.ts`**: `create`, `update` i `addProof` dobili su kuku koja vidi zapis prije
+  spremanja. Validate i synchronize zato prolaze kroz iste lokalne provjere kao i bez
+  forwardinga, a proxy ide mimo lokalnih zapisa. Validacija `processing` policyja je u
+  `schemas.ts`: deset grešaka `policy-data` anyOf, s prvom greškom processing grane u
+  sredini.
+- **`compare.ts`**: `Bearer <jwt>` se uspoređuje po dekodiranim claimovima, gola adresa
+  bridgea se normalizira, a samo `PUT /intents/…` se sortira kao statusni poziv (ostali
+  PUT-ovi zadržavaju mjesto).
+- **Odstupanje**: synchronize `sign` je na referenci 500 bez poziva bridgeu. Mi
+  postupamo kao kod validate (forwarding #63–64, bridge #29).
+- Odluke koje snimka ne pokriva su u FINDINGS: zadane strategije prema docsu,
+  synchronize na drop/query, kada fallback lista pita bridge. `filter` policyja još se
+  ne primjenjuje (TODO).

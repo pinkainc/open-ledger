@@ -108,7 +108,7 @@ export async function balanceOf(sdk: any, wallet: string, symbol = 'usd') {
   return out
 }
 
-export type Call = { method: string; url: string; body: any }
+export type Call = { method: string; url: string; body: any; headers: Record<string, string | string[] | undefined> }
 
 /** A bridge that records calls, answers 202 (or what `answer` says) and reports when told. */
 export async function testBridge() {
@@ -119,7 +119,7 @@ export async function testBridge() {
     let s = ''
     req.on('data', (c) => (s += c))
     req.on('end', () => {
-      const call = { method: req.method!, url: req.url!, body: s ? JSON.parse(s) : undefined }
+      const call = { method: req.method!, url: req.url!, body: s ? JSON.parse(s) : undefined, headers: req.headers }
       calls.push(call)
       res.statusCode = answer(call)
       const body = json(call)

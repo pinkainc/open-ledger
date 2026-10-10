@@ -265,3 +265,52 @@ function check(validate: ReturnType<typeof ajv.compile>, body: unknown) {
   const detail = `Schema validation error: ${errs.map((e) => `request/body${e.instancePath} ${messageOf(e)}`).join(', ')}`
   throw new LedgerError(422, 'record.schema-invalid', detail, { errors: errs.map(toWire) })
 }
+
+// A processing policy's values (spec: aspect-processing-value; recorded, forwarding).
+// The reference checks the whole policy against `policy-data`, an anyOf of every
+// policy schema, so a bad value comes back inside the errors of the other branches:
+// fixed ones before and after the processing branch's first error. A strategy an
+// action may not use passes the schema and is refused after it.
+export const ASPECT_ACTIONS = ['read', 'query', 'create', 'update', 'drop', 'sign'] as const
+export const STRATEGIES = ['proxy', 'fallback', 'validate', 'synchronize'] as const
+const aspectValue = ajv.compile({
+  type: 'object',
+  required: ['schema', 'action', 'invoke'],
+  properties: {
+    schema: { type: 'string', enum: ['aspect'] },
+    action: { type: 'string', enum: ASPECT_ACTIONS },
+    invoke: { type: 'object', required: ['bridge'], properties: { bridge: { type: 'string' } } },
+    config: { type: 'object', required: ['strategy'], properties: { strategy: { type: 'string', enum: STRATEGIES } } },
+  },
+})
+const otherBranches = (at: 'before' | 'after') => {
+  const e = (path: string, message: string, keyword: string) => ({ path: `/body/data${path}`, message, errorCode: `${keyword}.openapi.validation` })
+  const schemaEnum = (v: string) => e('/schema', `must be equal to one of the allowed values: ${v}`, 'enum')
+  return at === 'before'
+    ? [...['layout', 'status', 'labels', 'access'].map(schemaEnum), e('/action', "must have required property 'action'", 'required')]
+    : [
+        ...['authentication', 'dtc'].map(schemaEnum),
+        e('/schema', 'must match pattern "^(?!layout|access|status|labels|schedule|processing|authentication|dtc).*$"', 'pattern'),
+        e('', 'must match a schema in anyOf', 'anyOf'),
+      ]
+}
+
+export function validateProcessing(data: any) {
+  const values: unknown[] = Array.isArray(data?.values) ? data.values : []
+  values.forEach((v, i) => {
+    if (aspectValue(v)) return
+    const first = aspectValue.errors![0]
+    const own = toWire({ ...first, instancePath: `/data/values/${i}${first.instancePath}` })
+    const list = [...otherBranches('before'), own, ...otherBranches('after')]
+    // The detail names a missing property at its parent, like `check` above.
+    const human = (w: { path: string; message: string; errorCode: string }) =>
+      `request${w.errorCode.startsWith('required') ? w.path.replace(/\/[^/]+$/, '') : w.path} ${w.message}`
+    throw new LedgerError(422, 'record.schema-invalid', `Schema validation error: ${list.map(human).join(', ')}`, { errors: list })
+  })
+  for (const v of values as any[]) {
+    const strategy = v.config?.strategy
+    const reading = v.action === 'read' || v.action === 'query'
+    if (strategy === 'validate' && reading) throw new LedgerError(422, 'record.schema-invalid', "Cannot define 'validate' strategy for read or query actions")
+    if (strategy === 'fallback' && !reading) throw new LedgerError(422, 'record.schema-invalid', "Cannot define 'fallback' strategy for non-read or query actions")
+  }
+}

@@ -177,8 +177,10 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       validated against the spec (recorded `bproofs` 45/45 + 20/20)
 - [ ] DTC policy (`schema: dtc`, configurable 2PC steps; spec since 2.46, no prose docs) —
       a whole executor, moved to S10 (scoped in S5)
-- [ ] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize) —
-      recorded (`forwarding`, pending), see FINDINGS; implement in S5 continued
+- [x] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize) —
+      `forwarding` 65/67 + 29/30 (synchronize `sign` is a reference 500, divergences.json);
+      `server/src/forwarding.ts`, `server/test/forwarding.test.ts`
+- [ ] Processing policy `filter` (spec: policy-filter) — not recorded, not applied
 - [x] Domains: `$dom` records, `meta.domain` from a proof or a one-`@` handle suffix,
       subdomain `data.domain`, intent `meta.domains` (recorded `domains` 31/31)
 - [ ] Domain access inheritance (rules of a domain apply to its records and subdomains) —

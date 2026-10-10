@@ -157,5 +157,26 @@
     "reference": "Makes no call: each attempt fails `delivery.unexpected-error`, the delivery is cancelled after six, and the intent is noted `No handler found for security rule schema 'mtls' in bridge '<b>' (rule #0)` — with a valid certificate and key too (recorded).",
     "ours": "Calls the bridge presenting the certificate and key (server/test/mtls.test.ts). Over plain http, and for a generic schema we do not know, we do what the reference does; that is all a recording through the tunnel can see, so no recorded exchange differs.",
     "why": "The docs describe mtls as a way to secure a bridge; a rule that can never be satisfied leaves every payment to such a bridge pending."
+  },
+  {
+    "fixture": "forwarding",
+    "exchanges": [
+      63,
+      64
+    ],
+    "what": "A proof with `status: inactive` on an anchor whose `sign` is forwarded with strategy `synchronize`, and a list showing that anchor afterwards.",
+    "reference": "500 api.unexpected-error `Unexpected server error`, with no call to the bridge; the anchor is unchanged (recorded).",
+    "ours": "Forwards the proof to the bridge (`POST {server}/v2/anchors/<id>/proofs`), then adds it as the ledger always does: the anchor becomes inactive.",
+    "why": "A strategy the reference accepts at policy creation and then cannot carry out is a defect; validate's order (the bridge first, then the ledger) is the closest documented behaviour."
+  },
+  {
+    "fixture": "forwarding.bridge.jsonl",
+    "exchanges": [
+      29
+    ],
+    "what": "The forwarded proof of the synchronize sign (see forwarding #63).",
+    "reference": "None: the reference fails before calling the bridge.",
+    "ours": "The proof as the ledger stores it, with `origin: key-pair`.",
+    "why": "Consequence of the forwarding #63 entry."
   }
 ]
