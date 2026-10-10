@@ -172,6 +172,9 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] (?) Lookup on a wallet without a bridge: we filter its anchors by the given fields
 - [ ] (?) Bridge `secure` headers on anchor/domain calls (the reference sent the client's token)
 - [ ] (?) Is the bridge's list signature verified? (we check the shape only)
+- [x] Who may report on an entry: `create` on `intent-proof` from the ledger's rules, any
+      such key (not only the bridge's); `sign` is no access action, every `access` is
+      validated against the spec (recorded `bproofs` 45/45 + 20/20)
 - [ ] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize)
 - [x] Domains: `$dom` records, `meta.domain` from a proof or a one-`@` handle suffix,
       subdomain `data.domain`, intent `meta.domains` (recorded `domains` 31/31)

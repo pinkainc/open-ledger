@@ -176,6 +176,13 @@ export class AccessControl {
     return out
   }
 
+  /** Rules that would grant but for their signer: what an intent proof's refusal lists (bproofs). */
+  async signerMisses(action: string, record: string, scope: Scope) {
+    let n = 0
+    for (const [r, level] of await this.rules(scope)) if (r.signer && (await this.grants({ ...r, signer: undefined }, action, record, {}, scope, level))) n++
+    return n
+  }
+
   async allowed(action: string, record: string, access: Access, scope: Scope) {
     for (const [r, level] of await this.rules(scope)) if (await this.grants(r, action, record, access, scope, level)) return true
     return false

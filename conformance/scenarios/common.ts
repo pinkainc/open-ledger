@@ -4,7 +4,7 @@
 import { LedgerSdk } from '@minka/ledger-sdk'
 import { operatorKeyPair } from '../identity.js'
 
-export async function scenario(opts: { expiryMinutes?: number; settleSeconds?: number; skipLedger?: boolean } = {}) {
+export async function scenario(opts: { expiryMinutes?: number; settleSeconds?: number; skipLedger?: boolean; access?: (operator: string) => unknown[] } = {}) {
   const BASE = process.env.BASE ?? 'http://localhost:4610/api/v2'
   const DIRECT = process.env.DIRECT ?? BASE
   const RUN = process.env.RUN ?? new Date().toISOString().replace(/\D/g, '').slice(0, 14)
@@ -31,7 +31,7 @@ export async function scenario(opts: { expiryMinutes?: number; settleSeconds?: n
         handle: LEDGER,
         signer: 'system',
         config: { 'intent.expiryThresholdMinutes': opts.expiryMinutes ?? 60, 'access.strategy': 'record-based' },
-        access: [{ action: 'any', record: 'any' }],
+        access: opts.access?.(keyPair.public) ?? [{ action: 'any', record: 'any' }],
       } as any)
       .hash()
       .sign([{ keyPair }])

@@ -14,7 +14,37 @@ const ajv = new Ajv({ allErrors: false, strict: false })
 // `unevaluatedProperties` (spec: every record's data) needs draft 2019-09.
 const ajv2019 = new Ajv2019({ allErrors: false, strict: false })
 
-const baseData = { type: 'object', required: ['handle'] }
+// A record's `access` (spec: access, access-rule, access-policy), on every record kind.
+// Recorded (bproofs): `sign` is no action, so a rule `{action: sign, record: intent}`
+// (what about-intents asks for on a bridge) is refused, with this error list.
+const accessActions = ['abort', 'access', 'activate', 'retry-event', 'any', 'assign-signer', 'commit', 'create', 'destroy', 'drop', 'issue', 'limit', 'lookup', 'manage', 'query', 'read', 'remove-signer', 'spend', 'update', 'reveal']
+const accessRecords = ['anchor', 'anchor-proof', 'any', 'bridge', 'bridge-proof', 'circle', 'circle-proof', 'circle-signer', 'domain', 'domain-proof', 'effect', 'effect-proof', 'intent', 'intent-proof', 'ledger', 'ledger-proof', 'policy', 'policy-proof', 'report', 'report-proof', 'request', 'schema', 'schema-proof', 'server', 'signer', 'signer-proof', 'signer-factor', 'signer-factor-proof', 'signer-factor-secret', 'symbol', 'symbol-proof', 'wallet', 'wallet-proof']
+const oneOfOrSet = (values: string[]) => ({
+  oneOf: [
+    { type: 'string', enum: values },
+    {
+      oneOf: [
+        { type: 'object', properties: { $in: { type: 'array', items: { type: 'string', enum: values } } }, additionalProperties: false },
+        { type: 'object', properties: { $nin: { type: 'array', items: { type: 'string', enum: values } } }, additionalProperties: false },
+      ],
+    },
+  ],
+})
+const access = {
+  type: 'array',
+  items: {
+    oneOf: [
+      { type: 'object', required: ['action'], properties: { action: oneOfOrSet(accessActions), record: oneOfOrSet(accessRecords) } },
+      {
+        type: 'object',
+        required: ['policy'],
+        properties: { policy: { oneOf: [{ type: 'string' }, { type: 'object', properties: { $in: { type: 'array', items: { type: 'string' } } }, additionalProperties: false }] } },
+        additionalProperties: false,
+      },
+    ],
+  },
+}
+const baseData = { type: 'object', required: ['handle'], properties: { access } }
 const ref = { type: 'object', required: ['handle'], properties: { handle: { type: 'string' } } }
 const amount = { type: 'integer', exclusiveMinimum: 0, maximum: 9007199254740991 }
 

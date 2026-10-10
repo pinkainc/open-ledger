@@ -4,6 +4,31 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Who may report on a bridge's entry
+
+Recorded with `bproofs` (45 exchanges, 20 bridge calls; three recordings, the last
+kept) on 2.47.4, on a ledger that is not open (`{any, record: any}` for the operator
+only, `access` and `read` for everyone). The bridge never reported by itself; the
+scenario sent its `prepared` from different keys, one intent each.
+
+- **Adding a proof to an intent is `create` on record `intent-proof`**, decided by the
+  ledger's rules (the trace names `assertAccessToCreateProof`). `{create, record:
+  intent-proof}` or `{any, record: intent-proof}` for the bridge's key lets its report
+  through; `{any, record: intent}` on the ledger, `{any}` or `{any, record:
+  intent-proof}` on the bridge record, and `{any}` on the bridged wallet do not.
+- **The rule the docs ask for cannot be written.** about-intents: "the signer ... must
+  have granted action sign for record intent on the bridge record". `sign` is no access
+  action: `{action: sign}` in any record's `access` is 422 `record.schema-invalid`
+  listing the action enum, both aggregation shapes and the `policy` branch. Every
+  record's `access` is validated against the spec this way (ours since now too).
+- **Any key that may add a proof may report an entry.** The operator's `prepared` on
+  the bridge's credit entry committed the intent (commit call to the bridge); nothing
+  checks that the reporter is the bridge. A registered signer and a stranger are
+  refused like anyone without the right.
+- The refusal is 403 `Missing permissions` with `custom.errors`: one `Cannot find
+  required signer.` per rule that matches action and record but not the signer, plus
+  two always (3 with only the operator's rule, 5 with two more for the bridge's key).
+
 ## 2026-10-10 — Generic `secure` rules (mtls)
 
 Recorded with `secure2` (23 exchanges, no bridge call reached the tunnel) on 2.47.4,

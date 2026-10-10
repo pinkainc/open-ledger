@@ -700,7 +700,15 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const wrapped = { hash: t.found.hash, data: t.found.data, meta: { proofs: sent && !sent.public ? [sent] : [] } }
     const keys = wrapped.meta.proofs.length ? await impersonate(wrapped, t.ledger.data.handle, who) : sent?.public ? [sent.public] : []
     const proof: any = wrapped.meta.proofs.at(-1) ?? sent
-    await acl.authorize(t.kind === 'intents' ? 'sign' : 'update', record, { who, proofs: keys.filter(Boolean) }, { ledger: t.ledger, record: t.found })
+    // On an intent, adding a proof is `create` of an `intent-proof` (recorded, bproofs):
+    // `{any, record: intent}` does not grant it, nor any rule on the bridge whose entry
+    // the proof reports on (about-intents says `sign` there, which is no action). Who may
+    // add one may also report an entry: a bridge's own key is not required.
+    const [action, kind] = t.kind === 'intents' ? ['create', 'intent-proof'] : ['update', record]
+    const scope = { ledger: t.ledger, record: t.found }
+    await acl.authorize(action, kind, { who, proofs: keys.filter(Boolean) }, scope).catch(async (e) => {
+      throw t.kind === 'intents' && e instanceof LedgerError && e.reason === 'auth.forbidden' ? errors.proofForbidden(await acl.signerMisses(action, kind, scope)) : e
+    })
     if (!proof?.digest || !proof?.public || !proof?.result) throw errors.signatureMissing()
     if (proof.digest !== digestFor(t.found.hash, proof.custom) || !verifyDigest(proof.digest, proof.public, proof.result))
       throw errors.signatureInvalid(proof.public)

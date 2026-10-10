@@ -34,4 +34,8 @@ export const errors = {
   unauthorized: () => new LedgerError(401, 'auth.unauthorized', 'Invalid token.'),
   // Observed for create and read, whether the ledger gate or the rules refused.
   forbidden: (action: string, record: string) => new LedgerError(403, 'auth.forbidden', `Cannot ${action} ${record}.`),
+  // Adding a proof to an intent is checked by its own builder (recorded, bproofs): an
+  // error for each rule that matches but for its signer, after two the reference always
+  // lists (seemingly the implicit ledger-owner and record-owner checks).
+  proofForbidden: (misses: number) => new LedgerError(403, 'auth.forbidden', 'Missing permissions', { errors: Array(2 + misses).fill('Cannot find required signer.') }),
 }
