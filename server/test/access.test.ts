@@ -178,7 +178,7 @@ for (const [storeName, makeStore] of STORES) {
       })
 
       test('a status no value allows is refused and not stored', async () => {
-        const handle = await withPolicy([{ status: { $in: ['active'] } }])
+        const handle = await withPolicy([{ status: { $in: ['active'] }, quorum: [] }])
         const e = await failure(setStatus(handle, a, 'w', 'blocked'))
         assert.deepEqual(
           [e.status, e.reason, e.detail],
