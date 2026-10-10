@@ -62,7 +62,7 @@ povijest.
 
 | Sesija | Paket | Stanje | Commit | Napomena |
 | --- | --- | --- | --- | --- |
-| S1 | Pristup i limiti | otvoreno | | |
+| S1 | Pristup i limiti | gotovo | `75f319a` | 122/146, 92 potvrđeno; policies, policy-based, dnevni limiti, `claims2`; S2 nije započet |
 | S2 | Autentikacija (factors, oauth, hsh) | otvoreno | | |
 | S3 | Reports | otvoreno | | |
 | S4 | Ledger i sustav → 146/146 | otvoreno | | |
