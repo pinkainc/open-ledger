@@ -63,7 +63,7 @@ povijest.
 | Sesija | Paket | Stanje | Commit | Napomena |
 | --- | --- | --- | --- | --- |
 | S1 | Pristup i limiti | gotovo | `75f319a` | 122/146, 92 potvrđeno; policies, policy-based, dnevni limiti, `claims2`; S2 nije započet |
-| S2 | Autentikacija (factors, oauth, hsh) | otvoreno | | |
+| S2 | Autentikacija (factors, oauth, hsh) | gotovo | `da44b4c` | 132/146, 101 potvrđeno; factors 43/43, oauth 21/21, hsh 18/18; OAuth2 cache za bridgeove |
 | S3 | Reports | otvoreno | | |
 | S4 | Ledger i sustav → 146/146 | otvoreno | | |
 | S5 | Usmjeravanje i domene | otvoreno | | |
