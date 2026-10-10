@@ -175,11 +175,14 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Who may report on an entry: `create` on `intent-proof` from the ledger's rules, any
       such key (not only the bridge's); `sign` is no access action, every `access` is
       validated against the spec (recorded `bproofs` 45/45 + 20/20)
-- [ ] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize)
+- [ ] DTC policy (`schema: dtc`, configurable 2PC steps; spec since 2.46, no prose docs) —
+      a whole executor, moved to S10 (scoped in S5)
+- [ ] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize) —
+      recorded (`forwarding`, pending), see FINDINGS; implement in S5 continued
 - [x] Domains: `$dom` records, `meta.domain` from a proof or a one-`@` handle suffix,
       subdomain `data.domain`, intent `meta.domains` (recorded `domains` 31/31)
 - [ ] Domain access inheritance (rules of a domain apply to its records and subdomains) —
-      record with restrictive ledger rules (?)
+      scenario `domains2` written, not recorded yet
 - [ ] (?) Updating a subdomain: its stored data has `domain`, which the schema forbids
 - [ ] (?) `meta.domains` of a forward intent, and order with several domains
 - [ ] (?) `domain.resolutionFromHandleEnabled: false` (domain only from proofs)

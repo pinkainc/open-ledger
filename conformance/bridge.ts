@@ -42,7 +42,7 @@ export type BridgeSpec = {
    * Any other call (anchor forwarding): the status and either a plain body or `signed`,
    * a record (`data`, `meta`) the bridge answers with its own proof appended.
    */
-  serve?: (method: string, path: string, body: any) => { status: number; body?: unknown; signed?: { data: unknown; meta?: any } } | undefined
+  serve?: (method: string, path: string, body: any) => { status: number; body?: unknown; signed?: { data: unknown; meta?: any; luid?: string } } | undefined
   /** HTTP status for an effect call `POST /v2/effects/{effect}` (trait `events`); default 202. */
   effect?: (effect: string, event: any) => number
   /** After answering an effect call 2xx: what the bridge then does, e.g. sign proofs on a report (reports). */
@@ -193,7 +193,7 @@ export async function startBridges(o: {
       if (served.signed) {
         const hash = hashData(served.signed.data)
         const meta = served.signed.meta ?? {}
-        reply = { hash, data: served.signed.data, meta: { ...meta, proofs: [...(meta.proofs ?? []), serverProof(hash, { moment: new Date().toISOString() }, b.keyPair, b.handle)] } }
+        reply = { hash, data: served.signed.data, ...(served.signed.luid ? { luid: served.signed.luid } : {}), meta: { ...meta, proofs: [...(meta.proofs ?? []), serverProof(hash, { moment: new Date().toISOString() }, b.keyPair, b.handle)] } }
       } else reply = served.body
     }
     const listed = status === 404 && !served ? b.lists?.(req.method ?? '', path, body) : undefined

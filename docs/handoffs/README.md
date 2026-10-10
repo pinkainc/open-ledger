@@ -66,7 +66,7 @@ povijest.
 | S2 | Autentikacija (factors, oauth, hsh) | gotovo | `da44b4c` | 132/146, 101 potvrđeno; factors 43/43, oauth 21/21, hsh 18/18; OAuth2 cache za bridgeove |
 | S3 | Reports | gotovo | `340c2fb` | 141/146, 110 potvrđeno; reports 49/54 + 13/14, reports2 236/243 (ostalo namjerno: 500 reference); `minka report` u CLI e2e |
 | S4 | Ledger i sustav → 146/146 | gotovo | `0232437` | **146/146**, 115 potvrđeno; `ledgers` 43/43, `uschema2` 28/28, `secure2` 23/23; drop ledgera i journal isključeni kao na referenci (zastavice); mtls namjerno radi; točka 6 (bridge proofovi) prebačena u S5 |
-| S5 | Usmjeravanje i domene | otvoreno | | |
+| S5 | Usmjeravanje i domene | u tijeku | `338f2ce` | prvi dio: bridge proofovi (`bproofs` 45/45 + 20/20, `intent-proof`), validacija `access`, `forwarding` snimljen ali ne i izgrađen, DTC u S10; nastavak je opet S5 |
 | S6 | L9 cross-ledger | otvoreno | | |
 | S7 | Snimke `(?)`, 2PC i signali | otvoreno | | |
 | S8 | Snimke `(?)`, domene, CLI | otvoreno | | |

@@ -4,6 +4,60 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Anchor forwarding by processing policies (recorded, not yet built)
+
+Recorded with `forwarding` (third recording kept: 66 client exchanges, 29 bridge calls)
+on 2.47.4. The bridge `dir` is a small alias directory in the scenario; it echoes what it
+is sent, appends its proof, and misbehaves for chosen handles. `conformance/pending.json`
+holds the level until we implement it.
+
+**Policy** (`schema: processing`, `record: anchor`, `values` of `{schema: aspect,
+action, invoke: {bridge}, config: {strategy}}`):
+- In force whatever its status (`created` forwards). Several values for one action, in
+  one policy or across policies, fail **at use**: 500 `forward.unexpected-error`
+  `Multiple processing aspect values found for action read.` — not "first match wins".
+- Refused at creation, 422 `record.schema-invalid`: read/query with `validate` (`Cannot
+  define 'validate' strategy for read or query actions`), a write with `fallback`
+  (`Cannot define 'fallback' strategy for non-read or query actions`), both with no
+  `custom.errors`; an unknown strategy or action, or no `invoke`, fail the spec's
+  `policy-data` anyOf: the list is the same ten errors each time (enum layout, status,
+  labels, access; schedule's `/body/data/action` required; the processing branch's
+  first error; enum authentication, dtc; the generic pattern; anyOf).
+- Accepted: `synchronize` for drop and query, an `invoke.bridge` that does not exist
+  (500 `Forward bridge 'ghost' configured but not exists` at use).
+- The SDK's `policy.from(p).data({values})` merges arrays by index: a shorter list
+  keeps the old tail.
+
+**Calls to the bridge:** `{config.server}/v2/anchors[/{handle}[/proofs]]` — note the
+`/v2`, unlike entries. `authorization` is the ledger's JWT (`iss: ledger:<ledger>`,
+`sub: system@<ledger>`, `aud: <bridge>`, 24 h); the client's token moves to
+`x-forwarded-authorization`. Reads by handle, the list without query string.
+- create (every strategy): the client's record with a `luid` the ledger assigns and the
+  ledger's proof `{moment, status: created}` (signer `system`, no luid) appended — the
+  docs say `forwarded`, it is `created`. update: same, proof `{moment}`; drop: body
+  `{data: {parent}, luid, meta}`, proofs `status: dropped`; sign: the client's proof only.
+- synchronize create: the record is persisted first (meta with status, moment, owners,
+  the local `created` proof with luid), then sent with one more `created` proof.
+- validate: the luid sent with a create is **not** the one the local record gets (a
+  second luid is drawn when it is persisted); later calls use the local one.
+
+**Answers to the client:**
+- proxy: the bridge's answer verbatim (its luid, its proofs; no ledger proof). A read of
+  a record that exists only locally still goes to the bridge.
+- validate: the local record; fallback: local when it exists, else the bridge's; a
+  duplicate is refused locally (409 `record.duplicated` `Anchor with handle loc-1
+  already exists.`) with no call.
+- A signed bridge error keeps its status, reason, detail and custom; meta is the
+  bridge's proof, then the ledger's with `custom.causedBy.detail: "Error derived from
+  anchor forwarding response"`, and `meta.moment`. Nothing is persisted.
+- No record in the answer: 502 `forward.invalid-response` `Invalid response from bridge
+  dir`; a wrong hash: 422 `crypto.hash-invalid` `Invalid dto hash: <hash>` (docs: 502);
+  a 401: 500 `forward.unexpected-error` `Unexpected error while forwarding request to
+  bridge`; a list item without `hash`: 422 `Invalid dto hash: undefined`. Data the
+  bridge changed breaks the client's proof: 422 `crypto.signature-invalid`, also on a
+  later fallback read of it.
+- synchronize `sign` answered 500 `api.unexpected-error` (a reference bug, not copied).
+
 ## 2026-10-10 — Who may report on a bridge's entry
 
 Recorded with `bproofs` (45 exchanges, 20 bridge calls; three recordings, the last
