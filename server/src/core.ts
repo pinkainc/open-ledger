@@ -206,7 +206,7 @@ export class Core {
    * The event is the ledger's record `{handle, signal, …payload}` signed by `system`;
    * `about` names the record the deliveries are linked to (`data.record`, `data.linked`).
    */
-  async raise(tx: Store, ledger: string, signal: string, payload: Record<string, unknown>, about: { record: string; linked: string }): Promise<BridgeCall[]> {
+  async raise(tx: Store, ledger: string, signal: string, payload: Record<string, unknown>, about: { record: string; linked: string | null }): Promise<BridgeCall[]> {
     const effects = (await tx.list(ledger, 'effects')).filter((e) => e.data.signal === signal)
     if (!effects.length) return []
     const data = { handle: `evt_${eventId()}`, signal, ...payload }
@@ -222,7 +222,7 @@ export class Core {
       // An effect whose bridge is missing still gets a delivery, but one that knows
       // nothing of the event: no record, no link, no output (recorded).
       const lost = call.unreachable !== undefined
-      await this.enqueue(tx, ledger, call, about.linked, {
+      await this.enqueue(tx, ledger, call, about.linked ?? '', {
         bridge: effect.data.action?.schema === 'bridge' ? effect.data.action.bridge : null,
         effect: effect.data.handle,
         record: lost ? null : about.record,
@@ -248,7 +248,7 @@ export class Core {
   }
 
   /** Raises an event outside a transaction of the caller's and sends its calls. */
-  async announce(ledger: string, signal: string, payload: Record<string, unknown>, about: { record: string; linked: string }) {
+  async announce(ledger: string, signal: string, payload: Record<string, unknown>, about: { record: string; linked: string | null }) {
     if (!(await this.store.list(ledger, 'effects')).some((e) => e.data.signal === signal)) return
     const calls = await this.store.transaction(ledger, (tx) => this.raise(tx, ledger, signal, payload, about))
     for (const c of calls) void this.bridges.deliver(c)

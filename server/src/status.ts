@@ -68,3 +68,15 @@ export async function applyStatus(store: Store, acl: AccessControl, ledger: Stor
     if (met) return set()
   }
 }
+
+/**
+ * A report is created `created`, which status policies on reports must allow (recorded,
+ * reports4: no value for `created` refuses the creation). Only recorded for reports.
+ */
+export async function assertCreatedAllowed(store: Store, ledger: string, recordType: string, data: Record<string, unknown>) {
+  const policies = (await store.list(ledger, 'policies')).filter(
+    (p) => p.data.schema === 'status' && (!p.data.record || p.data.record === recordType) && filtered(p.data.filter, data) && p.meta.status !== 'inactive',
+  )
+  if (policies.length && !policies.flatMap((p) => p.data.values ?? []).some((v: any) => statusMatches(v.status, 'created')))
+    throw new LedgerError(422, 'record.status-policy-violation', `Cannot set ${recordType} status to created. No values correspond to the target status.`)
+}

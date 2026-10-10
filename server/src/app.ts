@@ -13,11 +13,11 @@ import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, sig
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
 import { matches, parseQuery, unsupportedFilters } from './query.js'
-import { validateBody, validateLedgerDrop, validateProcessing, validateReportProof, type ValidatedKind } from './schemas.js'
+import { validateBody, validateLedgerDrop, validatePolicyValues, validateProcessing, validateReportProof, type ValidatedKind } from './schemas.js'
 import { CAUSED_BY, ForwardedError, aspectFor, forward, type Action, type Aspect } from './forwarding.js'
 import { describe, redact } from './journal.js'
 import { keyOf, type Store, type StoredRecord } from './store.js'
-import { applyStatus } from './status.js'
+import { applyStatus, assertCreatedAllowed } from './status.js'
 import { secretRefs } from './secrets.js'
 import { SYSTEM_SCHEMAS } from './system-schemas.js'
 import { checkContent, schemaNotFound, schemaRequired, validateData } from './user-schemas.js'
@@ -420,6 +420,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
         },
       }
     if (finish) record = await finish(record)
+    if (kind === 'reports') await assertCreatedAllowed(store, scope, 'report', record.data)
     if (!(await store.insert(scope, kind, record))) throw errors.duplicated(KINDS[kind].name, body.data.handle)
     await keepSecrets(scope, kind, keyOf(record), secrets)
     await addChange(scope, kind, record, 'create')
@@ -634,6 +635,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       throw new LedgerError(422, 'record.relation-not-found', `Cannot find anchor wallet '${data.wallet}'`)
     if (kind === 'schemas') return checkContent(data.schema)
     if (kind === 'policies' && data.schema === 'processing') validateProcessing(data)
+    if (kind === 'policies') validatePolicyValues(data)
     const record = KINDS[kind].record
     if (typeof data.schema === 'string') {
       const schema = await store.get(scope, 'schemas', data.schema)
@@ -760,7 +762,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
         return current
       }
       if (t.kind === 'reports' && status === 'completed' && stored.custom?.assets !== undefined) {
-        checkAssets(stored.custom.assets, reports.bucket)
+        checkAssets(stored.custom.assets, reports.bucket, { ledger: t.ledger.data.handle, domain: current.meta.domain, schema: current.data.schema, luid: current.luid })
         current.meta = { assets: stored.custom.assets, ...current.meta }
       }
       // An intent's status belongs to its processing: a participant's report (which
@@ -1053,7 +1055,10 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       verifyProofs(body)
       await guard?.(ledger.data.handle, found, req)
       await store.remove(ledger.data.handle, kind, found.data.handle)
-      if (kind === 'effects' || kind === 'factors' || kind === 'reports') await raise(ledger.data.handle, kind, 'dropped', { [KINDS[kind].record]: found }, found)
+      // Recorded (reports3, reports5): `report-dropped` carries the dropped report as
+      // `parent` and its deliveries are linked to nothing.
+      if (kind === 'reports') await core.announce(ledger.data.handle, 'report-dropped', { parent: found }, { record: 'report', linked: null })
+      else if (kind === 'effects' || kind === 'factors') await raise(ledger.data.handle, kind, 'dropped', { [KINDS[kind].record]: found }, found)
       reply.status(204).send()
     }
   const drops = {

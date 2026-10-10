@@ -283,29 +283,55 @@ const aspectValue = ajv.compile({
     config: { type: 'object', required: ['strategy'], properties: { strategy: { type: 'string', enum: STRATEGIES } } },
   },
 })
-const otherBranches = (at: 'before' | 'after') => {
-  const e = (path: string, message: string, keyword: string) => ({ path: `/body/data${path}`, message, errorCode: `${keyword}.openapi.validation` })
-  const schemaEnum = (v: string) => e('/schema', `must be equal to one of the allowed values: ${v}`, 'enum')
-  return at === 'before'
-    ? [...['layout', 'status', 'labels', 'access'].map(schemaEnum), e('/action', "must have required property 'action'", 'required')]
-    : [
-        ...['authentication', 'dtc'].map(schemaEnum),
-        e('/schema', 'must match pattern "^(?!layout|access|status|labels|schedule|processing|authentication|dtc).*$"', 'pattern'),
-        e('', 'must match a schema in anyOf', 'anyOf'),
-      ]
+type Wire = { path: string; message: string; errorCode: string }
+const wire = (path: string, message: string, keyword: string): Wire => ({ path: `/body/data${path}`, message, errorCode: `${keyword}.openapi.validation` })
+// The branches of `policy-data` in the order the reference reports them; a policy that
+// fails its own branch shows that branch's errors in place of its `schema` enum error.
+const BRANCHES = ['layout', 'status', 'labels', 'access', 'aspect', 'processing', 'authentication', 'dtc'] as const
+function policyInvalid(branch: (typeof BRANCHES)[number], own: Wire[]): LedgerError {
+  const list: Wire[] = []
+  for (const b of BRANCHES) {
+    if (b === branch) list.push(...own)
+    else if (b === 'aspect') list.push(wire('/action', "must have required property 'action'", 'required'))
+    else list.push(wire('/schema', `must be equal to one of the allowed values: ${b}`, 'enum'))
+  }
+  list.push(wire('/schema', 'must match pattern "^(?!layout|access|status|labels|schedule|processing|authentication|dtc).*$"', 'pattern'), wire('', 'must match a schema in anyOf', 'anyOf'))
+  // The detail names a missing property at its parent, like `check` above.
+  const human = (w: Wire) => `request${w.errorCode.startsWith('required') ? w.path.replace(/\/[^/]+$/, '') : w.path} ${w.message}`
+  return new LedgerError(422, 'record.schema-invalid', `Schema validation error: ${list.map(human).join(', ')}`, { errors: list })
+}
+
+const ACCESS_ACTIONS = ['abort', 'access', 'activate', 'retry-event', 'any', 'assign-signer', 'commit', 'create', 'destroy', 'drop', 'issue', 'limit', 'lookup', 'manage', 'query', 'read', 'remove-signer', 'spend', 'update', 'reveal']
+
+/**
+ * Values of status and access policies (recorded, reports3 and policies3): a status
+ * value needs `quorum`; an access value's `action` is one string (an array is refused
+ * with the errors of every `action` alternative).
+ */
+export function validatePolicyValues(data: any) {
+  const values: any[] = Array.isArray(data?.values) ? data.values : []
+  values.forEach((v, i) => {
+    if (data.schema === 'status' && v && typeof v === 'object' && !('quorum' in v))
+      throw policyInvalid('status', [wire(`/values/${i}/quorum`, "must have required property 'quorum'", 'required')])
+    if (data.schema === 'access' && v && typeof v === 'object' && 'action' in v && typeof v.action !== 'string') {
+      const at = `/values/${i}/action`
+      throw policyInvalid('access', [
+        wire(at, 'must be string', 'type'),
+        wire(at, `must be equal to one of the allowed values: ${ACCESS_ACTIONS.join(', ')}`, 'enum'),
+        wire(at, 'must be object', 'type'),
+        wire(at, 'must be object', 'type'),
+        wire(at, 'must match exactly one schema in oneOf', 'oneOf'),
+        wire(at, 'must match exactly one schema in oneOf', 'oneOf'),
+      ])
+    }
+  })
 }
 
 export function validateProcessing(data: any) {
   const values: unknown[] = Array.isArray(data?.values) ? data.values : []
   values.forEach((v, i) => {
     if (aspectValue(v)) return
-    const first = aspectValue.errors![0]
-    const own = toWire({ ...first, instancePath: `/data/values/${i}${first.instancePath}` })
-    const list = [...otherBranches('before'), own, ...otherBranches('after')]
-    // The detail names a missing property at its parent, like `check` above.
-    const human = (w: { path: string; message: string; errorCode: string }) =>
-      `request${w.errorCode.startsWith('required') ? w.path.replace(/\/[^/]+$/, '') : w.path} ${w.message}`
-    throw new LedgerError(422, 'record.schema-invalid', `Schema validation error: ${list.map(human).join(', ')}`, { errors: list })
+    throw policyInvalid('processing', [toWire({ ...aspectValue.errors![0], instancePath: `/data/values/${i}${aspectValue.errors![0].instancePath}` })])
   })
   for (const v of values as any[]) {
     const strategy = v.config?.strategy

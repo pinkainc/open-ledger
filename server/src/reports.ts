@@ -40,16 +40,29 @@ export function statusChange(from: string, to: string) {
   return true
 }
 
-const OUTPUT = /^gs:\/\/([^/]+)\/ledgers\/[^/]+(?:\/domains\/[^/]+)?\/schemas\/[^/]+\/reports\/[^/]+\/assets\/([^/]+)$/
+const OUTPUT = /^gs:\/\/([^/]+)\/ledgers\/([^/]+)(?:\/domains\/([^/]+))?\/schemas\/([^/]+)\/reports\/([^/]+)\/assets\/([^/]+)$/
 
-/** Checks the assets of a `completed` proof (recorded: bucket, path shape, file name = handle). */
-export function checkAssets(assets: unknown, bucket: string | undefined) {
+/**
+ * Checks the assets of a `completed` proof against the report (recorded, reports2–4):
+ * bucket, then the ledger, domain, schema and luid in the path must be the report's,
+ * and the file name its handle. A report in a domain has `/domains/{d}/` in the path.
+ */
+export function checkAssets(assets: unknown, bucket: string | undefined, report?: { ledger: string; domain?: string; schema: string; luid: string }) {
   if (!Array.isArray(assets)) return
   for (const a of assets as { handle?: string; output?: unknown }[]) {
     const m = typeof a?.output === 'string' ? a.output.match(OUTPUT) : null
     if (!m) throw invalid(`Invalid gs URL: ${a?.output}`)
-    if (bucket && m[1] !== bucket) throw invalid(`Error while validating asset, GCS URL bucket (${m[1]}) different than reporting bucket (${bucket})`)
-    if (m[2] !== a.handle) throw invalid(`Error while validating asset, GCS URL filename (${m[2]}) different than asset handle (${a.handle})`)
+    const [, inBucket, ledger, domain, schema, luid, file] = m
+    const differs = (what: string, got: string | undefined, want: string | undefined) =>
+      invalid(`Error while validating asset, GCS URL ${what} (${got}) different than ${what === 'bucket' ? 'reporting bucket' : `report ${what}`} (${want})`)
+    if (bucket && inBucket !== bucket) throw differs('bucket', inBucket, bucket)
+    if (report) {
+      if (ledger !== report.ledger) throw differs('ledger', ledger, report.ledger)
+      if (domain !== report.domain) throw differs('domain', domain, report.domain)
+      if (schema !== report.schema) throw differs('schema', schema, report.schema)
+      if (luid !== report.luid) throw differs('luid', luid, report.luid)
+    }
+    if (file !== a.handle) throw invalid(`Error while validating asset, GCS URL filename (${file}) different than asset handle (${a.handle})`)
   }
 }
 const invalid = (detail: string) => new LedgerError(422, 'record.invalid', detail)

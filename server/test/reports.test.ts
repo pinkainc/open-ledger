@@ -36,6 +36,23 @@ describe('report status table and assets', () => {
     refused([{ handle: 'a.csv', output: path('b.csv') }], /filename \(b\.csv\) different than asset handle \(a\.csv\)/)
     refused([{ output: path('a.csv') }], /asset handle \(undefined\)/)
   })
+
+  test('an asset path names the report: ledger, domain, schema, luid (reports3, reports4)', () => {
+    const report = { ledger: 'l', schema: 's', luid: '$rep.-abc' }
+    const path = (o: Partial<typeof report & { domain: string }> = {}) => {
+      const r = { ...report, ...o }
+      return `gs://${BUCKET}/ledgers/${r.ledger}${r.domain ? `/domains/${r.domain}` : ''}/schemas/${r.schema}/reports/${r.luid}/assets/a.csv`
+    }
+    checkAssets([{ handle: 'a.csv', output: path() }], BUCKET, report)
+    checkAssets([{ handle: 'a.csv', output: path({ domain: 'eu' }) }], BUCKET, { ...report, domain: 'eu' })
+    const refused = (output: string, of: object, detail: string) =>
+      assert.throws(() => checkAssets([{ handle: 'a.csv', output }], BUCKET, { ...report, ...of }), (e: any) => e.status === 422 && e.message === `Error while validating asset, GCS URL ${detail}`)
+    refused(path({ ledger: 'x' }), {}, 'ledger (x) different than report ledger (l)')
+    refused(path(), { domain: 'eu' }, 'domain (undefined) different than report domain (eu)')
+    refused(path({ domain: 'eu' }), {}, 'domain (eu) different than report domain (undefined)')
+    refused(path({ schema: 'x' }), {}, 'schema (x) different than report schema (s)')
+    refused(path({ luid: '$rep.x' }), {}, 'luid ($rep.x) different than report luid ($rep.-abc)')
+  })
 })
 
 for (const [storeName, makeStore] of STORES) {

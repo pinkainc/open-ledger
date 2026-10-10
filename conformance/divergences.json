@@ -199,5 +199,40 @@
     "reference": "500 `api.unexpected-error`: the value reaches Postgres and the cast to a timestamp fails (`invalid input syntax for type timestamp`).",
     "ours": "400 `api.query-malformed` `Invalid date in filter 'meta.moment': '<value>'`.",
     "why": "A malformed query is the client's error; a 500 tells the client nothing and hides real server faults."
+  },
+  {
+    "fixture": "reports3",
+    "exchanges": [
+      10,
+      17,
+      24,
+      31
+    ],
+    "what": "A `completed` proof whose asset path names another ledger, another report's luid, an invented luid, another schema.",
+    "reference": "500 api.unexpected-error `Unexpected server error`, the reason only in the stack trace (`Error while validating asset, GCS URL <ledger|domain|schema|luid> (…) different than report <…> (…)`); the proof is not stored.",
+    "ours": "422 record.invalid with the same sentence as `detail`; the proof is not stored.",
+    "why": "As for reports2: a refused asset is the client's error, and the reason belongs in the answer, not in a stack trace."
+  },
+  {
+    "fixture": "reports4",
+    "exchanges": [
+      9,
+      16,
+      23
+    ],
+    "what": "A `completed` proof whose asset path leaves out the report's domain, names a domain the report is not in, or another domain.",
+    "reference": "500 api.unexpected-error `Unexpected server error`, the reason only in the stack trace (`Error while validating asset, GCS URL <ledger|domain|schema|luid> (…) different than report <…> (…)`); the proof is not stored.",
+    "ours": "422 record.invalid with the same sentence as `detail`; the proof is not stored.",
+    "why": "As for reports2: a refused asset is the client's error, and the reason belongs in the answer, not in a stack trace."
+  },
+  {
+    "fixture": "reports3",
+    "exchanges": [
+      57
+    ],
+    "what": "The deliveries of the effect on `report-dropped`, read 4 s after the drop.",
+    "reference": "Failing with `delivery.target-unreachable` `getaddrinfo ENOTFOUND <quick tunnel host>`: the recording's tunnel did not resolve from the sandbox at that moment.",
+    "ours": "Delivered to the webhook on the bridge port.",
+    "why": "A recording artefact, not behaviour; reports5 recorded the same event delivered (17/17 + 1/1)."
   }
 ]
