@@ -4,6 +4,26 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Access inherited through domains
+
+Recorded with `domains2` (43 exchanges, one recording) on 2.47.4, on a ledger that is
+not open: the operator may change everything and reads through a bearer rule, everyone
+may enter. Domain `a` grants key A everything (and a bearer read), its subdomain `c@a`
+grants C everything, `b` grants B wallets. Records carry no rules of their own.
+
+- **A domain's rules count for the records in it and in every subdomain below it**: A
+  creates and updates wallets in `a` and `c@a`; C only in `c@a` (not upward); B wallets
+  in `b` but not a symbol `eur@b` (`record: wallet`). A creation is judged by the domain
+  the record joins; without one (`root-a`, and `wc@c@a`, which joins none — two `@`) the
+  ledger's rules decide: 403 `Cannot create wallet.`
+- **Domain records inherit nothing**: A cannot create `d@a`, C cannot create `e@a`.
+- **In a domain, a signer rule also grants reads** to the token's key: C, with only `{any,
+  record: any, signer: C}` on `c@a`, reads `wc3`; on a ledger or record, a signer rule
+  never grants a read.
+- **A list leaves out what the caller may not read** (first recording of it): A lists
+  the wallets of `a` and `c@a`, C those of `c@a`, the operator all six.
+- An intent joins the domain its proof names: `meta.domain: a` after `owners`.
+
 ## 2026-10-10 — Anchor forwarding by processing policies
 
 Recorded with `forwarding` (third recording kept: 66 client exchanges, 29 bridge calls)

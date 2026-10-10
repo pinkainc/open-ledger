@@ -183,8 +183,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] Processing policy `filter` (spec: policy-filter) — not recorded, not applied
 - [x] Domains: `$dom` records, `meta.domain` from a proof or a one-`@` handle suffix,
       subdomain `data.domain`, intent `meta.domains` (recorded `domains` 31/31)
-- [ ] Domain access inheritance (rules of a domain apply to its records and subdomains) —
-      scenario `domains2` written, not recorded yet
+- [x] Domain access inheritance (rules of a domain apply to its records and subdomains) —
+      `domains2` 43/43 (access.ts: domain level between record and ledger)
 - [ ] (?) Updating a subdomain: its stored data has `domain`, which the schema forbids
 - [ ] (?) `meta.domains` of a forward intent, and order with several domains
 - [ ] (?) `domain.resolutionFromHandleEnabled: false` (domain only from proofs)

@@ -376,7 +376,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     // without a status, unlike every other record.
     const link = kind === 'circle-signers'
     const clientProofs = await annotate(scope, proofs, !link)
-    const domain = kind === 'intents' || !scope ? undefined : await domainOf(scope, body.data.handle, proofs)
+    const domain = !scope ? undefined : await domainOf(scope, body.data.handle, proofs)
 
     let record: StoredRecord
     if (kind === 'intents')
@@ -392,6 +392,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
           domains: await intentDomains(scope, body.data.claims),
           moment,
           owners,
+          // Recorded (domains2): an intent joins the domain its proof names, like any record.
+          ...(domain ? { domain } : {}),
         },
       }
     else
@@ -431,11 +433,15 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // proof names in `custom.domain`, else the suffix of a handle with exactly one `@`
   // (`treasury@payments`; `w@eu@payments` joins none) once the ledger has domains.
   // The domain must exist.
-  async function domainOf(scope: string, handle: unknown, proofs: Proof[]) {
+  async function namedDomain(scope: string, handle: unknown, proofs: Proof[]) {
     const named = proofs.map((p) => p.custom?.domain).find((d) => typeof d === 'string') as string | undefined
     const parts = typeof handle === 'string' ? handle.split('@') : []
     const suffix = parts.length === 2 ? parts[1] : undefined
-    const domain = named ?? (suffix && (await store.list(scope, 'domains')).length ? suffix : undefined)
+    return named ?? (suffix && (await store.list(scope, 'domains')).length ? suffix : undefined)
+  }
+  const joining = (scope: string, body: any) => namedDomain(scope, body?.data?.handle, body?.meta?.proofs ?? [])
+  async function domainOf(scope: string, handle: unknown, proofs: Proof[]) {
+    const domain = await namedDomain(scope, handle, proofs)
     if (domain && !(await store.get(scope, 'domains', domain)))
       throw new LedgerError(422, 'record.relation-not-found', `Trying to set a domain which doesn't exist "${domain}" to the record "${handle}"`, { domain })
     return domain
@@ -974,7 +980,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       const who = await authenticate(req)
       const ledger = await hostedLedger(req)
       const keys = await impersonate(req.body, ledger.data.handle, who, 'created')
-      await acl.authorize('create', record, { who, proofs: keys }, { ledger })
+      // A record is judged by the domain it joins (domains2); a subdomain by the ledger's rules alone.
+      const domain = kind === 'domains' ? undefined : await joining(ledger.data.handle, req.body)
+      await acl.authorize('create', record, { who, proofs: keys }, { ledger, domain })
       await related(kind, ledger.data.handle, (req.body as any).data)
       const aspect = kind === 'anchors' ? await aspectFor(store, ledger.data.handle, 'create') : undefined
       reply.status(201).send(aspect ? await createAnchor(req, ledger, aspect) : await create(kind, ledger.data.handle, req.ledgerKey!, req))

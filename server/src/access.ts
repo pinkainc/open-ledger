@@ -36,6 +36,13 @@
 // help C without `access` (policies2), a ledger rule `{read, record: any}` lets anyone
 // read without `access` (access4), and so does the server's `{read, record: ledger}`.
 //
+// Domains (recorded, domains2): the rules of the domain a record is in, and of each
+// domain above it, count for the record — between its own rules and the ledger's. A
+// subdomain's rules do not reach up. A creation is judged by the domain the record is
+// to join. Domain records themselves inherit nothing: a domain granting `{any, record:
+// any}` does not let its key create a subdomain. In a domain's rules a signer matcher
+// also takes the token's key, so `{any, record: any, signer: C}` lets C read too.
+//
 // Signer matchers: `public`, `handle` (a signer record of this ledger), `$circle`
 // (membership through circle-signer records), `$record: owner` (a key in the record's
 // `meta.owners`), `$ledger: owner` (a key in the ledger's owners), and `$in` of those.
@@ -48,13 +55,18 @@ import type { Store, StoredRecord } from './store.js'
  */
 export type Principal = { public: string; claims: Record<string, unknown>; signer?: string; origin?: string }
 
-export type Level = 'record' | 'ledger' | 'server'
+export type Level = 'record' | 'domain' | 'ledger' | 'server'
 
 /** What a request brings to an access decision. */
 export type Access = { who?: Principal; proofs?: string[] }
 
-/** Where it is evaluated: the ledger, and the record when there is one. */
-export type Scope = { ledger: StoredRecord; record?: StoredRecord }
+/**
+ * Where it is evaluated: the ledger, and the record when there is one. `domain` is the
+ * domain a record being created joins; an existing record's is its `meta.domain`.
+ */
+export type Scope = { ledger: StoredRecord; record?: StoredRecord; domain?: string }
+
+const isDomain = (r?: StoredRecord) => typeof r?.luid === 'string' && r.luid.startsWith('$dom.')
 
 const matchValue = (v: any, x: string | undefined) => {
   if (v === undefined || v === 'any') return true
@@ -115,10 +127,12 @@ export class AccessControl {
     if (r.action !== 'any' && !matchValue(r.action, action)) return false
     if (r.record === undefined) {
       if (level === 'ledger' && record !== 'ledger') return false
+      if (level === 'domain' && record !== 'domain') return false
       if (level === 'server' && record !== 'server' && action !== 'access') return false
     } else if (!matchValue(r.record, record)) return false
     if (r.signer) {
-      for (const k of proofs) if (await this.keyMatches(r.signer, k, scope)) return true
+      const keys = level === 'domain' && who ? [...proofs, who.public] : proofs
+      for (const k of keys) if (await this.keyMatches(r.signer, k, scope)) return true
       return false
     }
     if (r.bearer) {
@@ -166,7 +180,27 @@ export class AccessControl {
     if (AccessControl.policyBased(scope.ledger)) return (await this.activePolicies(ledger)).map((r) => [r, 'ledger'] as [any, Level])
     // The ledger record's own rules are its ledger-level rules; don't count them twice.
     const own = scope.record && scope.record !== scope.ledger ? (scope.record.data.access ?? []) : []
-    return [...(await this.expand(ledger, own, 'record')), ...(await this.expand(ledger, scope.ledger.data.access ?? [], 'ledger')), ...server]
+    return [
+      ...(await this.expand(ledger, own, 'record')),
+      ...(await this.domainRules(ledger, scope)),
+      ...(await this.expand(ledger, scope.ledger.data.access ?? [], 'ledger')),
+      ...server,
+    ]
+  }
+
+  /** The rules of the record's domain and the domains above it, nearest first. */
+  private async domainRules(ledger: string, scope: Scope): Promise<[any, Level][]> {
+    if (isDomain(scope.record)) return []
+    const out: [any, Level][] = []
+    const seen = new Set<string>()
+    for (let d = scope.domain ?? scope.record?.meta?.domain; typeof d === 'string' && !seen.has(d); ) {
+      seen.add(d)
+      const domain = await this.store.get(ledger, 'domains', d)
+      if (!domain) break
+      out.push(...(await this.expand(ledger, domain.data.access ?? [], 'domain')))
+      d = domain.data.domain
+    }
+    return out
   }
 
   /** The rules that grant, each with the level it lives on. */
@@ -203,7 +237,7 @@ export class AccessControl {
 
   async authorize(action: string, record: string, access: Access, scope: Scope) {
     const through = async () => {
-      for (const [r, level] of await this.rules(scope)) if (level !== 'record' && (await this.grants(r, action, record, access, scope, level))) return true
+      for (const [r, level] of await this.rules(scope)) if ((level === 'ledger' || level === 'server') && (await this.grants(r, action, record, access, scope, level))) return true
       return false
     }
     const open = action === 'read' && !AccessControl.policyBased(scope.ledger) && (await through())
@@ -219,7 +253,7 @@ export class AccessControl {
   async authorizeQuery(record: string, access: Access, scope: Scope) {
     if (await this.entered(access, scope)) return
     if (!AccessControl.policyBased(scope.ledger)) {
-      for (const [r, level] of await this.rules(scope)) if (level !== 'record' && (await this.grants(r, 'read', record, access, scope, level))) return
+      for (const [r, level] of await this.rules(scope)) if ((level === 'ledger' || level === 'server') && (await this.grants(r, 'read', record, access, scope, level))) return
     }
     throw errors.forbidden('query', record)
   }
