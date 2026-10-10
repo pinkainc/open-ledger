@@ -4,6 +4,21 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Schema `extend`; list order
+
+Recorded with `uschema2` (28 exchanges) on 2.47.4 (`server/test/uschema.test.ts`).
+
+- **`extend` is stored and never applied**, against the spec ("inherit and extend")
+  and the SDK ("inherit all rules and constraints"). A wallet under a child schema
+  passes without what the parent requires, along a chain too, and when `extend` is
+  added by update. Any parent is accepted: an unknown handle, a schema of another
+  record kind, the schema itself. A cycle was not recorded (it could loop the
+  reference); ours is harmless since nothing follows `extend`.
+- **Lists are ordered newest change first** (`meta.moment` descending): an updated
+  schema moves to the top. A ledger's system records share one moment, and two
+  recordings list those ties in different orders, so a scenario lists filtered
+  (`data.record=wallet`) where a tie would show.
+
 ## 2026-10-10 — The ledger collection, ledger drop, the journal
 
 Recorded with `ledgers` (43 exchanges) on 2.47.4, reproduced

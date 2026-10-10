@@ -99,6 +99,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] (?) What makes a waiting intent proceed once its missing signature arrives? A plain proof did
       not (records2). Try a proof with `custom.status` (`pending`? `created`?) in a recording
 - [x] `GET /ledgers` — recorded (`ledgers`), filtered on the run's `custom.run`: owned ledgers, newest first; a stranger `[]`, anonymous 403, `x-ledger` 422
+- [x] Lists are newest change first (`meta.moment`, recorded `uschema2`); ties (a ledger's system records) come in no fixed order on the reference
 - [x] Lists are `query`: the ledger gate decides (`Cannot query wallet.`), then the page keeps what the caller may read (the filter is ours: no recording has a record hidden from a list yet (?))
 ## Authentication (recorded: `factors` 43/43, `oauth` 21/21, `hsh` 18/18)
 
@@ -266,7 +267,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] User schemas enforce records: the named schema validates `data`, every error;
       a record must name one once its kind has one; content checked as JSON Schema
       (recorded `uschema` 35/35, `server/src/user-schemas.ts`)
-- [ ] Schema `extend` (inherit another schema) — not recorded (?)
+- [x] Schema `extend` — recorded (`uschema2`): kept as given, never applied; any parent accepted (unknown, another kind, itself). A cycle only in unit tests
 - [ ] Record the CLI flow against the sandbox as a conformance level (shell scenario in run.sh;
       `GET /api/v2` would be a divergence: handle, semver)
 - [ ] Unsupported filter fields: the docs say the reference answers an error — record (?)

@@ -536,8 +536,12 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   function listPage(req: FastifyRequest, rows: StoredRecord[]) {
     const p = pageParams(req)
     const q = parseQuery(req.query as Record<string, unknown>)
-    const kept = rows.filter((r) => matches(r, q))
-    return envelope(req.ledgerKey, slice([...kept].reverse(), p), { page: p })
+    const kept = rows.filter((r) => matches(r, q)).reverse()
+    // Recorded (uschema2): newest change first — an updated record moves to the top.
+    // Records of one moment (a ledger's system records) keep newest-created first.
+    const at = (r: StoredRecord) => String(r.meta.moment ?? '')
+    kept.sort((a, b) => (at(a) < at(b) ? 1 : at(a) > at(b) ? -1 : 0))
+    return envelope(req.ledgerKey, slice(kept, p), { page: p })
   }
 
   // Changes list newest first, with a total.
@@ -788,11 +792,13 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // ---- the request journal (journal.ts) ------------------------------------------------
 
   const JOURNAL = '/api/v2/system/requests'
+  const journalWrites = new Map<string, Promise<unknown>>()
   async function journalOf(req: FastifyRequest) {
     const ledger = await activeLedger(req)
     if (!journal) throw errors.routeNotFound('Journaling is not enabled')
     const who = await authenticate(req)
     await acl.authorize('read', 'request', { who }, { ledger })
+    await journalWrites.get(ledger.data.handle)
     return ledger
   }
   app.get(JOURNAL, async (req) => listPage(req, await store.list((await journalOf(req)).data.handle, 'requests')))
@@ -804,33 +810,38 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     return found
   })
 
-  // Every request to a hosted ledger, once answered, except reads of the journal itself.
+  // Every request to a hosted ledger, except reads of the journal itself. The entry is
+  // written behind the answer (a hook that waited would race handlers that send
+  // themselves); a read of the journal first waits for the writes still under way.
   if (journal) {
-    app.addHook('onSend', async (req, _reply, payload) => {
-      ;(req as any).journalBody = typeof payload === 'string' ? payload : undefined
-      return payload
-    })
-    app.addHook('onResponse', async (req, reply) => {
+    app.addHook('onSend', (req, reply, payload, done) => {
       const scope = req.headers['x-ledger']
-      if (typeof scope !== 'string' || !req.ledgerKey || req.url.startsWith(JOURNAL)) return
-      if (!(await store.get('', 'ledgers', scope))) return
-      const who = await authenticate(req).catch(() => undefined)
-      const signer = who && (who.signer ?? (await signerByKey(scope, who.public)))
-      const moment = now()
-      const data = {
-        handle: newLuid('').slice(2),
-        schema: 'rest',
-        ...describe(req.method, req.url),
-        source: who ? `signer:${signer ?? who.public}` : 'unknown',
-        target: `ledger:${scope}`,
-        params: { method: req.method, url: `${publicBase(req)}${req.url.replace(/^\/api\/v2/, '')}`, headers: redact(req.headers), body: req.body === undefined ? '' : JSON.stringify(req.body), moment },
-        result: { status: reply.statusCode, headers: redact(reply.getHeaders() as Record<string, unknown>), body: (req as any).journalBody ?? '' },
-      }
-      const hash = hashData(data)
-      const luid = newLuid('$req')
-      const proof = serverProof(hash, { luid, moment, status: 'created' }, req.ledgerKey, 'system')
-      await store.insert(scope, 'requests', { luid, hash, data, meta: { status: 'created', moment, owners: [], proofs: [proof] } } as StoredRecord)
+      if (typeof scope !== 'string' || !req.ledgerKey || req.url.startsWith(JOURNAL) || (req as any).journaled) return done(null, payload)
+      ;(req as any).journaled = true
+      const result = { status: reply.statusCode, headers: redact(reply.getHeaders() as Record<string, unknown>), body: typeof payload === 'string' ? payload : '' }
+      const write = (journalWrites.get(scope) ?? Promise.resolve()).then(() => journalEntry(req, scope, result)).catch((e) => console.error('journal:', e))
+      journalWrites.set(scope, write)
+      done(null, payload)
     })
+  }
+  async function journalEntry(req: FastifyRequest, scope: string, result: Record<string, unknown>) {
+    if (!(await store.get('', 'ledgers', scope))) return
+    const who = await authenticate(req).catch(() => undefined)
+    const signer = who && (who.signer ?? (await signerByKey(scope, who.public)))
+    const moment = now()
+    const data = {
+      handle: newLuid('').slice(2),
+      schema: 'rest',
+      ...describe(req.method, req.url),
+      source: who ? `signer:${signer ?? who.public}` : 'unknown',
+      target: `ledger:${scope}`,
+      params: { method: req.method, url: `${publicBase(req)}${req.url.replace(/^\/api\/v2/, '')}`, headers: redact(req.headers), body: req.body === undefined ? '' : JSON.stringify(req.body), moment },
+      result,
+    }
+    const hash = hashData(data)
+    const luid = newLuid('$req')
+    const proof = serverProof(hash, { luid, moment, status: 'created' }, req.ledgerKey!, 'system')
+    await store.insert(scope, 'requests', { luid, hash, data, meta: { status: 'created', moment, owners: [], proofs: [proof] } } as StoredRecord)
   }
 
   // ---- records -------------------------------------------------------------------

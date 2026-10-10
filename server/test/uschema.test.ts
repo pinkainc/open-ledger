@@ -99,5 +99,20 @@ for (const [storeName, makeStore] of STORES) {
       const other = await newKeyPair()
       assert.equal((await make(sdk, 'signer', { handle: 'o', public: other.public, format: 'ed25519-raw' })).data.handle, 'o')
     })
+
+    // Recorded (uschema2): `extend` is kept as given and changes nothing — the parent's
+    // rules are not checked, and any parent is accepted, a missing one or itself included.
+    test('`extend` is stored, not applied', async () => {
+      const { sdk } = await newLedger(server.base, kp)
+      await schema(sdk, 'base', 'wallet', kind)
+      const child = await make(sdk, 'schema', { handle: 'child', record: 'wallet', format: 'json-schema', schema: { type: 'object' }, extend: 'base' })
+      assert.equal(child.data.extend, 'base')
+      assert.equal((await make(sdk, 'wallet', { handle: 'w', schema: 'child' })).data.handle, 'w')
+      for (const parent of ['nope', 'self']) await make(sdk, 'schema', { handle: parent === 'self' ? 'self' : 'orphan', record: 'wallet', format: 'json-schema', schema: { type: 'object' }, extend: parent })
+      // A cycle (not recorded: it could loop the reference) is as harmless here.
+      const base = await raw(sdk.schema.read('base'))
+      await raw(sdk.schema.from(base).data({ extend: 'child' } as any).hash().sign([{ keyPair: kp }]).send())
+      assert.equal((await make(sdk, 'wallet', { handle: 'w2', schema: 'child' })).data.handle, 'w2')
+    })
   })
 }
