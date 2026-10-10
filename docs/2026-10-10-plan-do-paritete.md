@@ -6,6 +6,10 @@ ulaz ponaša jednako kao referenca i da svako ponašanje ima test. Svaka sesija 
 paket. Završava se zelenim `npm run check`, commitom, pushem i `/wrap-up` handoffom
 koji imenuje sljedeći paket iz ove tablice.
 
+Handoff promptovi za sve sesije su u `docs/handoffs/` (`S1.md` … `S11.md`). Pravila lanca
+su u `docs/handoffs/README.md`: sesija N smije prepraviti `S(N+1).md` ako je naučila
+nešto što mijenja sljedeći paket.
+
 ## Polazno stanje (commit `90abe6d`)
 
 | Mjera | Stanje |

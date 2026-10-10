@@ -1,0 +1,68 @@
+# Handoffi za sesije S1–S11
+
+Plan je u `docs/2026-10-10-plan-do-paritete.md`. Svaka sesija ima svoj handoff `SN.md`.
+Korisnik nakon `/clear` kaže „nastavi zadnji handoff” ili zalijepi prompt iz clipboarda.
+
+## Lanac
+
+1. Sesija N počinje iz `docs/handoffs/SN.md`.
+2. Sesija N radi svoj paket po pravilima ispod.
+3. Na kraju sesija N:
+   - označi `SN` kao gotov u tablici „Stanje lanca” ispod (commit, operacije, kratka napomena);
+   - **ako je naučila nešto što mijenja neki od sljedećih paketa, uredi `S(N+1).md`**, a po
+     potrebi i kasnije handoffe i plan. Primjeri: ponašanje reference drukčije od docsa,
+     posao koji je ostao nedovršen, nova verzija Minke, paket koji je ispao veći ili manji.
+     Nedovršeni dio paketa N ide na **vrh** `S(N+1).md`;
+   - u `S(N+1).md` upiše polazni commit i brojke;
+   - pozove `/wrap-up`. Handoff prompt za clipboard i `~/.claude/handoffs/open-ledger/` je
+     sadržaj `docs/handoffs/S(N+1).md`.
+4. Ako sesija ostane bez konteksta usred paketa, nastavak je opet `SN` s popisom onoga što
+   je ostalo na vrhu datoteke. Broj se ne povećava.
+5. Ako je posljednji paket gotov, a rezervne sesije nisu potrebne, lanac je zatvoren. Tada
+   se samo osvježi „Gdje smo” u planu i `README.md`.
+
+Handoff se smije mijenjati samo prema naprijed: gotovi `SN` se ne prepisuju, služe kao
+povijest.
+
+## Zajednička pravila (vrijede u svakoj sesiji)
+
+- **Polazak:** `git pull && npm run check`, potvrdi u jednoj rečenici da je zeleno. Ako
+  nije zeleno, prvo to popravi.
+- **Ponašanje se snima, ne pogađa.** Napiši scenarij u `conformance/scenarios/`, pusti ga
+  probno protiv našeg servera (`conformance/run.sh check <razina>`), zatim snimi protiv
+  sandboxa (`conformance/run.sh record <razina>`). Implementiraj i piši unit testove
+  paralelno. `compare.ts` mora reći da se sve podudara. Namjerna odstupanja idu u
+  `conformance/divergences.json` s razlogom. Dokumentacija je hipoteza, ne referenca.
+- **Nijedan slučaj ne smije napraviti neograničen posao na sandboxu** (memory
+  `never-loop-on-sandbox`): bez ruta koje se međusobno prosljeđuju i bez petlji. Takvi
+  slučajevi idu samo u unit testove.
+- Snimaj samo kad se scenarij promijeni: svaka snimka ostavlja trajni ledger na stagingu.
+- Snimku i check nikad ne pokreći istovremeno (portovi 4610, 4620 i 4630).
+- CLI samo pod ptyjem (`tools/minka-seq.exp`) s izoliranim `HOME`. `~/.minka` korisnika
+  se ne dira.
+- **Autonomno:** ne pitaj korisnika, odluči sam i zapiši odluku. Svaki zeleni korak
+  commitaj i pushaj na `main`. Uz to održavaj `TODO.md`, `FINDINGS.md`
+  (`npx tsx conformance/coverage.ts`), `COVERAGE.md` i dokument sesije (nastavak
+  `docs/2026-10-02-nastanak-l7-i-dalje.md` ili novi `docs/<datum>-nastanak-<tema>.md`).
+- Nepovratne vanjske akcije, npr. objavu ili brisanje izvan repoa, ostavi korisniku.
+- **Token budget:** bez Monitora koji javlja napredak. Duge jobove pokreni s
+  `run_in_background` i javi se tek na kraju. Bez fan-outa subagenata za rutinski posao.
+  Oko 150k konteksta zatvori sesiju po koraku 3 iz lanca.
+- Ako docs mirror (`../docs.minka.io`) ili sandbox imaju noviju verziju od zadnje snimke,
+  zapiši to u handoff sljedeće sesije. Ne snimaj sve iznova usred paketa.
+
+## Stanje lanca
+
+| Sesija | Paket | Stanje | Commit | Napomena |
+| --- | --- | --- | --- | --- |
+| S1 | Pristup i limiti | otvoreno | | |
+| S2 | Autentikacija (factors, oauth, hsh) | otvoreno | | |
+| S3 | Reports | otvoreno | | |
+| S4 | Ledger i sustav → 146/146 | otvoreno | | |
+| S5 | Usmjeravanje i domene | otvoreno | | |
+| S6 | L9 cross-ledger | otvoreno | | |
+| S7 | Snimke `(?)`, 2PC i signali | otvoreno | | |
+| S8 | Snimke `(?)`, domene, CLI | otvoreno | | |
+| S9 | Testna pokrivenost i jezgra | otvoreno | | |
+| S10 | Rezerva | otvoreno | | samo ako zatreba |
+| S11 | Rezerva | otvoreno | | samo ako zatreba |

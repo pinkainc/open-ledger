@@ -4,7 +4,8 @@ Working list, kept in the repo so progress survives between sessions. Checked it
 are done and verified (tests green + conformance where a scenario exists). Newest
 decisions go into `FINDINGS.md` (reference behaviour) or the README (design).
 
-Plan to full parity, session by session: `docs/2026-10-10-plan-do-paritete.md`.
+Plan to full parity, session by session: `docs/2026-10-10-plan-do-paritete.md`;
+handoff per session in `docs/handoffs/` (chain rules and status in its README).
 
 Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox recording first
 
