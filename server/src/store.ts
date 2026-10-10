@@ -66,6 +66,8 @@ export interface Store {
   getSecret(ledger: string, name: string): Promise<string | undefined>
   putSecret(ledger: string, name: string, sealed: string): Promise<void>
   transaction<T>(ledger: string, fn: (tx: Store) => Promise<T>): Promise<T>
+  /** Forgets a ledger: its record (server scope) and everything kept under it, history included. */
+  dropLedger(ledger: string): Promise<void>
 }
 
 const clone = <T>(v: T): T => structuredClone(v)
@@ -180,6 +182,16 @@ export class MemoryStore implements Store {
 
   async marked(ledger: string, key: string) {
     return this.marks.has(`${ledger}\u0000${key}`)
+  }
+
+  async dropLedger(ledger: string) {
+    const inside = (k: string) => k.startsWith(`${ledger}\u0000`)
+    for (const map of [this.rows, this.keys, this.bals, this.lims, this.hist, this.secrets] as Map<string, unknown>[])
+      for (const k of [...map.keys()]) if (inside(k) || k === ledger) map.delete(k)
+    for (const k of [...this.marks]) if (inside(k)) this.marks.delete(k)
+    await this.remove('', 'ledgers', ledger)
+    // Changes of the ledger record itself live at the server scope.
+    this.hist.delete(`\u0000ledgers\u0000${ledger}`)
   }
 
   // Chains every transaction of a ledger behind the previous one. The callback gets

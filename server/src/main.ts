@@ -22,7 +22,11 @@ const core = new Core(store, { minuteMs, secrets, bridges: { maxRetries } })
 // OPEN_LEDGER_REPORTS_BUCKET: the bucket report assets must name; OPEN_LEDGER_REPORTS_DIR:
 // where their files are served from (reports.ts).
 const reports = { bucket: process.env.OPEN_LEDGER_REPORTS_BUCKET, dir: process.env.OPEN_LEDGER_REPORTS_DIR }
-const app = buildApp({ store, core, server: { handle: process.env.SERVER_HANDLE, url: process.env.PUBLIC_URL }, reports })
+// OPEN_LEDGER_LEDGER_DROP=1 lets an owner drop a whole ledger; OPEN_LEDGER_JOURNAL=1 keeps
+// the request journal. Both are off on the public reference, and by default here.
+const ledgerDrop = process.env.OPEN_LEDGER_LEDGER_DROP === '1'
+const journal = process.env.OPEN_LEDGER_JOURNAL === '1'
+const app = buildApp({ store, core, server: { handle: process.env.SERVER_HANDLE, url: process.env.PUBLIC_URL }, reports, ledgerDrop, journal })
 // OPEN_LEDGER_LOG=1 prints one line per request (method, url, status) to stderr.
 if (process.env.OPEN_LEDGER_LOG) app.addHook('onResponse', async (req, reply) => console.error(`${req.method} ${req.url} ${reply.statusCode}`))
 await app.listen({ port: PORT, host: '127.0.0.1' })

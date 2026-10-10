@@ -220,6 +220,10 @@ const reportProof = ajv.compile({
   properties: { custom: { type: 'object', properties: { status: { enum: ['created', 'pending', 'completed', 'rejected', 'settled'] } } } },
 })
 
+// Recorded (ledgers): a ledger drop names the ledger's luid besides `data.parent`.
+const ledgerDrop = ajv.compile({ type: 'object', required: ['luid', 'data'], properties: { hash, data: DATA.drop } })
+export const validateLedgerDrop = (body: unknown) => check(ledgerDrop, body)
+
 export const validateReportProof = (body: unknown) => check(reportProof, body)
 
 export const validateBody = (kind: ValidatedKind, body: unknown) => check(validators[kind], body)

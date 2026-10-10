@@ -16,6 +16,10 @@ export class LedgerError extends Error {
 
 export const errors = {
   routeNotFound: (detail = 'Route not found') => new LedgerError(404, 'api.route-not-found', detail),
+  // Recorded (ledgers): a ledger route without `x-ledger`, and `x-ledger` where none may be.
+  ledgerNotSet: () => new LedgerError(404, 'api.route-not-found', 'Active ledger is not set!'),
+  noTenantAllowed: () =>
+    new LedgerError(422, 'api.no-tenant-allowed', 'This endpoint is not available on a ledger-scoped URL or with an X-Ledger header. Connect to the base server URL and retry.'),
   ledgerNotHosted: () => new LedgerError(404, 'api.route-not-found', 'Server does not host requested ledger'),
   notFound: (kind: string) => new LedgerError(404, 'record.not-found', `${kind} not found`),
   duplicated: (kind: string, handle: string) =>

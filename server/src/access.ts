@@ -204,6 +204,19 @@ export class AccessControl {
     if (!(await this.allowed(action, record, access, scope))) throw errors.forbidden(action, record)
   }
 
+  /**
+   * A list (recorded, ledgers): the action is `query`, and only the ledger gate decides
+   * — a signer the ledger lets in may list wallets although no rule lets it read one.
+   * Which records the page then holds is `readable`'s business.
+   */
+  async authorizeQuery(record: string, access: Access, scope: Scope) {
+    if (await this.entered(access, scope)) return
+    if (!AccessControl.policyBased(scope.ledger)) {
+      for (const [r, level] of await this.rules(scope)) if (level !== 'record' && (await this.grants(r, 'read', record, access, scope, level))) return
+    }
+    throw errors.forbidden('query', record)
+  }
+
   /** Server rules alone, for operations above any ledger (creating one). */
   async authorizeServer(action: string, record: string, access: Access) {
     const none = { ledger: { hash: '', data: { handle: '' }, luid: '', meta: {} } }

@@ -13,7 +13,8 @@ import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, sig
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
 import { matches, parseQuery } from './query.js'
-import { validateBody, validateReportProof, type ValidatedKind } from './schemas.js'
+import { validateBody, validateLedgerDrop, validateReportProof, type ValidatedKind } from './schemas.js'
+import { describe, redact } from './journal.js'
 import { keyOf, type Store, type StoredRecord } from './store.js'
 import { applyStatus } from './status.js'
 import { secretRefs } from './secrets.js'
@@ -41,6 +42,13 @@ export type AppOptions = {
    * unset), and the local directory `GET /reports/{id}/assets/{asset}` serves them from.
    */
   reports?: { bucket?: string; dir?: string }
+  /**
+   * Off by default, as on the public reference (recorded, ledgers): `ledgerDrop` lets an
+   * owner drop a whole ledger (`DELETE /ledger`, `POST /ledger`); `journal` keeps the
+   * request journal `GET /system/requests` reads (journal.ts).
+   */
+  ledgerDrop?: boolean
+  journal?: boolean
 }
 
 /** The reference release whose API this server answers (published spec version). */
@@ -84,7 +92,7 @@ declare module 'fastify' {
   }
 }
 
-export function buildApp({ store, core = new Core(store), onRoute, serverRules = DEFAULT_SERVER_RULES, server = {}, reports = {} }: AppOptions) {
+export function buildApp({ store, core = new Core(store), onRoute, serverRules = DEFAULT_SERVER_RULES, server = {}, reports = {}, ledgerDrop = false, journal = false }: AppOptions) {
   const app = Fastify({ logger: false })
   if (onRoute) app.addHook('onRoute', (r) => [r.method].flat().forEach((m) => onRoute(m, r.url)))
   const acl = new AccessControl(store, serverRules)
@@ -564,6 +572,12 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await acl.authorizeServer('create', 'ledger', { who, proofs: proofKeys(req.body) })
     const handle = (req.body as any).data.handle
     const keys = { system: generateKeyPair(), core: generateKeyPair(), 'system.auth': generateKeyPair(), 'system.dtc': generateKeyPair() }
+    // Recorded (ledgers): a duplicate is refused under the new ledger's `system` key,
+    // made before the handle was found taken; it is thrown away with the refusal.
+    if (await store.get('', 'ledgers', handle)) {
+      req.ledgerKey = keys.system
+      throw errors.duplicated('Ledger', handle)
+    }
     const record = await create('ledgers', '', keys.system, req)
     // Published newest first on the reference: system, core, system.auth, system.dtc.
     for (const name of ['system.dtc', 'system.auth', 'core', 'system'] as const) {
@@ -730,6 +744,95 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   app.get<{ Params: { change: string } }>('/api/v2/ledger/changes/:change', async (req) => changeOf(await readable(req, 'ledgers'), req.params.change))
   app.post('/api/v2/ledger/access/!check', async (req) => accessCheck(req, await target(req, 'ledgers')))
 
+  // ---- the ledger collection (recorded, ledgers) ---------------------------------------
+
+  // A signer sees the ledgers it owns (signed at creation), newest first; a stranger an
+  // empty page, anonymous callers nothing. The route belongs to the server, not to a ledger.
+  app.get('/api/v2/ledgers', async (req) => {
+    if (req.headers['x-ledger']) throw errors.noTenantAllowed()
+    const who = await authenticate(req)
+    if (!who) throw errors.forbidden('query', 'ledger')
+    const owned = (await store.list('', 'ledgers')).filter((l) => ((l.meta.owners as string[] | undefined) ?? []).includes(who.public))
+    return listPage(req, owned)
+  })
+
+  // Drop of a whole ledger. The reference validates the body (a `luid` is required) and
+  // then has no such route; `POST /ledger` is not routed there at all. With
+  // `ledgerDrop` on, the rules decide (`drop` on `ledger`), the parent hash must be the
+  // ledger's, and everything of the ledger is forgotten (store.dropLedger).
+  async function activeLedger(req: FastifyRequest) {
+    if (!req.headers['x-ledger']) throw errors.ledgerNotSet()
+    return hostedLedger(req)
+  }
+  async function dropLedger(req: FastifyRequest, reply: FastifyReply) {
+    const ledger = await activeLedger(req)
+    validateLedgerDrop(req.body)
+    if (!ledgerDrop) throw errors.routeNotFound()
+    const who = await authenticate(req)
+    const body = req.body as any
+    const keys = await impersonate(body, ledger.data.handle, who, 'dropped')
+    await acl.authorize('drop', 'ledger', { who, proofs: keys }, { ledger, record: ledger })
+    if (body.luid !== ledger.luid || body.data.parent !== ledger.hash) throw errors.parentHashInvalid()
+    verifyProofs(body)
+    await store.dropLedger(ledger.data.handle)
+    reply.status(204).send()
+  }
+  app.delete('/api/v2/ledger', dropLedger)
+  app.post('/api/v2/ledger', async (req, reply) => {
+    if (ledgerDrop) return dropLedger(req, reply)
+    // Express's own answer for a route it does not have.
+    reply.status(404).header('content-type', 'text/html; charset=utf-8').header('content-security-policy', "default-src 'none'").header('x-content-type-options', 'nosniff')
+    return `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /v2/ledger</pre>\n</body>\n</html>\n`
+  })
+
+  // ---- the request journal (journal.ts) ------------------------------------------------
+
+  const JOURNAL = '/api/v2/system/requests'
+  async function journalOf(req: FastifyRequest) {
+    const ledger = await activeLedger(req)
+    if (!journal) throw errors.routeNotFound('Journaling is not enabled')
+    const who = await authenticate(req)
+    await acl.authorize('read', 'request', { who }, { ledger })
+    return ledger
+  }
+  app.get(JOURNAL, async (req) => listPage(req, await store.list((await journalOf(req)).data.handle, 'requests')))
+  app.get<{ Params: { id: string } }>(`${JOURNAL}/:id`, async (req) => {
+    const scope = (await journalOf(req)).data.handle
+    const id = req.params.id
+    const found = id.startsWith('$req.') ? await store.getByLuid(scope, 'requests', id) : await store.get(scope, 'requests', id)
+    if (!found) throw errors.notFound('Request')
+    return found
+  })
+
+  // Every request to a hosted ledger, once answered, except reads of the journal itself.
+  if (journal) {
+    app.addHook('onSend', async (req, _reply, payload) => {
+      ;(req as any).journalBody = typeof payload === 'string' ? payload : undefined
+      return payload
+    })
+    app.addHook('onResponse', async (req, reply) => {
+      const scope = req.headers['x-ledger']
+      if (typeof scope !== 'string' || !req.ledgerKey || req.url.startsWith(JOURNAL)) return
+      if (!(await store.get('', 'ledgers', scope))) return
+      const who = await authenticate(req).catch(() => undefined)
+      const signer = who && (who.signer ?? (await signerByKey(scope, who.public)))
+      const moment = now()
+      const data = {
+        handle: newLuid('').slice(2),
+        schema: 'rest',
+        ...describe(req.method, req.url),
+        source: who ? `signer:${signer ?? who.public}` : 'unknown',
+        target: `ledger:${scope}`,
+        params: { method: req.method, url: `${publicBase(req)}${req.url.replace(/^\/api\/v2/, '')}`, headers: redact(req.headers), body: req.body === undefined ? '' : JSON.stringify(req.body), moment },
+        result: { status: reply.statusCode, headers: redact(reply.getHeaders() as Record<string, unknown>), body: (req as any).journalBody ?? '' },
+      }
+      const hash = hashData(data)
+      const luid = newLuid('$req')
+      const proof = serverProof(hash, { luid, moment, status: 'created' }, req.ledgerKey, 'system')
+      await store.insert(scope, 'requests', { luid, hash, data, meta: { status: 'created', moment, owners: [], proofs: [proof] } } as StoredRecord)
+    })
+  }
+
   // ---- records -------------------------------------------------------------------
 
   for (const kind of TOP_LEVEL) {
@@ -754,8 +857,10 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
         throw new LedgerError(400, 'api.query-malformed', "Unsupported filters: 'data.signal'")
       if (kind === 'domains' && 'meta.domain' in (req.query as object))
         throw new LedgerError(400, 'api.query-malformed', "Unsupported filters: 'meta.domain'")
-      await acl.authorize('read', record, { who }, { ledger })
-      return listPage(req, await store.list(ledger.data.handle, kind))
+      await acl.authorizeQuery(record, { who }, { ledger })
+      const rows: StoredRecord[] = []
+      for (const r of await store.list(ledger.data.handle, kind)) if (await acl.allowed('read', record, { who }, { ledger, record: r })) rows.push(r)
+      return listPage(req, rows)
     })
 
     app.get<P>(`/api/v2/${kind}/:id`, async (req) => (await readable(req, kind, req.params.id)).found)

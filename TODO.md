@@ -98,7 +98,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Intent changes per stage; `POST /intents/{id}/proofs` appends a signature
 - [ ] (?) What makes a waiting intent proceed once its missing signature arrives? A plain proof did
       not (records2). Try a proof with `custom.status` (`pending`? `created`?) in a recording
-- [ ] `GET /ledgers` — lists every ledger on the sandbox; needs a comparison that ignores others
+- [x] `GET /ledgers` — recorded (`ledgers`), filtered on the run's `custom.run`: owned ledgers, newest first; a stranger `[]`, anonymous 403, `x-ledger` 422
+- [x] Lists are `query`: the ledger gate decides (`Cannot query wallet.`), then the page keeps what the caller may read (the filter is ours: no recording has a record hidden from a list yet (?))
 ## Authentication (recorded: `factors` 43/43, `oauth` 21/21, `hsh` 18/18)
 
 - [x] Signer factors `$snf`: 9 operations, generic lifecycle, `secret: null` on key pairs,
@@ -217,7 +218,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] Thread lookups scan the ledger's intents (only for threads with a forward); index by
       `meta.thread` in Postgres if it shows up
 - [ ] Reports `$rep` (9 operations) and the reporting bridge protocol (plan S3)
-- [ ] `GET /system/requests[/{id}]`, `POST /ledger`, `DELETE /ledger` (plan S4)
+- [x] `GET /system/requests[/{id}]`, `POST /ledger`, `DELETE /ledger` — recorded (`ledgers`): journaling and ledger drop are off on the sandbox; ours too by default, on with `OPEN_LEDGER_JOURNAL` / `OPEN_LEDGER_LEDGER_DROP` (unit tests only)
 - [ ] Unsupported list filters → 400 `api.query-malformed` `Unsupported filters: '<f>'`
       (seen for `data.origin` on intents); which fields are supported per kind is unknown (?)
 ## L8 — event delivery, retries, `cancelled` (recorded: `events`, 23/23 + 20/20)

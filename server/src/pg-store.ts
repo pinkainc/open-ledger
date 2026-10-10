@@ -196,6 +196,15 @@ export class PgStore implements Store {
     return rowCount === 1
   }
 
+  async dropLedger(ledger: string) {
+    await this.transaction(ledger, async (tx) => {
+      const db = (tx as PgStore).db
+      for (const table of ['records', 'ledger_keys', 'balances', 'changes', 'limits', 'marks', 'secrets']) await db.query(`delete from ${table} where ledger = $1`, [ledger])
+      await db.query("delete from records where ledger = '' and kind = 'ledgers' and handle = $1", [ledger])
+      await db.query("delete from changes where ledger = '' and kind = 'ledgers' and handle = $1", [ledger])
+    })
+  }
+
   // One Postgres transaction per call, holding a ledger-wide advisory lock until
   // commit, so money-moving work on a ledger is serialised across processes too.
 

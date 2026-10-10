@@ -4,6 +4,32 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — The ledger collection, ledger drop, the journal
+
+Recorded with `ledgers` (43 exchanges) on 2.47.4, reproduced
+(`server/test/ledgers.test.ts`, `server/src/journal.ts`).
+
+- **`GET /ledgers` lists the ledgers the caller owns** (signed their creation), newest
+  first, filtered and paged like any list. A token of a key that owns none gets `[]`,
+  even for a ledger with `{any, record: any}`; no token is 403 `Cannot query ledger.`;
+  an `x-ledger` header is 422 `api.no-tenant-allowed`. The sandbox holds every ledger
+  ever made, so the scenario tags its ledgers with `custom.run` and lists by it.
+- **Ledger drop is switched off on the sandbox.** `DELETE /ledger` (the SDK's
+  `ledger.drop()`) resolves the ledger (`Active ledger is not set!` without
+  `x-ledger`), validates the body — `luid` is required besides `data.parent` — and
+  then answers 404 `Route not found`, signed by the ledger, whoever signs and whatever
+  the parent. `POST /ledger` is not routed at all: Express's HTML `Cannot POST
+  /v2/ledger`. The ledger stays readable.
+- **Journaling is switched off on the sandbox**: `GET /system/requests[/{id}]` is 404
+  `Journaling is not enabled` for anyone, after the ledger is resolved. What an entry
+  holds comes from the spec example and the SDK types only.
+- **A list is the `query` action, decided by the ledger gate.** On a ledger whose only
+  rule is `{any, signer: K}` (no `record`), K may not create a wallet (`Cannot create
+  wallet.`) but lists wallets (200); a stranger is refused `Cannot query wallet.`
+- **A duplicate ledger is refused under a fresh key**: the 409 is signed by `system`
+  with a key that appears nowhere else — the new ledger's key, made before the handle
+  was found taken.
+
 ## 2026-10-10 — Reports: the reporting protocol, statuses, assets
 
 Recorded with `reports` (54 exchanges + 14 bridge calls, through a tunnel) and
