@@ -400,9 +400,12 @@ export class Core {
   private async intentEvents(run: Run): Promise<BridgeCall[]> {
     const { tx, ledger, intent } = run
     // Called before the pass is saved: the stored proofs are those before it.
+    // The version the pass started from is the stored one, `domains` and all (recorded,
+    // signals2: the parent of the first version after a bridge's proof).
     const version = (st: Stage) => {
-      const { domains: _d, routed: _r, proofs, status: _s, ...meta } = intent.meta
-      return { hash: intent.hash, data: intent.data, luid: intent.luid, meta: { ...meta, proofs: [...proofs, ...run.trail.slice(0, st.proofs)], status: st.status, ...(st.routed ? { routed: true } : {}) } }
+      const { domains, routed: _r, proofs, status: _s, ...meta } = intent.meta
+      const stored = st === run.start && domains !== undefined ? { domains } : {}
+      return { hash: intent.hash, data: intent.data, luid: intent.luid, meta: { ...meta, proofs: [...proofs, ...run.trail.slice(0, st.proofs)], status: st.status, ...(st.routed ? { routed: true } : {}), ...stored } }
     }
     const about = { record: 'intent', linked: intent.data.handle }
     const calls: BridgeCall[] = []
@@ -415,10 +418,24 @@ export class Core {
       while (j > 0 && cleared(j)) j--
       calls.push(...(await this.raise(tx, ledger, 'intent-updated', { intent: version(st), parent: version(versions[j]) }, about)))
     }
+    // `intent-proofs-added` once per saved version that added proofs (recorded, signals2):
+    // the version's last proof, the intent by handle; not for the pending versions
+    // (resolution, the core's own prepare).
+    for (let i = 1; i < versions.length; i++) {
+      const st = versions[i], prev = versions[i - 1]
+      if (st.status === 'pending' || st.proofs === prev.proofs) continue
+      calls.push(...(await this.raise(tx, ledger, 'intent-proofs-added', { intent: intent.data.handle, proofs: [run.trail[st.proofs - 1]] }, about)))
+    }
     for (const r of run.received) {
       const at = run.stages.find((st) => st.proofs === r.proofs && st.status === 'committed')!
       const [wallet, symbol] = [await tx.get(ledger, 'wallets', r.wallet), await tx.get(ledger, 'symbols', r.symbol)]
       calls.push(...(await this.raise(tx, ledger, 'balance-received', { amount: r.amount, intent: version(at), symbol, wallet }, { record: 'wallet', linked: r.wallet })))
+    }
+    // `wallet-limited` for each limit claim, with the version that committed it (recorded, signals2).
+    for (const l of run.limited) {
+      const at = run.stages.find((st) => st.proofs === l.proofs && st.status === 'committed')!
+      const [wallet, symbol] = [await tx.get(ledger, 'wallets', l.wallet), await tx.get(ledger, 'symbols', l.symbol)]
+      calls.push(...(await this.raise(tx, ledger, 'wallet-limited', { amount: l.amount, intent: version(at), metric: l.metric, symbol, wallet }, { record: 'wallet', linked: l.wallet })))
     }
     return calls
   }
@@ -542,6 +559,7 @@ export class Core {
     const tc = run.now()
     for (const l of limits) {
       run.limitWrites.push(await this.limitRow(tx, ledger, l, run.system, tc))
+      run.limited.push({ ...l, proofs: trail.length })
       if (!DAILY.includes(l.metric)) await run.books.touch(l.wallet, l.symbol, tc)
     }
     const debits = entries.filter((e) => e.schema === 'debit')
@@ -1117,6 +1135,8 @@ class Run {
   readonly stage = (status: string, routed = false) => void this.stages.push({ proofs: this.trail.length, status, routed })
   /** Balances this pass credited, for `balance-received`, with the trail length at the time. */
   readonly received: { wallet: string; symbol: string; amount: number; proofs: number }[] = []
+  /** Limits this pass set, for `wallet-limited`, with the trail length at the time. */
+  readonly limited: (LimitOp & { proofs: number })[] = []
   /** The intent as it was before this pass: its last saved version. */
   readonly start: Stage
 

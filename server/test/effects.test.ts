@@ -171,5 +171,95 @@ for (const [storeName, makeStore] of STORES) {
       await pay(s, 'carol', 1)
       assert.equal(calls('/hooks/r').length, 0, 'bob no longer matches, and carol came after the drop')
     })
+
+    // Recorded (signals2).
+    test('intent-proofs-added: the creation and every version past pending, the last proof each, the intent by handle', async () => {
+      const s = await books()
+      const handle = `i-${seq + 1}`
+      await effect(s, { handle: 'ip', signal: 'intent-proofs-added', filter: { intent: handle }, action: hook('ip') })
+      await pay(s, 'bob', 1)
+      const rows = await until(async () => {
+        const r = await events(s, 'ip')
+        return r.length === 5 && final(r) && r
+      }, 'five events')
+      const seen = rows.map((d: any) => d.meta.output.data).map((e: any) => {
+        assert.deepEqual(Object.keys(e).sort(), ['handle', 'intent', 'proofs', 'signal'])
+        assert.equal(e.intent, handle)
+        assert.equal(e.proofs.length, 1)
+        const p = e.proofs[0]
+        return `${p.signer ?? 'core'} ${p.custom.status} ${p.custom.detail ?? (p.custom.luid ? 'luid' : '')}`.trim()
+      })
+      assert.deepEqual(seen.sort(), ['core committed cleared', 'system committed awaiting-clearance', 'system completed', 'system pending luid', 'system prepared'])
+    })
+
+    test('a proof added to an intent: intent-proofs-added and intent-updated, versions as stored', async () => {
+      const s = await books()
+      const h = await pay(s, 'bob', 2)
+      await effect(s, { handle: 'ip2', signal: 'intent-proofs-added', filter: { intent: h }, action: hook('ip2') })
+      await effect(s, { handle: 'up2', signal: 'intent-updated', filter: { 'intent.data.handle': h }, action: hook('up2') })
+      const before = (await s.intent.read(h)).response.data
+      await s.intent.from(before).sign([{ keyPair: kp, custom: { note: 'seen' } }]).send()
+      const [p] = await until(async () => {
+        const r = await events(s, 'ip2')
+        return final(r) && r
+      }, 'proofs added')
+      assert.equal(p.meta.output.data.proofs[0].custom.note, 'seen')
+      const [u] = await until(async () => {
+        const r = await events(s, 'up2')
+        return final(r) && r
+      }, 'updated')
+      const { intent, parent } = u.meta.output.data
+      assert.deepEqual([intent.meta.status, intent.meta.proofs.length, parent.meta.status, parent.meta.proofs.length], ['completed', before.meta.proofs.length + 1, 'completed', before.meta.proofs.length])
+      assert.deepEqual([intent.meta.domains, parent.meta.domains], [[], []])
+    })
+
+    test('wallet-proofs-added at creation (the ledger proof); wallet-limited for a limit claim', async () => {
+      const s = await books()
+      await effect(s, { handle: 'wp', signal: 'wallet-proofs-added', action: hook('wp') })
+      await effect(s, { handle: 'lim', signal: 'wallet-limited', action: hook('lim') })
+      await s.wallet.init().data({ handle: 'erin' }).hash().sign(sign()).send()
+      const [w] = await until(async () => {
+        const r = await events(s, 'wp')
+        return final(r) && r
+      }, 'wallet proofs')
+      const e = w.meta.output.data
+      assert.deepEqual([e.wallet, e.proofs.length, e.proofs[0].signer, e.proofs[0].custom.status, typeof e.proofs[0].custom.luid], ['erin', 1, 'system', 'created', 'string'])
+      const h = await move(s, [{ action: 'limit', metric: 'minBalance', wallet: ref('bob'), symbol: ref('usd'), amount: -500 }])
+      const [l] = await until(async () => {
+        const r = await events(s, 'lim')
+        return final(r) && r
+      }, 'wallet limited')
+      const x = l.meta.output.data
+      assert.deepEqual([x.amount, x.metric, x.wallet.data.handle, x.symbol.data.handle, x.intent.data.handle, x.intent.meta.status], [-500, 'minBalance', 'bob', 'usd', h, 'committed'])
+      assert.equal(x.intent.meta.proofs.at(-1).custom.detail, 'awaiting-clearance')
+      assert.deepEqual(l.data, { handle: l.data.handle, bridge: null, effect: 'lim', record: 'wallet', linked: 'bob' })
+    })
+
+    test('balance-received: one event per credit, not a sum', async () => {
+      const s = await books()
+      await effect(s, { handle: 'two', signal: 'balance-received', filter: { 'wallet.data.handle': 'carol' }, action: hook('two') })
+      await move(s, [
+        { action: 'transfer', source: ref('alice'), target: ref('carol'), symbol: ref('usd'), amount: 3 },
+        { action: 'transfer', source: ref('alice'), target: ref('carol'), symbol: ref('usd'), amount: 4 },
+      ])
+      const rows = await until(async () => {
+        const r = await events(s, 'two')
+        return r.length === 2 && final(r) && r
+      }, 'two events')
+      assert.deepEqual(rows.map((d: any) => d.meta.output.data.amount).sort(), [3, 4])
+    })
+
+    test('a webhook unreachable on the network: eleven attempts, then cancelled', async () => {
+      const s = await books()
+      await effect(s, { handle: 'down', signal: 'wallet-created', filter: { 'wallet.data.handle': 'gone' }, action: { schema: 'webhook', endpoint: 'http://127.0.0.1:1/hook' } })
+      await s.wallet.init().data({ handle: 'gone' }).hash().sign(sign()).send()
+      const [d] = await until(async () => {
+        const r = await events(s, 'down')
+        return final(r) && r
+      }, 'cancelled', 15_000)
+      const statuses = d.meta.proofs.map((p: any) => p.custom.reason)
+      assert.deepEqual(statuses, [...Array(11).fill('delivery.target-unreachable'), 'delivery.retry-cap-exhausted'])
+      assert.deepEqual([d.meta.status, d.meta.replay], ['cancelled', 11])
+    })
   })
 }

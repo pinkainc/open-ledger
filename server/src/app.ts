@@ -334,6 +334,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   }
 
   // An event about a record (effects): `<record>-<what>`, linked to the record.
+  const intentVersion = (r: StoredRecord) => ({ hash: r.hash, data: r.data, luid: r.luid, meta: r.meta })
   const raise = (scope: string, kind: Kind, what: string, payload: Record<string, unknown>, r: StoredRecord) =>
     core.announce(scope, `${KINDS[kind].record}-${what}`, payload, { record: KINDS[kind].record, linked: keyOf(r) })
 
@@ -423,8 +424,10 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await keepSecrets(scope, kind, keyOf(record), secrets)
     await addChange(scope, kind, record, 'create')
     if (scope && kind !== 'circle-signers') await raise(scope, kind, 'created', { [KINDS[kind].record]: record }, record)
-    // Recorded (reports): the ledger's own `created` proof counts as added proofs.
-    if (kind === 'reports') await raise(scope, kind, 'proofs-added', { proofs: [record.meta.proofs.at(-1)], report: keyOf(record) }, record)
+    // Recorded (reports, signals2: reports, wallets, intents): the ledger's own `created`
+    // proof counts as added proofs.
+    if (scope && kind !== 'circle-signers')
+      await raise(scope, kind, 'proofs-added', { proofs: [record.meta.proofs.at(-1)], [KINDS[kind].record]: keyOf(record) }, record)
     if (kind === 'intents') core.schedule(scope, body.data.handle)
     return record
   }
@@ -736,8 +739,10 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     await before?.(stored)
     // Intents are also written by the core; append under the ledger's lock.
     let dropped = false
+    let parent: StoredRecord | undefined
     return store.transaction(t.ledger.data.handle, async (tx) => {
       const current = (await tx.get(t.scope, t.kind, keyOf(t.found))) ?? t.found
+      if (t.kind === 'intents') parent = structuredClone(current)
       const status = stored.custom?.status
       // A report's status moves along its table; a proof repeating it is dropped (reports.ts).
       if (t.kind === 'reports' && typeof status === 'string' && !statusChange(String(current.meta.status), status)) {
@@ -760,6 +765,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     }).then(async (current) => {
       if (dropped) return current
       if (t.scope) await raise(t.scope, t.kind, 'proofs-added', { proofs: [stored], [record]: keyOf(current) }, current)
+      // Recorded (signals2): a proof on an intent is also a new version of it, the one
+      // before as `parent`; both as stored, `domains` included (the core leaves it out).
+      if (t.scope && parent) await raise(t.scope, t.kind, 'updated', { intent: intentVersion(current), parent: intentVersion(parent) }, current)
       // A participant reporting on an entry (`custom.handle`) may let the intent move on.
       if (t.kind === 'intents' && typeof stored.custom?.handle === 'string') core.schedule(t.scope, current.data.handle)
       return current
@@ -1040,7 +1048,11 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   const drops = {
     wallets: dropOf('wallets', async (scope, found) => {
       const held = (await store.balances(scope, found.data.handle)).filter((b) => b.data.amount !== 0)
-      if (held.length) throw errors.dropRejected(`Wallet ${found.data.handle} still holds a balance.`)
+      // Recorded (waits): the symbols still held are named.
+      if (held.length)
+        throw new LedgerError(422, 'record.drop-rejected', `Cannot drop wallet '${found.data.handle}' with balance different from zero`, {
+          symbols: [...new Set(held.map((b) => b.data.symbol))],
+        })
       // Recorded (anchors, with `anchor.walletRequired` on): the anchors are named.
       const anchors = (await store.list(scope, 'anchors')).filter((a) => a.data.wallet === found.data.handle)
       if (anchors.length)

@@ -82,13 +82,12 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Tests for scope, gate, 403 details, bearer and signer matchers, circles, status policies (`access.test.ts`)
 - [x] Access policies (`{policy: handle}`, `extend`) and `access.strategy: policy-based`
       (recorded `policies` 65/65, `policies2` 36/36); the gate applies to reads
-- [ ] (?) Domain-specific access policies (`handle@domain`), policy value `filter`, `invoke`
 - [x] Claim authorisation: `spend` on the source, `issue`/`destroy` on the symbol, `limit` on the
       wallet, by the intent's signers (impersonated proofs count as the token's signer, with its
       `bearer.*` claims). Without it the intent waits after resolution and expires (access4 14/14)
 - [x] `destroy` needs `destroy` on the symbol **and** `spend` on the source (recorded `claims2`)
 - [x] Claim permissions are checked before limits: an overdraw without `spend` expires (`claims2`)
-- [ ] (?) Record reference: drop of a funded wallet (our reason `record.drop-rejected`, wording ours)
+- [x] Drop of a funded wallet: `Cannot drop wallet '<w>' with balance different from zero`, `custom.symbols` (recorded `waits`)
 - [x] Drop of bridges and policies (`DELETE`, `POST …/drop`): a bridge a wallet names is
       `record.drop-rejected`; system policies may be dropped (recorded `drops` 19/19)
 - [x] `PUT /ledger`, `POST /ledger/proofs`, `/ledger/changes/{n}`, `/ledger/access/!check` (records2 52/52)
@@ -96,11 +95,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       record rules named by kind, ledger rules first, server rules not listed
 - [x] System status policies `intent:status`, `access-policy:status`; status policy `filter`
 - [x] Intent changes per stage; `POST /intents/{id}/proofs` appends a signature
-- [ ] (?) What makes a waiting intent proceed once its missing signature arrives? A plain proof did
-      not (records2). Try a proof with `custom.status` (`pending`? `created`?) in a recording
+- [x] A waiting intent is not restarted by any proof (plain, `custom.status` pending or created) nor
+      by a second create (409): it waits until it expires (recorded `waits`; records2 waited 60 s)
 - [x] `GET /ledgers` — recorded (`ledgers`), filtered on the run's `custom.run`: owned ledgers, newest first; a stranger `[]`, anonymous 403, `x-ledger` 422
 - [x] Lists are newest change first (`meta.moment`, recorded `uschema2`); ties (a ledger's system records) come in no fixed order on the reference
-- [x] Lists are `query`: the ledger gate decides (`Cannot query wallet.`), then the page keeps what the caller may read (the filter is ours: no recording has a record hidden from a list yet (?))
+- [x] Lists are `query`: the ledger gate decides (`Cannot query wallet.`), then the page keeps what the caller may read (recorded in `domains2`: A, C and the operator list different wallets)
 ## Authentication (recorded: `factors` 43/43, `oauth` 21/21, `hsh` 18/18)
 
 - [x] Signer factors `$snf`: 9 operations, generic lifecycle, `secret: null` on key pairs,
@@ -188,6 +187,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [ ] (?) Updating a subdomain: its stored data has `domain`, which the schema forbids
 - [ ] (?) `meta.domains` of a forward intent, and order with several domains
 - [ ] (?) `domain.resolutionFromHandleEnabled: false` (domain only from proofs)
+- [ ] (?) Domain-specific access policies (`handle@domain`), policy value `filter`, `invoke` (from L4)
 
 ## L6 — N participants, ordered prepare/commit/abort, timeouts, crashes
 
@@ -200,12 +200,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Abort and status notifications only to parts asked to prepare; aborts in parallel
 - [x] A silent prepare: the intent expires and the part is aborted (recorded)
 - [x] Comparator: adjacent same-status reports of several bridges in canonical order
-- [ ] (?) What if a bridge reports `prepared` for a part after the intent was aborted (our
-      bridge test sends it; the reference's answer to a late report is not recorded)
-- [ ] (?) A debit on one bridge failing while another bridge's debit is still pending
+- [x] A late `prepared` after the intent was rejected: accepted (200), appended, nothing more (`edges2pc`)
+- [x] A debit failing while another bridge's debit is pending: abort to both, in parallel (`edges2pc`)
 - [ ] Crash in the middle of the credit phase: redrive re-sends the credits (mark set);
       covered by `resume`, not by a test yet
-- [ ] (?) Commit never confirmed: is there any reconciliation on the reference (none seen)?
+- [x] Commit never confirmed: no reconciliation, nothing re-sent in three minutes (`edges2pc`)
 - [x] v2.47.0: the core aborts its entries and releases reservations at `aborted`, not
       when the last bridge confirms; abort calls carry `domains: []` when the core took
       part (recorded `abort` 16/16 + 8/8; l5, l6, l7 re-recorded on 2.47.4)
@@ -245,7 +244,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Retry cap: 5 retries, then `cancelled delivery.retry-cap-exhausted`; the last failed
       attempt carries `detail.body` (recorded); `OPEN_LEDGER_DELIVERY_MAX_RETRIES`
 - [x] `POST /bridges/{id}/activate` (deprecated bulk retry); deliveries `running` while attempted
-- [ ] (?) Does bulk retry include `cancelled`? (we: failed, cancelled, pending)
+- [x] Bulk retry includes `cancelled`, by `activate` and by `retry` with `maxAge` (`edges2pc`)
 - [x] Effects (`/effects`, recorded in `effects`): record `$eff`, validation, drop; events
       `evt_` signed by `system`, one per occurrence for every effect on the signal whose
       `filter` matches; webhook or bridge (`POST …/effects/{effect}`, trait `effects`);
@@ -253,10 +252,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Signals raised: `<record>-created|updated|proofs-added` for every record kind,
       `effect-dropped`, `intent-created`, `intent-updated` (per version, with `parent`),
       `balance-received`
-- [ ] (?) Signals not recorded: `*-proofs-added` payload, bridge-entry-*, wallet-limited,
-      intent-updated of a bridged or rejected intent, balance-received of several credits
-      to one wallet (summed or one each?)
-- [ ] (?) Effect retry of a webhook unreachable on the network (we: `target-unreachable`)
+- [x] Signals (recorded `signals2`): `*-proofs-added` `{<record>: handle, proofs: [last]}` per saved
+      version past pending, at creation and per posted proof; a posted proof is an `intent-updated`
+      too (stored versions, with `domains`); `wallet-limited`; `balance-received` one per credit;
+      `bridge-entry-*` never raised
+- [x] A webhook unreachable on the network: ten retries (eleven attempts), then cancelled (`signals2`)
 - [ ] `minka bridge events list|show|retry` in the CLI end-to-end
 ## L9 — cross-ledger
 

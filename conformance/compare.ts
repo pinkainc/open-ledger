@@ -126,7 +126,14 @@ function canonical(all: Exchange[]): Exchange[] {
   const isEffect = (x: any) => x.hook || /\/v2\/effects\//.test(String(x.req?.url))
   const effectKey = (x: any) => {
     const d = x.req?.body?.data ?? {}
-    const about = Object.keys(d).sort().map((k) => `${k}=${d[k]?.data?.handle ?? ''}:${d[k]?.meta?.status ?? ''}:${d[k]?.meta?.proofs?.length ?? ''}`).join(' ')
+    // A record by handle, status and length; a plain value (an intent's handle, an
+    // amount) as it is; proofs by signer, status and detail (`*-proofs-added`). The
+    // event's own handle is random and left out.
+    const part = (v: any) =>
+      Array.isArray(v) ? v.map((p) => `${p?.signer ?? ''}:${p?.custom?.status ?? ''}:${p?.custom?.detail ?? ''}`).join(',')
+      : v && typeof v === 'object' ? `${v?.data?.handle ?? ''}:${v?.meta?.status ?? ''}:${v?.meta?.proofs?.length ?? ''}`
+      : String(v)
+    const about = Object.keys(d).sort().filter((k) => k !== 'handle').map((k) => `${k}=${part(d[k])}`).join(' ')
     return `${String(x.req.url).replace(/^.*?(\/hooks\/|\/v2\/effects\/)/, '$1')} ${d.signal} ${about}`
   }
   const effects = all.map((x, i) => ({ x, i })).filter(({ x }) => isEffect(x)).sort((a, b) => effectKey(a.x).localeCompare(effectKey(b.x)) || a.i - b.i).map((e) => e.x)
@@ -251,7 +258,9 @@ function settleRaces(x: any): any {
     const key = (d: any) => {
       const e = d.meta?.output?.data ?? {}
       const v = e.intent ?? e[d.data.record] ?? {}
-      return `${d.data.linked} ${e.signal} ${String(v.meta?.proofs?.length ?? 0).padStart(4, '0')} ${v.meta?.status ?? ''}`
+      // `*-proofs-added` carries the proof, `balance-received` an amount per credit (signals2).
+      const proofs = (e.proofs ?? []).map((p: any) => `${p?.signer ?? ''}:${p?.custom?.status ?? ''}:${p?.custom?.detail ?? ''}`).join(',')
+      return `${d.data.linked} ${e.signal} ${String(v.meta?.proofs?.length ?? 0).padStart(4, '0')} ${v.meta?.status ?? ''} ${e.amount ?? ''} ${proofs}`
     }
     out.data = [...out.data].sort((a: any, b: any) => key(a).localeCompare(key(b)))
   } else if (evd) {

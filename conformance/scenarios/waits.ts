@@ -6,6 +6,8 @@
 //
 // Ledger rules as in records2: A may do anything, B may enter and create intents,
 // everyone may read. Expiry five minutes, so nothing is left pending on the reference.
+// Checking, a minute is 12 s: the intents must still wait when they are read.
+// minute-ms: 12000
 import { LedgerSdk } from '@minka/ledger-sdk'
 import { createKeyPair } from '@minka/ledger-sdk/crypto'
 import { scenario, ref } from './common.js'

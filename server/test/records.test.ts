@@ -66,7 +66,8 @@ for (const [storeName, makeStore] of STORES) {
 
       await settle(sdk, await sendIntent(sdk, kp, [{ action: 'issue', target: ref('alice'), symbol: ref('usd'), amount: 1 }]))
       const e = await failure(sdk.wallet.drop('alice').hash().sign([{ keyPair: kp }]).send())
-      assert.equal(e.reason, 'record.drop-rejected')
+      // Recorded (waits): the symbols still held are named.
+      assert.deepEqual([e.reason, e.detail, e.body.data.custom?.symbols], ['record.drop-rejected', "Cannot drop wallet 'alice' with balance different from zero", ['usd']])
     })
 
     test('every ledger publishes system, core, system.auth and system.dtc as signers', async () => {

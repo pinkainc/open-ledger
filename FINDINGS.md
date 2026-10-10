@@ -4,6 +4,63 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-11 — Waiting intents, 2PC edges, signals (waits, edges2pc, signals2)
+
+Recorded on 2.47.4 with `waits` (28 exchanges), `edges2pc` (27 + 28 bridge-log lines,
+two bridges) and `signals2` (37 + 46, effects calling webhooks on the bridge port); one
+recording each. Our server matched `edges2pc` at once; `waits` and `signals2` needed the
+changes below.
+
+**A missing signature (L4).** B spends alice without `spend`; the intent resolves and
+waits. A then signs it with `custom.status: pending`, with `created`, or plainly; a
+fourth is sent again by B as a new create signed by both, which is `409
+record.duplicated`. All four are still `pending` 10 s later (records2 waited 60 s): **no
+proof restarts a waiting intent**. It ends at expiry; the client makes a new intent with
+the right signatures. Ours the same.
+
+**Dropping a funded wallet** is `422 record.drop-rejected` `Cannot drop wallet 'alice'
+with balance different from zero`, `custom.symbols: ["usd"]` (the symbols held). An
+empty wallet drops (204, then 404).
+
+**2PC edges (L6), all as ours already did:**
+- **A debit fails while another bridge's debit is pending**: bank1 fails, bank2 has
+  accepted its prepare and not reported. The intent is aborted and the abort goes to
+  both bridges in parallel, bank2 included though it never said `prepared`.
+- **A late `prepared`** (bank2's, sent after the intent was rejected) is accepted (200)
+  and appended; nothing else happens and the intent stays `rejected`.
+- **A commit never confirmed**: in three minutes the bridge hears nothing more of it, the
+  delivery stays `delivered`, the intent `committed`. There is no reconciliation.
+- **Bulk retries include `cancelled`**: a prepare answered 501 is cancelled; both
+  `POST /bridges/{id}/activate` and `…/events/retry` with `maxAge` send it again, and
+  the intent completes.
+
+**Signals (L8):**
+- **`intent-proofs-added`** carries `{intent: "<handle>", proofs: [one proof]}`: once at
+  creation (the ledger's `pending {luid}`), once per saved version past `pending` with
+  its last proof (prepared, committed awaiting-clearance, the clearance — for a core
+  intent the last bare core proof, else `system {coreId, cleared}` — completed; failed,
+  aborted, rejected), and once per proof a client or bridge posts. Not for the versions
+  that resolve or that the core prepares.
+- **`wallet-proofs-added`** likewise `{wallet: "<handle>", proofs: [one]}`: at creation
+  (the ledger's `created {luid}`) and for a status proof. We now raise `<kind>-proofs-added`
+  at the creation of every kind (seen for wallets, intents, reports).
+- **A posted proof is also an `intent-updated`**: the intent with the proof, the one
+  before as `parent`, both **as stored, with `domains: []`** (the core's own versions
+  leave `domains` out). The core's next version names that stored one as its parent,
+  `domains` included.
+- **`intent-updated` of a rejected intent**: failed ← resolved, aborted ← failed,
+  rejected ← aborted, as ours.
+- **`balance-received`**: one event per credit, two for two credits to dave in one
+  intent (not summed); both carry the committed version.
+- **`wallet-limited`**: `{amount, metric, intent, symbol, wallet}` (records in full, the
+  intent as committed awaiting-clearance), one per limit claim.
+- **`bridge-entry-created|updated|proofs-added`** are accepted as effect signals but
+  were never raised, for a bridged intent either.
+- **A webhook that does not resolve** (`.invalid`): eleven failed attempts
+  `delivery.target-unreachable` `{code: ENOTFOUND, message: "getaddrinfo ENOTFOUND …"}`,
+  then `cancelled delivery.retry-cap-exhausted`, replay 11 — ten retries where an HTTP
+  error gets five.
+
 ## 2026-10-10 — Two ledgers joined by a bridge (l9, cross-ledger payments)
 
 Recorded with `l9` (40 exchanges on two ledgers, 51 bridge-log lines; one recording) on
