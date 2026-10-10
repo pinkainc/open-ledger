@@ -17,6 +17,8 @@ export type Decision =
   | { status: 'failed'; reason: string; detail: string }
   | { httpFirst: number; then: Decision }
   | { silent: true }
+  /** Accept the call, and keep the report `then` until `release()` (a late `prepared`). */
+  | { hold: Decision }
   /** Answer this HTTP status for as long as `while()` holds, then decide `then`. */
   | { httpWhile: number; while: () => boolean; then: Decision }
 
@@ -169,10 +171,19 @@ export async function startBridges(o: {
           }
           d = d.then
         }
-        const decision = d as Exclude<Decision, { httpFirst: number } | { httpWhile: number }>
-        if (status === 202 && !('silent' in decision))
-          after = () =>
-            sign(b, intent, decision.status === 'prepared' ? { handle: entry.handle, status: 'prepared', coreId: coreId(entry.handle) } : { handle: entry.handle, ...decision })
+        let holding = false
+        if ('hold' in d) {
+          holding = true
+          d = d.hold
+        }
+        const decision = d as { status: 'prepared' } | { status: 'failed'; reason: string; detail: string } | { silent: true }
+        const send = () =>
+          'silent' in decision ? Promise.resolve() :
+          sign(b, intent, decision.status === 'prepared' ? { handle: entry.handle, status: 'prepared', coreId: coreId(entry.handle) } : { handle: entry.handle, ...decision })
+        if (status === 202 && !('silent' in decision)) {
+          if (holding) held.push(send)
+          else after = send
+        }
       } else {
         const report = b.report?.(handle, action as 'commit' | 'abort', intent) ?? true
         const send = () => sign(b, intent, { handle, status: action === 'commit' ? 'committed' : 'aborted', coreId: coreId(handle) })
