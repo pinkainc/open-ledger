@@ -4,6 +4,17 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-10 — Claim permissions: destroy, and permissions before limits
+
+Recorded with `conformance/scenarios/claims2.ts` (15 exchanges), reproduced. B has
+`destroy` on the symbol and `spend` on `bw` only.
+
+- **`destroy` needs `spend` on the source too**: B's destroy from alice stayed pending
+  after `resolved` and expired (`core.intent-expired`); from `bw` it completed.
+- **Permissions before limits**: B's transfer of 5000 from alice (balance 1000, no
+  `spend`) expired instead of failing on `minBalance`; the same from `bw` failed at
+  once with `core.limit-exceeded`.
+
 ## 2026-10-10 — Aggregated limits (`dailyCount`, `dailyAmount`)
 
 Recorded with `limits2` (67 exchanges), `limits3` (27), `limits4` (17) and `limits5`

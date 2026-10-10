@@ -84,8 +84,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Claim authorisation: `spend` on the source, `issue`/`destroy` on the symbol, `limit` on the
       wallet, by the intent's signers (impersonated proofs count as the token's signer, with its
       `bearer.*` claims). Without it the intent waits after resolution and expires (access4 14/14)
-- [ ] (?) `destroy`: we require `destroy` on the symbol **and** `spend` on the source — not recorded
-- [ ] (?) Does the reference check claim permissions before or after limits? (we: before)
+- [x] `destroy` needs `destroy` on the symbol **and** `spend` on the source (recorded `claims2`)
+- [x] Claim permissions are checked before limits: an overdraw without `spend` expires (`claims2`)
 - [ ] (?) Record reference: drop of a funded wallet (our reason `record.drop-rejected`, wording ours)
 - [x] Drop of bridges and policies (`DELETE`, `POST …/drop`): a bridge a wallet names is
       `record.drop-rejected`; system policies may be dropped (recorded `drops` 19/19)
