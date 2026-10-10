@@ -42,6 +42,19 @@ done
 
 wait_port() { for _ in $(seq 50); do nc -z 127.0.0.1 "$1" 2>/dev/null && return; sleep 0.1; done; echo "port $1 never opened" >&2; exit 1; }
 
+# A scenario that says `// day-boundary` watches the daily window of limits turn over
+# (daywindow): recording waits for the next UTC midnight, checking for a boundary some
+# seconds ahead, which our server is told (OPEN_LEDGER_DAY_BOUNDARY_MS).
+if grep -q '^// day-boundary' conformance/scenarios/$LEVEL.ts; then
+  if [ "$MODE" = record ]; then
+    DAY_BOUNDARY=$(node -e 'const d=new Date();d.setUTCHours(24,0,0,0);process.stdout.write(String(d.getTime()))')
+  else
+    DAY_BOUNDARY=$(node -e 'process.stdout.write(String(Date.now()+40000))')
+    export OPEN_LEDGER_DAY_BOUNDARY_MS=$DAY_BOUNDARY
+  fi
+  export DAY_BOUNDARY
+fi
+
 if [ "$MODE" = record ]; then
   target=$REFERENCE
   out=conformance/fixtures/$LEVEL.reference.jsonl
