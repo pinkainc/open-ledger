@@ -71,5 +71,5 @@ povijest.
 | S7 | Snimke `(?)`, 2PC i signali | gotovo | `39797e6` | 146/146, 117 potvrđeno; `waits` 28/28, `edges2pc` 27/27 + 28/28, `signals2` 37/37 + 46/46; 0 `(?)` u L4, L6, L8; `*-proofs-added` po verziji, `wallet-limited`, 10 retryja za mrežu; domain access policies premještene u S8 |
 | S8 | Snimke `(?)`, domene, CLI | gotovo | `139ffe9` | 146/146, 117 potvrđeno; 0 `(?)` u TODO; `domains3`, `filters`(2), `policies3`/`4`, `auth2`, `reports3`–`5`, `daywindow` (UTC dan), CLI kao razina `cli`; 420 unit testova |
 | S9 | Testna pokrivenost i jezgra | otvoreno | | |
-| S10 | Rezerva | otvoreno | | samo ako zatreba |
-| S11 | Rezerva | otvoreno | | samo ako zatreba |
+| S10 | DTC, labels, backlog | otvoreno | | iz pregleda TODO-a 2026-10-11: DTC policy, labels + labels policies, processing `filter`, `allowClientCredentials`, agregati dnevnih limita |
+| S11 | Rezerva | otvoreno | | ostatak S10; zatvara lanac |

@@ -36,7 +36,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Unknown source message (recorded; the guess was right)
 - [x] Unknown wallet is reported before unknown symbol (recorded; order fixed)
 - [x] Claim authorisation: see L4
-- [ ] Per-wallet locking instead of the ledger-wide advisory lock (throughput, not correctness)
+- [ ] Per-wallet locking instead of the ledger-wide advisory lock (throughput, not correctness) — S9
 - [x] Read by luid as well as handle (all record kinds)
 
 ## L2 — multi-claim intents
@@ -53,12 +53,13 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] `dailyAmount`, `dailyCount` (need `limits.aggregated.enabled`): recorded `limits2`–`limits5`;
       stuck intents of the reference rejected by us (divergences.json)
 - [x] The daily window is the UTC day (a count used up before midnight is free after it); a destroy does not count towards `dailyAmount` (`daywindow`, recorded across midnight)
-- [ ] Daily limits read every completed intent of the ledger per check; keep aggregates instead
+- [ ] Daily limits read every completed intent of the ledger per check; keep aggregates instead — S10
+      (with S9's benchmark; `daywindow` and `limits2`–`limits5` are the regression tests)
 - [x] L6 unit test "a bridge that never answers a prepare" timed out: the unit tests' Postgres database had grown to
       3735 ledgers and the expiry scan read them all; `check.sh` now gives the tests an empty one per run
 - [x] A limit on a wallet with no balance row creates an `available` row of 0 (`limits2`); a daily one does not
-- [ ] Balance reservations visible while an intent is in flight (only matters once
-      intents wait on external participants, L5)
+- [x] Balance reservations visible while an intent is in flight: `reserved` rows in
+      `GET /wallets/{id}/balances` (recorded l5, l6)
 ## L4 — signatures, quorum, status policies, record-level access
 
 - [x] Generic lifecycle for symbols, wallets, signers: `PUT` update with parent hash,
@@ -111,7 +112,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] A read with `include=meta.secret` returns the creation's client secret, the same every time (`auth2`)
 - [x] `target.schema` limits a value to signers of that schema (else as no policy); an external IdP token (public key only) whose `sub` is no signer authenticates but matches no `sub` rule (`auth2`)
 - [x] `include=meta.secret` needs a signer rule (`reveal`/`any`) matching the token key; a bearer read rule, even on `signer-factor-secret`, gives 403 `Missing permissions` (`auth2`)
-- [ ] `signer.factor.oauth.allowClientCredentials`: own credentials accepted, not recorded
+- [ ] `signer.factor.oauth.allowClientCredentials`: implemented (`app.ts`, the reference's message), not recorded — S10
 
 ## Reports (recorded: `reports` 49/54 + 13/14, `reports2` 236/243, `reports3`–`reports5`; the rest deliberate)
 
@@ -143,11 +144,10 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] `traits`: methods listed, `{method, filter}` on the call's data; no `statuses` → no PUT
 - [x] OAuth2 token cache (`oauth2.ts`: JWT `exp`, else `expires_in`, ≥ 60 s, dropped 30 s early; the reference has none)
 - [x] Generic `secure` rules — recorded (`secure2`): the reference makes no call for any generic rule (mtls too, valid key too): `delivery.unexpected-error` ×6, then cancelled, intent noted `No handler found for security rule schema …`. Ours the same for unknown schemas and mtls over http; mtls over https presents the certificate (divergences.json, `server/test/mtls.test.ts`); `OPEN_LEDGER_BRIDGE_CA` for a private CA
-- [ ] Bridge proof authorization: may a signer that is not the bridge report `prepared`/`committed` for a bridge's entry? (plan S4 item 6, moved to S5)
+- [x] Bridge proof authorisation: who may report `prepared`/`committed` on a bridge's entry — see Routes (`bproofs`)
 - [x] Secrets of signer factors, sealed like bridge secrets; `include=meta.secret` serves them (recorded `factors`)
 - [x] Debit and credit on the same bridge in one intent; grouping (`claims.groupBy`) — l6
 - [x] A commit report that never comes: the intent stays `committed` (recorded, l6; same here)
-- [ ] Bridge proof authorisation: today any signer allowed to sign the intent may report
 - [x] Routes (`wallet.routes`), address resolution `schema:handle@parent` — see Routes below
 - [x] `/bridges/{id}/events` (deliveries) — L8
 ## Routes and addresses (recorded: `routes`, 62/62 + 18/18)
@@ -175,11 +175,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       such key (not only the bridge's); `sign` is no access action, every `access` is
       validated against the spec (recorded `bproofs` 45/45 + 20/20)
 - [ ] DTC policy (`schema: dtc`, configurable 2PC steps; spec since 2.46, no prose docs) —
-      a whole executor, moved to S10 (scoped in S5)
+      a whole executor, **S10** (scoped in S5; plan S10–S11)
 - [x] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize) —
       `forwarding` 65/67 + 29/30 (synchronize `sign` is a reference 500, divergences.json);
       `server/src/forwarding.ts`, `server/test/forwarding.test.ts`
-- [ ] Processing policy `filter` (spec: policy-filter) — not recorded, not applied
+- [ ] Policy `filter` on processing policies (spec: policy-filter; status policies apply it already) — not recorded, not applied — S10
 - [x] Domains: `$dom` records, `meta.domain` from a proof or a one-`@` handle suffix,
       subdomain `data.domain`, intent `meta.domains` (recorded `domains` 31/31)
 - [x] Domain access inheritance (rules of a domain apply to its records and subdomains) —
@@ -203,7 +203,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] A late `prepared` after the intent was rejected: accepted (200), appended, nothing more (`edges2pc`)
 - [x] A debit failing while another bridge's debit is pending: abort to both, in parallel (`edges2pc`)
 - [ ] Crash in the middle of the credit phase: redrive re-sends the credits (mark set);
-      covered by `resume`, not by a test yet
+      covered by `resume`, not by a test yet — S9
 - [x] Commit never confirmed: no reconciliation, nothing re-sent in three minutes (`edges2pc`)
 - [x] v2.47.0: the core aborts its entries and releases reservations at `aborted`, not
       when the last bridge confirms; abort calls carry `domains: []` when the core took
@@ -225,8 +225,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Expiry of a forward intent waiting for its bridge — divergence: the reference never
       expires it (thread stuck); we expire it and abort the thread
 - [ ] Thread lookups scan the ledger's intents (only for threads with a forward); index by
-      `meta.thread` in Postgres if it shows up
-- [ ] Reports `$rep` (9 operations) and the reporting bridge protocol (plan S3)
+      `meta.thread` in Postgres — S9
+- [x] Reports `$rep` (9 operations) and the reporting bridge protocol — see Reports (S3)
 - [x] `GET /system/requests[/{id}]`, `POST /ledger`, `DELETE /ledger` — recorded (`ledgers`): journaling and ledger drop are off on the sandbox; ours too by default, on with `OPEN_LEDGER_JOURNAL` / `OPEN_LEDGER_LEDGER_DROP` (unit tests only)
 - [x] Unsupported list filters → 400 `api.query-malformed` naming all of them; supported per kind recorded (`filters` 298); `$regex` is a LIKE-style substring match (`filters2`)
 ## L8 — event delivery, retries, `cancelled` (recorded: `events`, 23/23 + 20/20)
@@ -267,7 +267,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Ours ↔ Minka, both directions (`l9mixed`, 31/31 + 78/78): Minka clears for our bank
       ledger and ours for a Minka bank ledger; mirror holds both ways; in the README
 - [ ] The adapter keeps prepared entries in memory; a restart between prepare and commit
-      recovers them from the intent, but runs in flight are lost (the ledger retries)
+      recovers them from the intent, but runs in flight are lost (the ledger retries) —
+      backlog, outside the chain (the adapter is an example, not the ledger)
 
 ## E2E — the official `minka` CLI
 
@@ -286,9 +287,25 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] The CLI flow as a conformance level: `cli` (conformance/cli-flow.sh), 63/64 + 2/2; `GET /api/v2` handle in divergences.json
 - [x] Unsupported filter fields: recorded (`filters`)
 
+## Labels and the remaining policy schemas (found in the S8 TODO review, 2026-10-11)
+
+Every ledger publishes the policy schemas `layout`, `labels`, `schedule` (FINDINGS), and the
+policy validator knows them, but only `access`, `status`, `processing` are applied.
+
+- [ ] Labels (`structuring-data/labels.md`): `meta.labels` set by a proof on any record kind;
+      today every change carries `labels: null` and nothing sets them — record first — S10
+- [ ] Labels policies (`labels-policies.md`): `record` + `filter` choose the records, `values[].labels`
+      whitelist; no matching policy → any label allowed — S10, after labels
+- [ ] `schedule` and `layout` policies: spec only, no prose on the server side (layouts are the
+      CLI's `minka layout apply/export/sync`, which writes ordinary records) — backlog; a CLI
+      layout run in the `cli` level would show whether the server needs anything
+
 ## Tooling
 
 - [x] Coverage report `COVERAGE.md` (`npx tsx conformance/coverage.ts`, part of `npm run check`)
+- [ ] Line coverage of `server/src` ≥ 90 % (unit + conformance), in `COVERAGE.md` — S9
+- [ ] Every one of the 146 operations confirmed by a recording (117 today) — S9
+- [ ] Re-record every level on the sandbox's latest version, `SEMVER` in `app.ts`; `cli` with CLI 2.47 — S9
 - [x] `npm run check`: typecheck, unit tests and every level's conformance, on memory and Postgres
 - [x] Postgres conformance runs get an empty database each (`dev-db.sh fresh`): a server
       resumes every unfinished intent, and l6 leaves one on purpose
