@@ -134,7 +134,7 @@ for (const [storeName, makeStore] of STORES) {
       const { sdk } = await newLedger(server.base, kp)
       const s: any = sdk
       // `access-policy:status` filters on schema: access, so this status policy is free.
-      await s.policy.init().data({ handle: 'p', schema: 'status', record: 'wallet', values: [{ status: 'x' }] }).hash().sign([{ keyPair: kp }]).send()
+      await s.policy.init().data({ handle: 'p', schema: 'status', record: 'wallet', values: [{ status: 'x', quorum: [] }] }).hash().sign([{ keyPair: kp }]).send()
       const p = await raw(s.policy.read('p'))
       assert.equal((await raw(s.policy.from(p).sign([{ keyPair: kp, custom: { status: 'whatever' } }]).send())).meta.status, 'whatever')
     })
