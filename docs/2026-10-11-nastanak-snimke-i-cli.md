@@ -17,7 +17,7 @@ snimka otvorila novo pitanje, snimljen je nastavak.
 | `auth2` | redoslijed provjere u `/oauth/token`, `target.schema`, tko smije `include=meta.secret`, vanjski IdP | 30/30 |
 | `reports3`–`reports5` | putanja asseta (ledger, domena, shema, luid), status policy na reportima, `report-dropped` | 53/58 + 5 namjerno; 32/35 + 3; 17/17 + 1/1 |
 | `cli` | isti `minka` tok protiv sandboxa i nas, `bridge events list/show/retry` | 63/64 + 1 namjerno; 2/2 |
-| `daywindow` | dnevni prozor limita (klizni ili UTC dan), `destroy` i `dailyAmount` | vidi niže |
+| `daywindow` | dnevni prozor limita (klizni ili UTC dan), `destroy` i `dailyAmount` | 25/25: UTC dan, `destroy` se ne broji |
 
 Najveće iznenađenje su policyji. Policy u domeni vrijedi samo za recorde te domene.
 `filter` je relativan na `data` i ima popis dopuštenih ključeva po vrsti recorda. Liste u
@@ -26,13 +26,17 @@ nije dovoljan. `intent.canSpendEveryClaimWallet` gleda samo izvore, iako docs ka
 odredišta. Drugo iznenađenje je da `$regex` u listi nije regularni izraz nego `LIKE`
 podniza.
 
+`daywindow` je snimljen preko UTC ponoći (pokrenut u 23:45, transfer u 00:00:10). Prozor
+je UTC dan, a mi smo imali klizna 24 sata. `checkDaily` sad broji od `dayStart`.
+
 ## Što se promijenilo u serveru
 
 - `app.ts`: poddomena pri updateu zadržava `domain`; `meta.domains` je sortiran; nova
   provjera filtera liste (`unsupportedFilters` u `query.ts`); ključevi izvan `data.` i
   `meta.` se ignoriraju; `$regex` u listi je `$like`; OAuth prvo provjerava vjerodajnice;
   report sa status policyjem mora smjeti `created`; `report-dropped` nosi `parent`.
-- `core.ts`: forward intent dobiva `access` prvog intenta i domene svojih walleta.
+- `core.ts`: forward intent dobiva `access` prvog intenta i domene svojih walleta; dnevni
+  limiti broje od UTC ponoći (`dayStart`).
 - `access.ts`: policy u domeni, `filter` i `invoke` u vrijednostima, `listable` za liste
   u policy-based ledgeru, `authorizeReveal` za tajne.
 - `schemas.ts`: zajednički oblik greške za grane `policy-data` (`policyInvalid`),

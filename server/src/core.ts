@@ -928,8 +928,9 @@ export class Core {
   //                intent however many claims; every limit intent on the wallet and
   //                symbol counts too, the one that set this limit included
   //   dailyAmount  the sum of those movements, in minor units, either way
-  // Counting starts with the intent that set the limit and covers 24 hours; issues and
-  // destroys do not count, neither do rejected intents. Bounds are inclusive. The
+  // Counting starts with the intent that set the limit, within the current UTC day
+  // (recorded, daywindow: a count used up before midnight was free again after it);
+  // issues and destroys do not count, neither do rejected intents. Bounds are inclusive. The
   // reference checks after commit and leaves a breaking intent `committed` forever; we
   // check before prepare and reject (divergences.json, as for maxBalance).
   private async checkDaily(tx: Store, ledger: string, intent: StoredRecord, entries: Entry[]) {
@@ -943,7 +944,7 @@ export class Core {
       const rows = (await tx.limits(ledger, e.wallet)).filter((r) => r.data.symbol === e.symbol && DAILY.includes(r.data.metric))
       if (!rows.length) continue
       history ??= (await tx.list(ledger, 'intents')).filter((i) => i.meta.status === 'completed')
-      const since = Date.now() - 24 * 3600_000
+      const since = dayStart(Date.now())
       for (const row of rows) {
         const touches = (i: StoredRecord, action?: string) =>
           (i.data.claims as any[]).filter((c) => c.symbol?.handle === e.symbol && (action === undefined || c.action === action) &&
@@ -965,6 +966,17 @@ export class Core {
 }
 
 const DAILY = ['dailyCount', 'dailyAmount']
+const DAY_MS = 86_400_000
+
+/**
+ * The start of the day `now` falls in: UTC midnight. OPEN_LEDGER_DAY_BOUNDARY_MS moves the
+ * boundary to that instant's time of day, so a conformance check (daywindow) need not wait
+ * for midnight; leave it unset.
+ */
+export function dayStart(now: number, boundary = Number(process.env.OPEN_LEDGER_DAY_BOUNDARY_MS) || 0) {
+  const offset = ((boundary % DAY_MS) + DAY_MS) % DAY_MS
+  return Math.floor((now - offset) / DAY_MS) * DAY_MS + offset
+}
 const aggregated = async (tx: Store, ledger: string) => (await tx.get('', 'ledgers', ledger))?.data.config?.['limits.aggregated.enabled'] === true
 
 type Stage = { proofs: number; status: string; routed: boolean }

@@ -52,7 +52,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Divergence register `conformance/divergences.json`, reported by the comparator
 - [x] `dailyAmount`, `dailyCount` (need `limits.aggregated.enabled`): recorded `limits2`–`limits5`;
       stuck intents of the reference rejected by us (divergences.json)
-- [ ] (?) The daily window: rolling 24 hours (ours) or a UTC day; a destroy towards dailyAmount
+- [x] The daily window is the UTC day (a count used up before midnight is free after it); a destroy does not count towards `dailyAmount` (`daywindow`, recorded across midnight)
 - [ ] Daily limits read every completed intent of the ledger per check; keep aggregates instead
 - [x] L6 unit test "a bridge that never answers a prepare" timed out: the unit tests' Postgres database had grown to
       3735 ledgers and the expiry scan read them all; `check.sh` now gives the tests an empty one per run

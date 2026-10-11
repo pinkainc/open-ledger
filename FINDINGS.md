@@ -70,6 +70,13 @@ the report has one — its domain (`/domains/{d}/`); otherwise the reference ans
 `created` refuses the report (`record.status-policy-violation`). **`report-dropped`** is
 raised: `{handle, parent: <the report as dropped>, signal}`, the delivery's `linked` null.
 
+**The daily window** (`daywindow`, recorded across UTC midnight): frank used up a
+`dailyCount` of 3 (the limit intent and two transfers) before midnight; a transfer ten
+seconds after it completed. **The window is the UTC day**, not a rolling 24 hours (we
+had rolling). gina's `dailyAmount` of 100 let 60 be destroyed and 50 moved: **a destroy
+does not count**. Ours now counts from UTC midnight (`dayStart` in core.ts; checks move
+the boundary with `OPEN_LEDGER_DAY_BOUNDARY_MS`).
+
 **The CLI** (`cli`): `minka` 2.45.1 drives the same flow against both servers through the
 recording proxy, the operator key imported from a PEM (`signer create -i`). Only `GET
 /api/v2` differs (`handle: stg`). `bridge events list` prints a table that wraps the
@@ -479,8 +486,7 @@ with the stuck intents listed in `divergences.json`.
   `committed` forever, its debit reserved; it does not count towards later checks.
 - A daily limit touches no balance row. **A `minBalance` limit on a wallet without a
   balance creates an `available` row of 0** (no `parent`).
-- The 24-hour window and its boundary (rolling or UTC day) are not recorded; we use
-  a rolling 24 hours.
+- The window is the UTC day (recorded later, daywindow, 2026-10-11).
 
 ## 2026-10-10 — Access policies and the policy-based strategy
 

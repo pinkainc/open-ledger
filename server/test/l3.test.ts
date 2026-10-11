@@ -4,6 +4,7 @@ import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { STORES, balanceOf, newKeyPair, newLedger, ref, sendIntent, settle, setupBooks, startServer, type KeyPair } from './helpers.js'
 import { digestFor, hashData, verifyDigest } from '../src/crypto.js'
+import { dayStart } from '../src/core.js'
 
 const usd = ref('usd')
 const issue = (to: string, amount: number, symbol = usd) => ({ action: 'issue', target: ref(to), symbol, amount })
@@ -170,3 +171,14 @@ for (const [storeName, makeStore] of STORES) {
     })
   })
 }
+
+describe('daily window', () => {
+  test('a day starts at UTC midnight, or at the configured boundary\'s time of day (daywindow)', () => {
+    const at = (iso: string) => Date.parse(iso)
+    assert.equal(dayStart(at('2026-10-11T00:00:09Z'), 0), at('2026-10-11T00:00:00Z'))
+    assert.equal(dayStart(at('2026-10-10T23:59:59Z'), 0), at('2026-10-10T00:00:00Z'))
+    const boundary = at('2026-10-10T23:42:20Z')
+    assert.equal(dayStart(at('2026-10-10T23:42:30Z'), boundary), boundary)
+    assert.equal(dayStart(at('2026-10-10T23:42:10Z'), boundary), boundary - 86_400_000)
+  })
+})
