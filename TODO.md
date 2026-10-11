@@ -107,13 +107,13 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] `POST /oauth/token` (client credentials → RS256 JWT from the provider's key-pair factor)
 - [x] RS256 bearer tokens: `kid` = a provider's key-pair factor; impersonation with
       `origin: oauth2-token`; external IdPs work the same way (not recorded)
-- [ ] (?) `/oauth/token` with bad credentials and no policy: `invalid_grant` or `invalid_client`? (we: policy first)
-- [ ] (?) Does a read with `include=meta.secret` return the creation's client secret? (we: yes)
-- [ ] (?) An authentication value's `target.schema`; an external IdP token whose `sub` is no signer
-- [ ] (?) Who may `include=meta.secret` (we: `read` on `signer-factor-secret`)
+- [x] `/oauth/token`: credentials are checked before the policy (wrong ones 401 `invalid_client` without a policy too); no value for the client's signer is 400 `invalid_grant` (`auth2`)
+- [x] A read with `include=meta.secret` returns the creation's client secret, the same every time (`auth2`)
+- [x] `target.schema` limits a value to signers of that schema (else as no policy); an external IdP token (public key only) whose `sub` is no signer authenticates but matches no `sub` rule (`auth2`)
+- [x] `include=meta.secret` needs a signer rule (`reveal`/`any`) matching the token key; a bearer read rule, even on `signer-factor-secret`, gives 403 `Missing permissions` (`auth2`)
 - [ ] `signer.factor.oauth.allowClientCredentials`: own credentials accepted, not recorded
 
-## Reports (recorded: `reports` 49/54 + 13/14, `reports2` 236/243; the rest deliberate)
+## Reports (recorded: `reports` 49/54 + 13/14, `reports2` 236/243, `reports3`–`reports5`; the rest deliberate)
 
 - [x] `$rep` records: 9 operations, schema required, custom validated by the report schema
 - [x] `report-created` → effect → reporting bridge (`/effects/{effect}`); `report-proofs-added`
@@ -123,9 +123,9 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       422 where the reference answers 500 (divergences.json)
 - [x] `GET /reports/{id}/assets/{asset}` from `OPEN_LEDGER_REPORTS_DIR` (the reference reads GCS)
 - [x] `minka report create/list/show/sign/changes/drop` in `scripts/cli-e2e.sh`
-- [ ] (?) Asset path: are the ledger and luid in it checked? A report in a domain (`/domains/{d}/`)
-- [ ] (?) Status policies on reports; `report-dropped` (we raise it; not recorded)
-- [ ] (?) Do not record a download of an asset missing from the bucket: it drops the reference's connection
+- [x] Asset path checked against the report's ledger, domain (`/domains/{d}/` exactly when the report has one), schema, luid; 500 there, 422 here (`reports3`, `reports4`)
+- [x] Status policies on reports apply, `created` included (no value refuses the creation); `report-dropped` carries the report as `parent`, linked to nothing (`reports4`, `reports5`)
+- [x] A download of an asset missing from the bucket is not recorded on purpose: it drops the reference's connection (reports, 2026-10-10)
 
 ## L5 — 2PC with one external participant (bridge), idempotency by handle
 
@@ -184,10 +184,10 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       subdomain `data.domain`, intent `meta.domains` (recorded `domains` 31/31)
 - [x] Domain access inheritance (rules of a domain apply to its records and subdomains) —
       `domains2` 43/43 (access.ts: domain level between record and ledger)
-- [ ] (?) Updating a subdomain: its stored data has `domain`, which the schema forbids
-- [ ] (?) `meta.domains` of a forward intent, and order with several domains
-- [ ] (?) `domain.resolutionFromHandleEnabled: false` (domain only from proofs)
-- [ ] (?) Domain-specific access policies (`handle@domain`), policy value `filter`, `invoke` (from L4)
+- [x] Updating a subdomain: sent without `domain`, the ledger puts it back after the hash; with it, 422 (`domains3`)
+- [x] `meta.domains` sorted on a read, any order in a list; a forward intent gets its wallets' domains and the first intent's `access` (`domains3`)
+- [x] `domain.resolutionFromHandleEnabled: false`: a handle suffix is no domain and not checked; a proof's `custom.domain` still is (`domains3`)
+- [x] Policies in a domain hold for that domain only; values' `filter` (keys per kind, operators) and `invoke`; policy-based lists keep what `query`/`any` grants (`policies3` 56/56, `policies4` 43/43)
 
 ## L6 — N participants, ordered prepare/commit/abort, timeouts, crashes
 
@@ -228,8 +228,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       `meta.thread` in Postgres if it shows up
 - [ ] Reports `$rep` (9 operations) and the reporting bridge protocol (plan S3)
 - [x] `GET /system/requests[/{id}]`, `POST /ledger`, `DELETE /ledger` — recorded (`ledgers`): journaling and ledger drop are off on the sandbox; ours too by default, on with `OPEN_LEDGER_JOURNAL` / `OPEN_LEDGER_LEDGER_DROP` (unit tests only)
-- [ ] Unsupported list filters → 400 `api.query-malformed` `Unsupported filters: '<f>'`
-      (seen for `data.origin` on intents); which fields are supported per kind is unknown (?)
+- [x] Unsupported list filters → 400 `api.query-malformed` naming all of them; supported per kind recorded (`filters` 298); `$regex` is a LIKE-style substring match (`filters2`)
 ## L8 — event delivery, retries, `cancelled` (recorded: `events`, 23/23 + 20/20)
 
 - [x] Deliveries `$evd` as an outbox: written in the transaction of the step that makes the
@@ -257,7 +256,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       too (stored versions, with `domains`); `wallet-limited`; `balance-received` one per credit;
       `bridge-entry-*` never raised
 - [x] A webhook unreachable on the network: ten retries (eleven attempts), then cancelled (`signals2`)
-- [ ] `minka bridge events list|show|retry` in the CLI end-to-end
+- [x] `minka bridge events list|show|retry` in the `cli` conformance level
 ## L9 — cross-ledger
 
 - [x] Two ledgers joined by a bridge (`connecting-systems/cross-ledger-payments.md`): adapter
@@ -284,9 +283,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       a record must name one once its kind has one; content checked as JSON Schema
       (recorded `uschema` 35/35, `server/src/user-schemas.ts`)
 - [x] Schema `extend` — recorded (`uschema2`): kept as given, never applied; any parent accepted (unknown, another kind, itself). A cycle only in unit tests
-- [ ] Record the CLI flow against the sandbox as a conformance level (shell scenario in run.sh;
-      `GET /api/v2` would be a divergence: handle, semver)
-- [ ] Unsupported filter fields: the docs say the reference answers an error — record (?)
+- [x] The CLI flow as a conformance level: `cli` (conformance/cli-flow.sh), 63/64 + 2/2; `GET /api/v2` handle in divergences.json
+- [x] Unsupported filter fields: recorded (`filters`)
 
 ## Tooling
 

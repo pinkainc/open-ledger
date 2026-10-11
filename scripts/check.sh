@@ -17,6 +17,8 @@ for level in $(ls conformance/fixtures | sed -n 's/\.reference\.jsonl$//p'); do
   # Recorded behaviour we do not implement yet is listed with the reason, not hidden.
   why=$(node -e 'const p=require("./conformance/pending.json"); process.stdout.write(p[process.argv[1]] ?? "")' "$level")
   if [ -n "$why" ]; then printf '==> conformance %-9s pending: %s\n' "$level" "$why"; continue; fi
+  # The `cli` level drives the official CLI, like the end-to-end run below.
+  if [ "$level" = cli ] && ! command -v minka >/dev/null; then printf '==> conformance %-9s skipped: minka CLI not installed\n' "$level"; continue; fi
   for store in memory postgres; do
     # Postgres: an empty database per run, so no earlier run's intent is resumed.
     if [ $store = memory ]; then url=; else url=$(./scripts/dev-db.sh fresh open_ledger_conf); fi

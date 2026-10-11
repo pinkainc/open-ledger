@@ -4,6 +4,78 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-11 — Domains, list filters, policies, secrets, reports, the CLI (S8)
+
+Recorded on 2.47.4: `domains3` (43), `filters` (298), `filters2` (18), `policies3` (56),
+`policies4` (43), `auth2` (30), `reports3` (58), `reports4` (35), `reports5` (17 + 1),
+`cli` (64 + 2), `daywindow` (below). One recording each; follow-ups where a scenario
+left a question.
+
+**Domains.**
+- **Updating a subdomain**: the version as read (with `data.domain`) is a schema error
+  (`unevaluated properties`), so is moving it to another domain. Sent without `domain`
+  it is accepted and the ledger **puts `domain` back** into the stored data, keeping the
+  client's hash (the stored data no longer hashes to it, like a ledger's `config`).
+- **`meta.domains`** of an intent: **sorted** on a read (`["a","b","c@a"]` whatever the
+  claim order), in **no recognisable order** in a list. The comparator treats it as a set.
+- **A forward intent** has the `meta.domains` of its two wallets and **copies the first
+  intent's `access`** into its data (`handle, claims, access, origin`).
+- **`domain.resolutionFromHandleEnabled: false`**: `x@a` joins no domain, `y@nowhere` is
+  created (no relation check); a proof's `custom.domain` still sets the domain.
+
+**List filters** (`filters`: 12 kinds × 24 fields). Supported everywhere: `data.handle`,
+`data.schema` (not on schemas), `data.custom.*`, `meta.status`, `meta.domain` (not on
+domains), `meta.moment`; plus `data.record` (policies, schemas, anchors), `data.symbol`,
+`data.wallet`, `data.target` (anchors), `data.public` (signers), `meta.domains` (intents).
+Anything else under `data.`/`meta.`, or an unknown operator (`data.handle.$foo`), is 400
+`api.query-malformed` **`Unsupported filters: 'a', 'b'`** (every one named). Keys outside
+`data.`/`meta.` (`luid`, `hash`, `unknown`) are **ignored**. `meta.moment=zz` is a 500
+(failed timestamp cast): we answer 400 (divergences.json).
+**`$regex` is no regular expression** (`filters2`): a case-sensitive substring match like
+`LIKE '%…%'` where `.*`/`%` are any run, `.`/`_` one character, `\` escapes; `^w`,
+`^w1$`, `[aw]` match nothing, `w.*` and `w%` match `w1`.
+
+**Access policies, policy-based ledger.**
+- **A policy in a domain** (`pay@payments`) holds only for records of that domain: K,
+  granted `any` on wallets there, could create `k1@payments` but not `k2@other` or `k3`,
+  read `a1@payments` but not `a2@other`.
+- **`filter`** keys are relative to `data` (`schema`, `handle`) or `meta.*`, take
+  operators (`handle: {$in: [...]}`), and are checked per record kind at creation:
+  `Cannot define access filter key "data.handle" for record "symbol". Allowed keys:
+  ["^handle$","^schema$","^factor$","^custom..+$","^meta.domain$","^meta.labels$","^meta.status$"]`
+  (wallet: `bridge` instead of `factor`; intent: no `factor`, plus `^meta.thread$`).
+- An access value's `action` must be one string; an array is a schema error.
+- **`invoke`**: `intent.canReadAnyClaimWallet` works on reads; `wallet.canSpendAllChangedRouteTargets`
+  refuses a wallet whose forward route targets a wallet the signer may not spend;
+  **`intent.canSpendEveryClaimWallet` let K move from a wallet it may spend to one it may
+  not** — only the sources are asked for (the docs say source and target).
+- **Lists** keep only what a `query`/`any` value grants the token key: K's lists showed
+  nothing it could read through a `read` value, filtered or plain.
+- A status policy value needs `quorum` (schema).
+
+**Secrets and OAuth** (`auth2`). `/oauth/token` checks the credentials first: a wrong
+secret or unknown client is 401 `invalid_client` with no policy; right credentials and no
+value for the client's signer (no policy, or only values whose `target.schema` is another
+schema) are 400 `invalid_grant` `OAuth is not enabled for this ledger`. A read with
+`include=meta.secret` returns the creation's client secret. **Revealing a secret needs a
+signer rule matching the token key**: K, who may read the factor through a bearer rule and
+even through `{read, record: signer-factor-secret}`, gets 403 `Missing permissions` with
+one `Cannot find required signer.` per signer rule. A token of an external IdP (public
+key only) whose `sub` is no signer is accepted; its `sub` matches no `bearer.sub` rule.
+
+**Reports.** An asset path must name the report's ledger, schema, luid and — exactly when
+the report has one — its domain (`/domains/{d}/`); otherwise the reference answers 500
+`Error while validating asset, GCS URL <what> (…) different than report <what> (…)` (we:
+422). Status policies on reports apply from creation: a policy with no value for
+`created` refuses the report (`record.status-policy-violation`). **`report-dropped`** is
+raised: `{handle, parent: <the report as dropped>, signal}`, the delivery's `linked` null.
+
+**The CLI** (`cli`): `minka` 2.45.1 drives the same flow against both servers through the
+recording proxy, the operator key imported from a PEM (`signer create -i`). Only `GET
+/api/v2` differs (`handle: stg`). `bridge events list` prints a table that wraps the
+17-character handle; `bridge events retry` asks for a handle and a confirmation, then
+`POST …/events/retry`. A bridge answering 501 cancels each delivery after one attempt.
+
 ## 2026-10-11 — Waiting intents, 2PC edges, signals (waits, edges2pc, signals2)
 
 Recorded on 2.47.4 with `waits` (28 exchanges), `edges2pc` (27 + 28 bridge-log lines,
