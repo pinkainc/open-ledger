@@ -1,0 +1,484 @@
+// Logical model of a Minka-compatible ledger, as open-ledger serves it.
+//
+// Every Minka record kind is a table; fields come from Minka's OpenAPI spec
+// (../docs.minka.io/_raw/openapi.yaml, `<kind>-data` and `<kind>-meta` schemas).
+// Arrays inside a record that carry relations (intent claims, wallet routes, proofs,
+// report assets) are drawn as their own tables. References are by handle, which is
+// unique per ledger; every table except `ledgers` is scoped by `ledger`, left
+// unconnected so the diagram stays readable.
+//
+// Physically open-ledger keeps all records in one Postgres table (`records`, data and
+// meta as jsonb; server/src/pg-store.ts). The "Server internals" group is that schema.
+// Open with drawDB (Import → DBML) or dbdiagram.io.
+
+Project open_ledger {
+  database_type: 'PostgreSQL'
+  Note: 'Logical model of the Minka ledger API (2.47) as implemented by open-ledger. Records reference each other by handle within one ledger.'
+}
+
+// ---- Ledger ------------------------------------------------------------------------
+
+Table ledgers [headercolor: #334155] {
+  luid varchar [pk, note: '$ldg.…']
+  handle varchar [unique, not null]
+  signer varchar [ref: > signers.handle, note: 'the ledger signer (system)']
+  parent varchar
+  config json [note: 'access.strategy, intent.expiryThresholdMinutes, request.journalingEnabled, config.limits.aggregated.enabled, …']
+  access json [note: 'access rules']
+  custom json
+  status varchar
+  moment timestamp
+  owners json
+  proofs json
+  hash varchar
+  Note: 'One ledger: the scope of every other record.'
+}
+
+Table schemas [headercolor: #334155] {
+  luid varchar [pk, note: '$sch.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  record varchar [note: 'record kind it validates, e.g. wallet, intent, policy']
+  format varchar [note: 'json-schema']
+  schema json
+  extend varchar [ref: > schemas.handle]
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, handle) [unique] }
+  Note: 'User schemas, plus the system schemas every ledger publishes (status, layout, labels, …).'
+}
+
+Table requests [headercolor: #334155] {
+  luid varchar [pk]
+  ledger varchar [not null]
+  handle varchar [not null]
+  schema varchar
+  record varchar [note: 'record kind of the request']
+  action varchar [note: 'create, update, drop, …']
+  source varchar
+  target varchar
+  params json
+  result json
+  moment timestamp
+  Note: 'Request journal (GET /system/requests); kept only with request.journalingEnabled.'
+}
+
+// ---- Money -------------------------------------------------------------------------
+
+Table symbols [headercolor: #0f766e] {
+  luid varchar [pk, note: '$sym.…']
+  ledger varchar [not null]
+  handle varchar [not null, note: 'e.g. usd']
+  factor integer [note: '100 = two decimals']
+  schema varchar
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  owners json
+  indexes { (ledger, handle) [unique] }
+}
+
+Table wallets [headercolor: #0f766e] {
+  luid varchar [pk, note: '$wlt.…']
+  ledger varchar [not null]
+  handle varchar [not null, note: 'may carry a domain: account@domain']
+  schema varchar
+  bridge varchar [ref: > bridges.handle, note: 'set: the wallet lives in an external system']
+  parent varchar [ref: > wallets.handle]
+  custom json
+  access json
+  moment timestamp
+  owners json
+  indexes { (ledger, handle) [unique] }
+}
+
+Table balances [headercolor: #0f766e] {
+  luid varchar [pk]
+  ledger varchar [not null]
+  wallet varchar [not null, ref: > wallets.handle]
+  symbol varchar [not null, ref: > symbols.handle]
+  schema varchar [not null, note: 'available, reserved, …']
+  amount bigint
+  parent varchar
+  moment timestamp
+  indexes { (ledger, wallet, symbol, schema) [unique] }
+  Note: 'GET /wallets/{id}/balances; signed rows.'
+}
+
+Table limits [headercolor: #0f766e] {
+  ledger varchar [not null]
+  wallet varchar [not null, ref: > wallets.handle]
+  symbol varchar [not null, ref: > symbols.handle]
+  metric varchar [not null, note: 'minBalance, maxBalance, dailyAmount, dailyCount']
+  amount bigint
+  moment timestamp
+  indexes { (ledger, wallet, symbol, metric) [unique] }
+  Note: 'Set by limit claims; GET /wallets/{id}/limits.'
+}
+
+// ---- Addressing --------------------------------------------------------------------
+
+Table domains [headercolor: #0369a1] {
+  luid varchar [pk, note: '$dom.…']
+  ledger varchar [not null]
+  handle varchar [not null, note: 'the part after @ in a wallet handle']
+  schema varchar
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, handle) [unique] }
+}
+
+Table anchors [headercolor: #0369a1] {
+  luid varchar [pk, note: '$anc.…']
+  ledger varchar [not null]
+  handle varchar [not null, note: 'an alias, e.g. a phone number or IBAN']
+  schema varchar
+  wallet varchar [ref: > wallets.handle]
+  symbol varchar [ref: > symbols.handle]
+  source varchar
+  target varchar
+  amount bigint
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, handle) [unique] }
+  Note: 'Resolves an address to a wallet; POST /wallets/{id}/anchors/!lookup.'
+}
+
+Table wallet_routes [headercolor: #0369a1] {
+  wallet varchar [not null, ref: > wallets.handle]
+  position integer [not null]
+  action varchar [note: 'forward, accept, debit, credit']
+  filter json
+  target varchar [ref: > wallets.handle]
+  indexes { (wallet, position) [pk] }
+  Note: 'wallets.data.routes[]: where claims to a wallet go.'
+}
+
+// ---- Intents -----------------------------------------------------------------------
+
+Table intents [headercolor: #6d28d9] {
+  luid varchar [pk, note: '$int.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  schema varchar
+  config json [note: 'commit: auto | manual']
+  origin varchar [ref: > intents.handle, note: 'a forward intent: the intent it continues']
+  thread varchar [note: 'meta.thread; intents_by_thread index in Postgres']
+  status varchar [note: 'pending, prepared, committed, completed, rejected, aborted, …']
+  routed boolean
+  domains json
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  owners json
+  indexes { (ledger, handle) [unique] }
+  Note: 'Immutable once created; status moves by proofs.'
+}
+
+Table claims [headercolor: #6d28d9] {
+  intent varchar [not null, ref: > intents.handle]
+  position integer [not null]
+  action varchar [not null, note: 'issue, transfer, destroy, limit']
+  source varchar [ref: > wallets.handle, note: 'transfer, destroy']
+  target varchar [ref: > wallets.handle, note: 'issue, transfer']
+  wallet varchar [ref: > wallets.handle, note: 'limit']
+  symbol varchar [not null, ref: > symbols.handle]
+  amount bigint
+  metric varchar [note: 'limit claims']
+  indexes { (intent, position) [pk] }
+  Note: 'intents.data.claims[]'
+}
+
+// ---- Identity and access -----------------------------------------------------------
+
+Table signers [headercolor: #b45309] {
+  luid varchar [pk, note: '$snr.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  schema varchar
+  public varchar [note: 'public key']
+  format varchar [note: 'ed25519-raw, …']
+  secret varchar [note: 'sealed; never served']
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, handle) [unique] }
+}
+
+Table signer_factors [headercolor: #b45309] {
+  luid varchar [pk, note: '$snf.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  signer varchar [not null, ref: > signers.handle]
+  schema varchar [note: 'key-pair, oauth-credentials, default']
+  public varchar
+  format varchar
+  clientId varchar
+  clientSecret varchar [note: 'sealed']
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, signer, handle) [unique] }
+}
+
+Table circles [headercolor: #b45309] {
+  luid varchar [pk, note: '$crc.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  schema varchar
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, handle) [unique] }
+  Note: 'A group of signers that access rules can name.'
+}
+
+Table circle_signers [headercolor: #b45309] {
+  luid varchar [pk, note: '$csn.…']
+  ledger varchar [not null]
+  circle varchar [not null, ref: > circles.handle]
+  signer varchar [not null, ref: > signers.handle]
+  schema varchar
+  custom json
+  moment timestamp
+}
+
+Table policies [headercolor: #b45309] {
+  luid varchar [pk, note: '$plc.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  schema varchar [not null, note: 'access, status, processing, labels, layout, schedule, authentication, dtc']
+  record varchar [note: 'record kind it applies to']
+  extend varchar [ref: > policies.handle]
+  filter json
+  values json [note: 'rules; their shape depends on schema']
+  config json
+  action json [note: 'schedule policies']
+  inputs json
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, handle) [unique] }
+}
+
+// ---- Integration -------------------------------------------------------------------
+
+Table bridges [headercolor: #be123c] {
+  luid varchar [pk, note: '$brg.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  schema varchar [note: 'rest']
+  config json [note: 'server, debits.claims.groupBy, credits.claims.groupBy']
+  traits json
+  secure json [note: 'authentication rules: oauth2, mtls, …']
+  status varchar [note: 'active once activated']
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, handle) [unique] }
+  Note: 'An external participant reached over the bridge protocol (2PC).'
+}
+
+Table effects [headercolor: #be123c] {
+  luid varchar [pk, note: '$eff.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  schema varchar
+  signal varchar [note: 'e.g. intent-created, balance-received']
+  filter json
+  action_schema varchar [note: 'webhook or bridge']
+  action_bridge varchar [ref: > bridges.handle]
+  action_endpoint varchar [note: 'webhook URL']
+  status varchar
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, handle) [unique] }
+}
+
+Table event_deliveries [headercolor: #be123c] {
+  luid varchar [pk, note: '$evd.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  bridge varchar [ref: > bridges.handle]
+  effect varchar [ref: > effects.handle]
+  record varchar [note: 'kind of the linked record']
+  linked varchar [note: 'handle of the linked record, e.g. an intent']
+  status varchar [note: 'pending, running, delivered, failed, cancelled']
+  replay integer
+  output json [note: 'the call body, sent unchanged on retry']
+  moment timestamp
+  proofs json
+  Note: 'Every call to a bridge or webhook; GET /bridges/{id}/events.'
+}
+
+// ---- Reports -----------------------------------------------------------------------
+
+Table reports [headercolor: #1d4ed8] {
+  luid varchar [pk, note: '$rep.…']
+  ledger varchar [not null]
+  handle varchar [not null]
+  schema varchar
+  status varchar
+  labels json
+  parent varchar
+  custom json
+  access json
+  moment timestamp
+  indexes { (ledger, handle) [unique] }
+}
+
+Table report_assets [headercolor: #1d4ed8] {
+  report varchar [not null, ref: > reports.handle]
+  handle varchar [not null]
+  output varchar [note: 'location in the reporting bucket']
+  indexes { (report, handle) [pk] }
+  Note: 'reports.meta.assets[]'
+}
+
+// ---- History and proofs ------------------------------------------------------------
+
+Table proofs [headercolor: #4b5563] {
+  ledger varchar [not null]
+  record_kind varchar [not null]
+  record_handle varchar [not null]
+  position integer [not null]
+  signer varchar [ref: > signers.handle]
+  method varchar
+  public varchar
+  digest varchar
+  result varchar [note: 'signature']
+  custom json [note: 'for intents: status, handle of the entry, coreId, reason, detail']
+  moment timestamp
+  indexes { (ledger, record_kind, record_handle, position) [pk] }
+  Note: 'meta.proofs[] of any record: signatures, and the status trail of intents.'
+}
+
+Table changes [headercolor: #4b5563] {
+  seq bigint [pk, increment]
+  ledger varchar [not null]
+  kind varchar [not null]
+  handle varchar [not null]
+  record json [not null, note: 'the record as it was after this change']
+  indexes { (ledger, kind, handle, seq) }
+  Note: 'GET /<kind>/{id}/changes for every record kind.'
+}
+
+// ---- Server internals (the physical Postgres schema) ------------------------------
+
+Table records [headercolor: #a16207] {
+  seq bigserial [pk]
+  ledger text [not null]
+  kind text [not null, note: 'ledgers, symbols, wallets, intents, … (17 kinds)']
+  handle text [not null]
+  luid text [unique, not null]
+  hash text [not null]
+  data jsonb [not null]
+  meta jsonb [not null]
+  indexes {
+    (ledger, kind, handle) [unique]
+    (ledger, kind) [name: 'intents_by_thread', note: 'partial: (ledger, meta->>thread) where kind = intents']
+  }
+  Note: 'Every record above, in its wire form.'
+}
+
+Table ledger_keys [headercolor: #a16207] {
+  ledger text [not null]
+  signer text [not null, default: 'system']
+  key jsonb [not null]
+  indexes { (ledger, signer) [pk] }
+  Note: 'The ledger server signers (system, core). Never served.'
+}
+
+Table marks [headercolor: #a16207] {
+  ledger text [not null]
+  key text [not null]
+  indexes { (ledger, key) [pk] }
+  Note: 'Store.once: steps taken once, e.g. the credit phase of an intent.'
+}
+
+Table secrets [headercolor: #a16207] {
+  ledger text [not null]
+  name text [not null]
+  sealed text [not null]
+  indexes { (ledger, name) [pk] }
+  Note: 'Sealed with OPEN_LEDGER_MASTER_KEY (secrets.ts).'
+}
+
+// ---- Groups ------------------------------------------------------------------------
+
+TableGroup ledger [color: #334155] {
+  ledgers
+  schemas
+  requests
+  Note: 'The ledger, its schemas and its request journal'
+}
+
+TableGroup money [color: #0f766e] {
+  symbols
+  wallets
+  balances
+  limits
+  Note: 'What is held and by whom'
+}
+
+TableGroup addressing [color: #0369a1] {
+  domains
+  anchors
+  wallet_routes
+  Note: 'How an address finds a wallet'
+}
+
+TableGroup intents [color: #6d28d9] {
+  intents
+  claims
+  Note: 'Money movement'
+}
+
+TableGroup identity_and_access [color: #b45309] {
+  signers
+  signer_factors
+  circles
+  circle_signers
+  policies
+  Note: 'Who may do what'
+}
+
+TableGroup integration [color: #be123c] {
+  bridges
+  effects
+  event_deliveries
+  Note: 'External participants and outgoing calls'
+}
+
+TableGroup reports [color: #1d4ed8] {
+  reports
+  report_assets
+}
+
+TableGroup history [color: #4b5563] {
+  proofs
+  changes
+  Note: 'Signatures and change history of every record'
+}
+
+TableGroup server_internals [color: #a16207] {
+  records
+  ledger_keys
+  marks
+  secrets
+  Note: 'The physical Postgres schema of open-ledger'
+}
