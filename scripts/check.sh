@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 export DATABASE_URL=$(./scripts/dev-db.sh fresh open_ledger_test)
 echo "==> typecheck" && npx tsc -p .
 echo "==> unit tests (memory + postgres)"
-npm test > .rec/test.log 2>&1 && ok=1 || ok=0
+${UNIT_TESTS:-npm test} > .rec/test.log 2>&1 && ok=1 || ok=0
 grep -E "^ℹ (tests|pass|fail)" .rec/test.log
 [ $ok = 1 ] || { grep -E "✖" .rec/test.log; exit 1; }
 

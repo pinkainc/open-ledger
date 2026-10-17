@@ -29,7 +29,7 @@ trap cleanup EXIT
 
 if [ -z "${BASE:-}" ]; then
   if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then echo "port $PORT is in use" >&2; exit 1; fi
-  OPEN_LEDGER_LOG=1 PORT=$PORT npx tsx server/src/main.ts 2>>.rec/cli-e2e.server.log &
+  OPEN_LEDGER_LOG=1 PORT=$PORT ${SERVER_CMD:-npx tsx server/src/main.ts} 2>>.rec/cli-e2e.server.log &
   pid=$!
   for _ in $(seq 50); do nc -z 127.0.0.1 "$PORT" 2>/dev/null && break; sleep 0.1; done
   BASE=http://127.0.0.1:$PORT/api/v2

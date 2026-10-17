@@ -11,6 +11,7 @@
     "@minka/ledger-sdk": "^2.47.0",
     "@types/node": "^26.6.3",
     "@types/pg": "^8.23.1",
+    "c8": "^12.0.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "yaml": "^2.9.1"
@@ -29,6 +30,7 @@
     "conformance:check": "conformance/run.sh check",
     "conformance:record": "conformance/run.sh record",
     "test": "node --import tsx --test 'server/test/**/*.test.ts'",
-    "check": "scripts/check.sh"
+    "check": "scripts/check.sh",
+    "coverage": "scripts/coverage.sh"
   }
 }

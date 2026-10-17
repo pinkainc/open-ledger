@@ -1,0 +1,116 @@
+{
+  "measured": "2026-10-17",
+  "commit": "3054926",
+  "total": {
+    "lines": 99.05,
+    "branches": 91.28,
+    "functions": 98.92
+  },
+  "files": {
+    "access.ts": {
+      "lines": 96.61,
+      "branches": 84.39,
+      "functions": 97.22
+    },
+    "app.ts": {
+      "lines": 98.87,
+      "branches": 93.19,
+      "functions": 100
+    },
+    "bridges.ts": {
+      "lines": 98.53,
+      "branches": 90.36,
+      "functions": 87.5
+    },
+    "core.ts": {
+      "lines": 99.85,
+      "branches": 93.43,
+      "functions": 100
+    },
+    "crypto.ts": {
+      "lines": 97.36,
+      "branches": 85.71,
+      "functions": 100
+    },
+    "errors.ts": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 94.11
+    },
+    "forwarding.ts": {
+      "lines": 97.12,
+      "branches": 82.25,
+      "functions": 100
+    },
+    "ids.ts": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    },
+    "journal.ts": {
+      "lines": 100,
+      "branches": 72.97,
+      "functions": 100
+    },
+    "main.ts": {
+      "lines": 100,
+      "branches": 78.57,
+      "functions": 100
+    },
+    "oauth2.ts": {
+      "lines": 94.73,
+      "branches": 90,
+      "functions": 83.33
+    },
+    "pg-store.ts": {
+      "lines": 100,
+      "branches": 92.3,
+      "functions": 100
+    },
+    "query.ts": {
+      "lines": 98.94,
+      "branches": 90.97,
+      "functions": 100
+    },
+    "reports.ts": {
+      "lines": 100,
+      "branches": 94.44,
+      "functions": 100
+    },
+    "routing.ts": {
+      "lines": 100,
+      "branches": 96,
+      "functions": 100
+    },
+    "schemas.ts": {
+      "lines": 100,
+      "branches": 91.52,
+      "functions": 100
+    },
+    "secrets.ts": {
+      "lines": 96.72,
+      "branches": 90,
+      "functions": 100
+    },
+    "status.ts": {
+      "lines": 97.56,
+      "branches": 83.33,
+      "functions": 100
+    },
+    "store.ts": {
+      "lines": 100,
+      "branches": 96.66,
+      "functions": 100
+    },
+    "system-schemas.ts": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    },
+    "user-schemas.ts": {
+      "lines": 100,
+      "branches": 92.85,
+      "functions": 100
+    }
+  }
+}

@@ -3,7 +3,7 @@
 //
 // The operation list comes from Minka's published OpenAPI spec in the docs mirror
 // (MINKA_SPEC, default ../docs.minka.io/_raw/openapi.yaml); it is read, not vendored.
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { parse } from 'yaml'
 import { buildApp } from '../server/src/app.js'
 import { MemoryStore } from '../server/src/store.js'
@@ -66,6 +66,23 @@ const out: string[] = [
   'Also served, not in the spec: `GET /api/v2` — server information, which `minka server connect` reads.',
   '',
 ]
+// Line coverage of server/src, measured by scripts/coverage.sh (too slow for every check).
+const lineFile = new URL('./line-coverage.json', import.meta.url)
+if (existsSync(lineFile)) {
+  const lc = JSON.parse(readFileSync(lineFile, 'utf8'))
+  out.push(
+    '## Line coverage of `server/src`',
+    '',
+    `Measured by \`scripts/coverage.sh\` on ${lc.measured} (at \`${lc.commit}\`): the unit tests, and our server in every conformance level and the CLI end to end, on memory and Postgres.`,
+    '',
+    `**${lc.total.lines} %** of lines, ${lc.total.branches} % of branches, ${lc.total.functions} % of functions.`,
+    '',
+    '| File | Lines % | Branches % | Functions % |',
+    '| --- | ---: | ---: | ---: |',
+    ...Object.entries(lc.files).map(([f, v]: [string, any]) => `| \`${f}\` | ${v.lines} | ${v.branches} | ${v.functions} |`),
+    '',
+  )
+}
 writeFileSync(new URL('../COVERAGE.md', import.meta.url), out.join('\n'))
 // `GET /api/v2` (server info, read by `minka server connect`) is not in the spec.
 const unconfirmed = [...ours].filter((k) => !rows.some((r) => `${r.method.toLowerCase()} ${shape(r.path)}` === k) && !['get ', 'get /'].includes(k))

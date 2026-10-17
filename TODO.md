@@ -303,7 +303,9 @@ policy validator knows them, but only `access`, `status`, `processing` are appli
 ## Tooling
 
 - [x] Coverage report `COVERAGE.md` (`npx tsx conformance/coverage.ts`, part of `npm run check`)
-- [ ] Line coverage of `server/src` ≥ 90 % (unit + conformance), in `COVERAGE.md` — S9
+- [x] Line coverage of `server/src` ≥ 90 % (unit + conformance), in `COVERAGE.md`: 99.05 % of
+      lines, 91.3 % of branches (`npm run coverage`, from a tsc build: tsx's source maps counted
+      uncalled class methods as covered). Never called: `Bridges.inOrder`, `OAuth2Tokens.clear`
 - [ ] Every one of the 146 operations confirmed by a recording (117 today) — S9
 - [ ] Re-record every level on the sandbox's latest version, `SEMVER` in `app.ts`; `cli` with CLI 2.47 — S9
 - [x] `npm run check`: typecheck, unit tests and every level's conformance, on memory and Postgres

@@ -32,6 +32,9 @@ const journal = process.env.OPEN_LEDGER_JOURNAL === '1'
 const app = buildApp({ store, core, server: { handle: process.env.SERVER_HANDLE, url: process.env.PUBLIC_URL }, reports, ledgerDrop, journal })
 // OPEN_LEDGER_LOG=1 prints one line per request (method, url, status) to stderr.
 if (process.env.OPEN_LEDGER_LOG) app.addHook('onResponse', async (req, reply) => console.error(`${req.method} ${req.url} ${reply.statusCode}`))
+// Exit on SIGTERM/SIGINT rather than being killed by them, so a run under
+// NODE_V8_COVERAGE writes its coverage (scripts/coverage.sh).
+for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => process.exit(0))
 await app.listen({ port: PORT, host: '127.0.0.1' })
 await core.resume()
 core.startExpiry()

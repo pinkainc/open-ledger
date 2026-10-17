@@ -16,6 +16,9 @@ SERVER_PORT=4620
 BRIDGE_PORT=4630
 RUN=${RUN:-$(date -u +%Y%m%d%H%M%S | tr -d '\n')$(printf '%s' $RANDOM | tail -c 3)}
 mkdir -p .rec conformance/fixtures
+# SERVER_CMD: how our server is started; scripts/coverage.sh runs a compiled build under
+# NODE_V8_COVERAGE.
+SERVER_CMD=${SERVER_CMD:-npx tsx server/src/main.ts}
 
 pids=()
 started=
@@ -66,7 +69,7 @@ else
   # PUBLIC_URL: the server answers for the reference's address, so a token's `hsh`
   # (computed over that address by the scenario, HSH_URL) holds for both.
   # OPEN_LEDGER_REPORTS_BUCKET: the sandbox's reporting bucket, which report assets must name.
-  PORT=$SERVER_PORT PUBLIC_URL=$REFERENCE/api/v2 OPEN_LEDGER_REPORTS_BUCKET=ledger-reports-stg OPEN_LEDGER_MINUTE_MS=${OPEN_LEDGER_MINUTE_MS:-${minute_ms:-1000}} npx tsx server/src/main.ts 2>.rec/server.log &
+  PORT=$SERVER_PORT PUBLIC_URL=$REFERENCE/api/v2 OPEN_LEDGER_REPORTS_BUCKET=ledger-reports-stg OPEN_LEDGER_MINUTE_MS=${OPEN_LEDGER_MINUTE_MS:-${minute_ms:-1000}} $SERVER_CMD 2>.rec/server.log &
   pids+=($!)
   wait_port $SERVER_PORT
   target=http://127.0.0.1:$SERVER_PORT
