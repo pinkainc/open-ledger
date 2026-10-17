@@ -35,6 +35,16 @@ for (const [name, make] of stores) {
       assert.equal(await store.get(ledger, 'symbols', 'nobody'), undefined)
     })
 
+    test('thread lists the intents of one thread, oldest first', async () => {
+      const l = ledger + '-thread'
+      const intent = (h: string, thread: string) => ({ ...rec(h), luid: `$int.-${h}-${Math.random()}`, meta: { status: 'pending', thread } })
+      for (const [h, t] of [['i1', 'T1'], ['i2', 'T2'], ['i3', 'T1']]) await store.insert(l, 'intents', intent(h, t))
+      await store.insert(l, 'wallets', { ...rec('w'), meta: { status: 'created', thread: 'T1' } })
+      await store.insert(l + 'x', 'intents', intent('i4', 'T1'))
+      assert.deepEqual((await store.thread(l, 'T1')).map((r) => r.data.handle), ['i1', 'i3'])
+      assert.deepEqual(await store.thread(l, 'T9'), [])
+    })
+
     test('list keeps insertion order', async () => {
       const l = ledger + '-order'
       for (const h of ['c', 'a', 'b']) await store.insert(l, 'wallets', rec(h))

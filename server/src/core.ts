@@ -1087,10 +1087,9 @@ async function isThreaded(tx: Store, ledger: string, intent: StoredRecord) {
   return !!intent.data.origin || (await tx.marked(ledger, threadKey(intent)))
 }
 
-// Intents of one thread. A scan of the ledger's intents: threads are rare and short
-// (MAX_THREAD); an index by thread is the obvious next step if that ever matters.
+// Intents of one thread, by the index on `meta.thread` (Postgres).
 async function threadOf(tx: Store, ledger: string, intent: StoredRecord) {
-  return (await tx.list(ledger, 'intents')).filter((i) => i.meta.thread === intent.meta.thread)
+  return tx.thread(ledger, intent.meta.thread)
 }
 
 const preparedBySystem = (i: StoredRecord) => (i.meta.proofs as Proof[]).some((p) => p.signer === 'system' && p.custom?.status === 'prepared')

@@ -40,6 +40,7 @@ create table if not exists changes (
   record jsonb not null
 );
 create index if not exists changes_by_record on changes (ledger, kind, handle, seq);
+create index if not exists intents_by_thread on records (ledger, (meta->>'thread')) where kind = 'intents';
 create table if not exists limits (
   seq    bigserial primary key,
   ledger text  not null,
@@ -136,6 +137,11 @@ export class PgStore implements Store {
 
   async list(ledger: string, kind: string) {
     const { rows } = await this.db.query('select * from records where ledger=$1 and kind=$2 order by seq', [ledger, kind])
+    return rows.map(this.row)
+  }
+
+  async thread(ledger: string, thread: string) {
+    const { rows } = await this.db.query(`select * from records where ledger=$1 and kind='intents' and meta->>'thread'=$2 order by seq`, [ledger, thread])
     return rows.map(this.row)
   }
 

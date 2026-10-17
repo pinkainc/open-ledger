@@ -44,6 +44,8 @@ export interface Store {
   changes(ledger: string, kind: string, handle: string): Promise<StoredRecord[]>
   /** Oldest first. */
   list(ledger: string, kind: string): Promise<StoredRecord[]>
+  /** The intents of one thread (`meta.thread`), oldest first; indexed in Postgres. */
+  thread(ledger: string, thread: string): Promise<StoredRecord[]>
   /** The ledger's own server signers (`system`, `core`). Never served. */
   getKey(ledger: string, signer?: string): Promise<KeyPair | undefined>
   putKey(ledger: string, key: KeyPair, signer?: string): Promise<void>
@@ -118,6 +120,10 @@ export class MemoryStore implements Store {
 
   async list(ledger: string, kind: string) {
     return clone(this.records(ledger, kind))
+  }
+
+  async thread(ledger: string, thread: string) {
+    return clone(this.records(ledger, 'intents').filter((r: any) => r.meta.thread === thread))
   }
 
   async remove(ledger: string, kind: string, handle: string) {

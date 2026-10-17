@@ -225,8 +225,8 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       the reference checks after the fact and let a loop make ~5000 intents (FINDINGS)
 - [x] Expiry of a forward intent waiting for its bridge — divergence: the reference never
       expires it (thread stuck); we expire it and abort the thread
-- [ ] Thread lookups scan the ledger's intents (only for threads with a forward); index by
-      `meta.thread` in Postgres — S9
+- [x] Thread lookups by `Store.thread`: a partial index `intents_by_thread` on
+      `(ledger, meta->>'thread')` in Postgres (the plan uses it), no ledger scan
 - [x] Reports `$rep` (9 operations) and the reporting bridge protocol — see Reports (S3)
 - [x] `GET /system/requests[/{id}]`, `POST /ledger`, `DELETE /ledger` — recorded (`ledgers`): journaling and ledger drop are off on the sandbox; ours too by default, on with `OPEN_LEDGER_JOURNAL` / `OPEN_LEDGER_LEDGER_DROP` (unit tests only)
 - [x] Unsupported list filters → 400 `api.query-malformed` naming all of them; supported per kind recorded (`filters` 298); `$regex` is a LIKE-style substring match (`filters2`)
