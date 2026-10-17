@@ -202,8 +202,9 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Comparator: adjacent same-status reports of several bridges in canonical order
 - [x] A late `prepared` after the intent was rejected: accepted (200), appended, nothing more (`edges2pc`)
 - [x] A debit failing while another bridge's debit is pending: abort to both, in parallel (`edges2pc`)
-- [ ] Crash in the middle of the credit phase: redrive re-sends the credits (mark set);
-      covered by `resume`, not by a test yet — S9
+- [x] Crash in the middle of the credit phase: the next start re-sends the pending credit
+      deliveries, each once; the mark keeps the intent's own step from sending them again
+      (`recovery.test.ts`, memory + Postgres; fails with 2 credits when the mark is removed)
 - [x] Commit never confirmed: no reconciliation, nothing re-sent in three minutes (`edges2pc`)
 - [x] v2.47.0: the core aborts its entries and releases reservations at `aborted`, not
       when the last bridge confirms; abort calls carry `domains: []` when the core took
