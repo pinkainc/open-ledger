@@ -150,7 +150,8 @@ export async function startBridges(o: {
     const b = o.bridges.find((x) => url.startsWith(`${x.prefix ?? ''}/v2/`)) ?? o.bridges[0]
     const path = url.slice((b.prefix ?? '').length)
     // `{server}` ends in /v2; the SDK mounts /credits, /debits and /intents under it.
-    const m = path.match(/^\/v2\/(debits|credits)(?:\/([^/]+)\/(commit|abort))?$/)
+    // Any other action on an entry is a DTC notify step (`dtc.notify`): accepted, no proof.
+    const m = path.match(/^\/v2\/(debits|credits)(?:\/([^/]+)\/([a-z][a-z-]*))?$/)
     let status = 404
     let after: (() => Promise<void>) | undefined
     if (m && req.method === 'POST') {
@@ -158,7 +159,9 @@ export async function startBridges(o: {
       const entry = body?.data
       const intent = entry?.intent
       status = 202
-      if (!action) {
+      if (action && action !== 'commit' && action !== 'abort') {
+        // nothing to report
+      } else if (!action) {
         let d = b.decide(entry)
         if ('httpWhile' in d) {
           if (d.while()) status = d.httpWhile

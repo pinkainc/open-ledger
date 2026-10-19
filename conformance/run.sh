@@ -104,6 +104,11 @@ if grep -q needs-bridge conformance/scenarios/$LEVEL.ts; then
     [ -n "$url" ] || { echo "tunnel did not come up" >&2; exit 1; }
     # The edge answers 502 until the bridge listens, which proves the tunnel is routed.
     for _ in $(seq 60); do code=$(curl -s -o /dev/null -w '%{http_code}' "$url/" || true); [ "$code" != 000 ] && [ "$code" != 530 ] && break; sleep 1; done
+    # The sandbox resolves the name through public DNS, which can lag the local resolver
+    # (S9: `getaddrinfo ENOTFOUND …trycloudflare.com` halfway through secure and signals2).
+    host=${url#https://}
+    for _ in $(seq 60); do [ -n "$(dig +short @1.1.1.1 "$host")" ] && [ -n "$(dig +short @8.8.8.8 "$host")" ] && break; sleep 1; done
+    sleep 5
     BRIDGE_URL=$url/v2
   else
     bridge_out=.rec/$LEVEL.bridge.candidate.jsonl
