@@ -77,7 +77,11 @@ export class PgStore implements Store {
     const c = await pool.connect()
     try {
       await c.query('select pg_advisory_lock(815)')
-      await c.query(SCHEMA)
+      // One statement per transaction. `create index if not exists` takes a share lock
+      // on its table even when the index exists; in one transaction those locks pile
+      // up (changes, then records) against a running process's records-then-changes
+      // writes, and Postgres reports a deadlock.
+      for (const statement of SCHEMA.split(';').filter((s) => s.trim())) await c.query(statement)
     } finally {
       await c.query('select pg_advisory_unlock(815)')
       c.release()
