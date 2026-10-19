@@ -65,10 +65,14 @@ create table if not exists secrets (
 
 type Queryable = pg.Pool | pg.PoolClient
 
+const GATE = Number(process.env.PG_LEDGER_GATE ?? 4)
+
 export class PgStore implements Store {
   private constructor(
     private readonly db: Queryable,
     private readonly pool: pg.Pool,
+    // Connections this process gives each ledger's transactions (shared with transaction stores).
+    private readonly gates = new Map<string, { held: number; waiting: (() => void)[] }>(),
   ) {}
 
   static async connect(url: string) {
@@ -217,14 +221,34 @@ export class PgStore implements Store {
 
   // One Postgres transaction per call, holding a ledger-wide advisory lock until
   // commit, so money-moving work on a ledger is serialised across processes too.
-
+  //
+  // Within one process at most GATE transactions of a ledger hold a pool connection;
+  // the rest queue here. Letting every one wait for the advisory lock on a connection
+  // left a burst of intents holding the whole pool idle, and requests that create
+  // intents (no lock) waited for one: 500 transfers on one ledger spent 1.7 s of 2.1 s
+  // being accepted. A queue of one instead made begin and lock serial and processing
+  // 60 % slower; a few on connections keep the next one ready (scripts/bench.ts).
   async transaction<T>(ledger: string, fn: (tx: Store) => Promise<T>): Promise<T> {
     if (this.db !== this.pool) return fn(this) // already inside one
+    let gate = this.gates.get(ledger)
+    if (!gate) this.gates.set(ledger, (gate = { held: 0, waiting: [] }))
+    if (gate.held < GATE) gate.held++
+    else await new Promise<void>((r) => gate.waiting.push(r)) // the slot is handed over
+    try {
+      return await this.locked(ledger, fn)
+    } finally {
+      const next = gate.waiting.shift()
+      if (next) next()
+      else if (--gate.held === 0) this.gates.delete(ledger)
+    }
+  }
+
+  private async locked<T>(ledger: string, fn: (tx: Store) => Promise<T>): Promise<T> {
     const client = await this.pool.connect()
     try {
       await client.query('begin')
       await client.query('select pg_advisory_xact_lock(hashtext($1))', [ledger])
-      const out = await fn(new PgStore(client, this.pool))
+      const out = await fn(new PgStore(client, this.pool, this.gates))
       await client.query('commit')
       return out
     } catch (e) {

@@ -36,7 +36,13 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Unknown source message (recorded; the guess was right)
 - [x] Unknown wallet is reported before unknown symbol (recorded; order fixed)
 - [x] Claim authorisation: see L4
-- [ ] Per-wallet locking instead of the ledger-wide advisory lock (throughput, not correctness) — S9
+- [x] Per-wallet locking — measured and dropped (S9, `scripts/bench.ts`): one ledger does
+      ~200–240 transfers/s on Postgres, the same 500 over 16 ledgers ~450–530/s, so the
+      ceiling of the gain is ~2× and only with 16 independent streams. The ledger lock also
+      guards change order, daily limits and threads. What was fixed instead: a burst no
+      longer holds every pool connection waiting for the lock (accept 1.7 s → 0.4 s)
+- [ ] One intent is one transaction of ~40 round trips, ~5 ms under the lock; 9 of them list
+      `effects` (one per raised signal). Fewer round trips is the cheaper throughput lever
 - [x] Read by luid as well as handle (all record kinds)
 
 ## L2 — multi-claim intents
