@@ -58,7 +58,8 @@ djelomični indeks `intents_by_thread` na `(ledger, (meta->>'thread')) where kin
   staginga i bez LLM-a), s mermaid dijagramima.
 - `docs/model.dbml`: logički model, 28 tablica i 9 obojenih grupa. drawDB uvozi iz DBML-a
   samo boju zaglavlja tablice (`headerColor`), a `TableGroup` ignorira, pa svaka tablica
-  nosi boju svoje grupe.
+  nosi boju svoje grupe. Druga verzija, provjerena prema kodu i bez drawDB-a:
+  [2026-10-19-model-dbml.md](2026-10-19-model-dbml.md).
 
 ## Otvoreno
 
