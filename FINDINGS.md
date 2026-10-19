@@ -4,6 +4,27 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-19 — DTC policies (S10)
+
+Recorded on 2.47.5: `dtc` (92 + 17 bridge calls), one ledger.
+
+- **A dtc policy is accepted, stored and activated, and not run.** Twelve policies, each
+  picked by `filter: {'data.custom.flow': …}` (one relative, `custom.flow`): the fixed
+  chain written out, `core.commit` alone, three priorities (5, 1, none), two of one
+  priority (the SDK's types call that an error), a step filter that does not match, a
+  bridged credit with `dtc.notify` `confirm` and `dtc.commit`, a failing bridge,
+  `flow.parallel`. Every intent went through the fixed chain exactly as without a policy
+  (our server, which ignores them, matched every exchange); the bridge got no `confirm`.
+  Most likely a feature flag off on staging (the docs name only `dtc.*` flags).
+- **Validation** is the spec's `dtc-policy-data`, Ajv with the first error per branch:
+  inside `policy-data`'s anyOf the dtc branch lists, per value, each step kind's first
+  error (prepare's two alternatives, commit, notify, setStatus, parallel, core.prepare,
+  core.commit) and a `oneOf`. Object order is `required`, then unexpected properties,
+  then the properties. `record` other than `intent`, empty `values`, `priority: -1`,
+  a reserved notify action (`must NOT be valid`), an unknown `invoke` are refused; the
+  object form `invoke: {method}`, step `filter` and `config.suspendTimeoutMs` pass.
+  The detail names an unexpected property at its parent, like a missing one.
+
 ## 2026-10-11 — Domains, list filters, policies, secrets, reports, the CLI (S8)
 
 Recorded on 2.47.4: `domains3` (43), `filters` (298), `filters2` (18), `policies3` (56),

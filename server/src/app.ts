@@ -13,7 +13,7 @@ import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, sig
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
 import { matches, parseQuery, unsupportedFilters } from './query.js'
-import { validateBody, validateLedgerDrop, validatePolicyValues, validateProcessing, validateReportProof, type ValidatedKind } from './schemas.js'
+import { validateBody, validateDtc, validateLedgerDrop, validatePolicyValues, validateProcessing, validateReportProof, type ValidatedKind } from './schemas.js'
 import { CAUSED_BY, ForwardedError, aspectFor, forward, type Action, type Aspect } from './forwarding.js'
 import { describe, redact } from './journal.js'
 import { keyOf, type Store, type StoredRecord } from './store.js'
@@ -652,6 +652,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       throw new LedgerError(422, 'record.relation-not-found', `Cannot find anchor wallet '${data.wallet}'`)
     if (kind === 'schemas') return checkContent(data.schema)
     if (kind === 'policies' && data.schema === 'processing') validateProcessing(data)
+    if (kind === 'policies' && data.schema === 'dtc') validateDtc(data)
     if (kind === 'policies') validatePolicyValues(data)
     if (kind === 'policies') validateAccessFilters(data)
     const record = KINDS[kind].record

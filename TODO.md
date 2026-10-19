@@ -180,8 +180,10 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Who may report on an entry: `create` on `intent-proof` from the ledger's rules, any
       such key (not only the bridge's); `sign` is no access action, every `access` is
       validated against the spec (recorded `bproofs` 45/45 + 20/20)
-- [ ] DTC policy (`schema: dtc`, configurable 2PC steps; spec since 2.46, no prose docs) —
-      a whole executor, **S10** (scoped in S5; plan S10–S11)
+- [x] DTC policy (`schema: dtc`): recorded `dtc` 92/92 + 17/17 on 2.47.5 — the reference
+      validates and stores dtc policies but **does not run them** (every matching intent
+      took the fixed chain, no notify call). We validate like it (`validateDtc`) and keep the
+      fixed chain. Executor deferred until the sandbox runs one: re-record `dtc` on each new version
 - [x] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize) —
       `forwarding` 65/67 + 29/30 (synchronize `sign` is a reference 500, divergences.json);
       `server/src/forwarding.ts`, `server/test/forwarding.test.ts`

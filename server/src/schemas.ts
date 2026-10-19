@@ -296,8 +296,8 @@ function policyInvalid(branch: (typeof BRANCHES)[number], own: Wire[]): LedgerEr
     else list.push(wire('/schema', `must be equal to one of the allowed values: ${b}`, 'enum'))
   }
   list.push(wire('/schema', 'must match pattern "^(?!layout|access|status|labels|schedule|processing|authentication|dtc).*$"', 'pattern'), wire('', 'must match a schema in anyOf', 'anyOf'))
-  // The detail names a missing property at its parent, like `check` above.
-  const human = (w: Wire) => `request${w.errorCode.startsWith('required') ? w.path.replace(/\/[^/]+$/, '') : w.path} ${w.message}`
+  // The detail names a missing or unexpected property at its parent, like `check` above.
+  const human = (w: Wire) => `request${/^(required|additionalProperties)\./.test(w.errorCode) ? w.path.replace(/\/[^/]+$/, '') : w.path} ${w.message}`
   return new LedgerError(422, 'record.schema-invalid', `Schema validation error: ${list.map(human).join(', ')}`, { errors: list })
 }
 
@@ -339,4 +339,59 @@ export function validateProcessing(data: any) {
     if (strategy === 'validate' && reading) throw new LedgerError(422, 'record.schema-invalid', "Cannot define 'validate' strategy for read or query actions")
     if (strategy === 'fallback' && !reading) throw new LedgerError(422, 'record.schema-invalid', "Cannot define 'fallback' strategy for non-read or query actions")
   }
+}
+
+// DTC policies (spec 2.46: dtc-policy-data; recorded, dtc). The reference validates
+// them and stores them, but on 2.47.5 does not run them: every intent a dtc policy
+// matched took the fixed chain. A value is a oneOf of the step kinds, each reporting
+// its first error (`required`, then unexpected properties, then the properties).
+const invoke = (method: string) => ({
+  oneOf: [
+    { type: 'string', enum: [method] },
+    { type: 'object', required: ['method'], properties: { method: { type: 'string', enum: [method] } }, additionalProperties: false },
+  ],
+})
+const handleRef = [{ type: 'string' }, { type: 'object', required: ['handle'], properties: { handle: { type: 'string' } }, additionalProperties: false }]
+const resolvable = { oneOf: [...handleRef, { type: 'object', required: ['$resolve'], properties: { $resolve: { type: 'string', enum: ['source', 'target'] } }, additionalProperties: false }] }
+const side = { type: 'string', enum: ['debit', 'credit'] }
+const stepFilter = { type: 'object' }
+const stepConfig = { type: 'object', properties: { suspendTimeoutMs: { type: 'integer', minimum: 1 } }, additionalProperties: false }
+const coreEntries = { type: 'array', minItems: 1, items: { type: 'object', required: ['schema', 'wallet'], properties: { schema: side, wallet: resolvable }, additionalProperties: false } }
+const dtcValue: Record<string, unknown> = {
+  oneOf: [
+    {
+      oneOf: [
+        { type: 'object', required: ['invoke', 'schema', 'bridge'], properties: { invoke: invoke('dtc.prepare'), schema: side, bridge: resolvable, filter: stepFilter }, additionalProperties: false },
+        { type: 'object', required: ['invoke', 'schema', 'wallet'], properties: { invoke: invoke('dtc.prepare'), schema: side, wallet: resolvable, filter: stepFilter }, additionalProperties: false },
+      ],
+    },
+    { type: 'object', required: ['invoke', 'schema'], properties: { invoke: invoke('dtc.commit'), schema: side, bridge: resolvable, filter: stepFilter, config: stepConfig }, additionalProperties: false },
+    {
+      type: 'object',
+      required: ['invoke', 'schema', 'action'],
+      properties: { invoke: invoke('dtc.notify'), schema: side, bridge: { oneOf: handleRef }, action: { type: 'string', not: { enum: ['prepare', 'commit', 'abort'] } }, filter: stepFilter },
+      additionalProperties: false,
+    },
+    { type: 'object', required: ['invoke', 'status'], properties: { invoke: invoke('dtc.setStatus'), status: { type: 'string' }, filter: stepFilter }, additionalProperties: false },
+    { type: 'object', required: ['invoke', 'values'], properties: { invoke: invoke('flow.parallel'), values: { type: 'array', minItems: 1, items: { $ref: '#/definitions/step' } }, filter: stepFilter }, additionalProperties: false },
+    { type: 'object', required: ['invoke', 'values'], properties: { invoke: invoke('core.prepare'), values: coreEntries, filter: stepFilter }, additionalProperties: false },
+    { type: 'object', required: ['invoke', 'values'], properties: { invoke: invoke('core.commit'), values: coreEntries, filter: stepFilter, config: stepConfig }, additionalProperties: false },
+  ],
+}
+const dtcPolicy = ajv.compile({
+  definitions: { step: dtcValue },
+  type: 'object',
+  required: ['schema', 'record', 'values'],
+  properties: {
+    schema: { type: 'string', enum: ['dtc'] },
+    record: { type: 'string', enum: ['intent'] },
+    config: { type: 'object', properties: { priority: { type: 'integer', minimum: 0 } } },
+    filter: { type: 'object' },
+    values: { type: 'array', minItems: 1, items: { $ref: '#/definitions/step' } },
+  },
+})
+
+export function validateDtc(data: any) {
+  if (dtcPolicy(data)) return
+  throw policyInvalid('dtc', dtcPolicy.errors!.map((e) => toWire({ ...e, instancePath: `/data${e.instancePath}` })))
 }
