@@ -46,3 +46,37 @@ l6 „grouping”). Uzrok je indeks threadova iz `7bcb763`. Shema se izvršavala
 transakcija, a `create index if not exists` uzima share lock na tablicu i kad indeks
 već postoji. Locki su se gomilali redom changes pa records, dok proces koji već radi piše
 records pa changes. Sada se svaka naredba sheme izvršava zasebno.
+
+## Točka 5: sve razine ponovno snimljene na 2.47.5
+
+Sandbox je 2026-10-19 služio **2.47.5**, a snimke su nastale od 25.9. do 11.10. (2.45–2.47.4).
+Ponovno je snimljeno svih 56 razina osim `daywindow`, jedna za drugom, i sve su prošle iz
+prvog pokušaja (oko 70 minuta, 56 novih ledgera u `footprint.jsonl`). `daywindow` se snima
+samo pred UTC ponoć, pa ostaje na staroj snimci. `cli` je snimljen s CLI-jem **2.47.0**
+(`npm i -g @minka/cli@2.47.0`; lokalno je prije bio 2.45.1).
+
+Jedina promjena reference: popis sistemskih shema (`filters`) sada ima `key-pair` na
+prvom mjestu. Dvanaest shema nastaje u istom trenutku, pa redoslijed slijedi luidove i
+nasumičan je, isto kao `custom.anchors`. `compare.ts` ih zato uspoređuje kao skup, i to
+prije nego što luidovi postanu tokeni (tokeni se broje redom pojavljivanja).
+`SEMVER` je 2.47.5.
+
+Iznimke: `secure` i `signals2`. Usred njihovih snimki sandbox nije razriješio DNS
+cloudflare quick tunela (`ENOTFOUND …trycloudflare.com`), pa su pozivi bridgeu pali. Te
+snimke su vraćene na stare, a ledgeri ostaju u footprintu. Isto vrijedi za sistemske
+policyje (`records2`: `access-policy:status` je sada prvi).
+
+## Točka 6: svih 146 operacija potvrđeno
+
+29 operacija bez snimke bile su generičke operacije nad zapisom na vrstama do kojih
+nijedan scenarij nije došao: proof, access check, changes, change po broju, drop preko
+`POST …/drop` i veza kruga i signera. Pokriva ih jedna nova razina, `surface`: jedan
+ledger, nijedan izlazni poziv (bridge i webhook gađaju zatvoreni lokalni port). Snimka
+je otkrila dvije razlike:
+
+- **Zahtjev pisanja bez `content-type`** referenca odbija na svakoj ruti s 422
+  `record.schema-invalid`, „Schema validation error: unsupported media type undefined”,
+  `errors: [{path: '/v2/wallets/:id', message}]`. To je njezin OpenAPI validator. Mi smo
+  na vezi kruga vraćali 500 (`verifyProofs(undefined)`), a na walletu poruku Ajv-a. Sada
+  to radi jedan `preValidation` hook u `app.ts`.
+- **Čitanje veze koje nema** je 422 `record.relation-not-found` „Link not found”, ne 404.

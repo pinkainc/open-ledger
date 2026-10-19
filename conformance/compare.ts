@@ -81,7 +81,17 @@ function normaliser() {
   }
   const walk = (x: any): any => {
     if (typeof x === 'string') return value(x)
-    if (Array.isArray(x)) return x.map(walk)
+    if (Array.isArray(x)) {
+      // The twelve system schemas and the two system policies are created in one moment,
+      // so their order in a list follows their luids (2.47.5: key-pair first in filters,
+      // access-policy:status first in records2). A set, in place, and before luids
+      // become tokens, which are numbered in order of appearance.
+      const system = (s: any) =>
+        (typeof s?.data?.custom?.description === 'string' && s.data.custom.description.startsWith('Schema created by ledger')) ||
+        ['intent:status', 'access-policy:status'].includes(s?.data?.handle)
+      const sorted = x.filter(system).sort((p: any, q: any) => String(p.data.handle).localeCompare(String(q.data.handle)))
+      return (sorted.length > 1 ? x.map((s: any) => (system(s) ? sorted.shift() : s)) : x).map(walk)
+    }
     if (x && typeof x === 'object') {
       const out: any = {}
       for (const k of Object.keys(x).sort()) {

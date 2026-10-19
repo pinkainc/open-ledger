@@ -40,6 +40,10 @@ a bank are recorded too (`fixtures/*.bridge.jsonl`).
 
 ## Status
 
+All **146 of 146** operations of Minka's spec are implemented and every one is confirmed
+by a recorded exchange; every level was re-recorded on the sandbox's 2.47.5 (2026-10-19).
+
+
 | Level | Scope | Minka operations | Conformance |
 | --- | --- | --- | --- |
 | **L0** | ledger, symbol, wallet — records only, no money moves | 9 of 146 | **18/18** exchanges match |
@@ -124,8 +128,9 @@ only when a scenario changes.
   `…/api/v2` clients use), or every token with `hsh` is refused, as the reference
   refuses a token hashed over any address but its own.
 - **Ledger-wide serialisation.** Intents of one ledger are processed one at a time
-  (advisory lock in Postgres). Correct, and far above the reference's ~100 intents/s,
-  but per-wallet locking would scale further.
+  (advisory lock in Postgres): ~200–240 transfers/s per ledger on a local Postgres,
+  ~450–530/s over 16 ledgers (`scripts/bench.ts`). Per-wallet locking was measured and
+  dropped: a 2× ceiling does not pay for the risk.
 
 ## Non-goals
 

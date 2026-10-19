@@ -53,7 +53,7 @@ export type AppOptions = {
 }
 
 /** The reference release whose API this server answers (published spec version). */
-export const SEMVER = '2.47.4'
+export const SEMVER = '2.47.5'
 
 // Record kinds: path segment → luid prefix, name used in error details, and the
 // record type access rules refer to. Prefixes are the reference's.
@@ -147,6 +147,16 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   app.addHook('onRequest', async (req) => {
     const handle = req.headers['x-ledger']
     if (typeof handle === 'string' && handle) req.ledgerKey = await store.getKey(handle)
+  })
+
+  // Recorded (surface): every write operation takes a body, and one sent without a
+  // content type fails the reference's request validator, whatever the route.
+  app.addHook('preValidation', async (req) => {
+    if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method) || req.headers['content-type']) return
+    const path = req.routeOptions.url?.replace(/^\/api/, '')
+    if (!path) return
+    const message = 'unsupported media type undefined'
+    throw new LedgerError(422, 'record.schema-invalid', `Schema validation error: ${message}`, { errors: [{ path, message }] })
   })
 
   // ---- authentication ------------------------------------------------------------
@@ -1492,7 +1502,8 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const { ledger, found } = await existing(req, 'circles', req.params.id)
     await acl.authorize('read', 'circle', { who }, { ledger, record: found })
     const link = (await circleLinks(ledger.data.handle, found.data.handle)).find((l) => l.luid === req.params.link || l.data.signer === req.params.link)
-    if (!link) throw errors.notFound('Circle signer')
+    // Recorded (surface): a missing link is a relation error, not a 404.
+    if (!link) throw new LedgerError(422, 'record.relation-not-found', 'Link not found')
     return link
   })
 

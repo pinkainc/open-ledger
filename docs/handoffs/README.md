@@ -70,6 +70,6 @@ povijest.
 | S6 | L9 cross-ledger | gotovo | `fcd8aa7` | 146/146, 117 potvrđeno; `bridges/ledger-bridge`, `l9` 40/40 + 51/51 (dva sandbox ledgera), `l9mixed` 31/31 + 78/78 (Minka ↔ naš, oba smjera), e2e dvije instance; server bez promjena |
 | S7 | Snimke `(?)`, 2PC i signali | gotovo | `39797e6` | 146/146, 117 potvrđeno; `waits` 28/28, `edges2pc` 27/27 + 28/28, `signals2` 37/37 + 46/46; 0 `(?)` u L4, L6, L8; `*-proofs-added` po verziji, `wallet-limited`, 10 retryja za mrežu; domain access policies premještene u S8 |
 | S8 | Snimke `(?)`, domene, CLI | gotovo | `139ffe9` | 146/146, 117 potvrđeno; 0 `(?)` u TODO; `domains3`, `filters`(2), `policies3`/`4`, `auth2`, `reports3`–`5`, `daywindow` (UTC dan), CLI kao razina `cli`; 420 unit testova |
-| S9 | Testna pokrivenost i jezgra | u tijeku | `7bcb763` | prvi dio: pokrivenost 99,05 % linija (`npm run coverage`), test pada u credit fazi, indeks threadova; 424 unit testa; ostalo na vrhu `S9.md` |
+| S9 | Testna pokrivenost i jezgra | gotovo | (ovaj commit) | **146/146, 146 potvrđeno** (`surface` 89/89); pokrivenost 99,05 %; zaključavanje po walletu izmjereno i odbačeno (`scripts/bench.ts`, strop 2×), pool više ne gladuje; sve razine snimljene na 2.47.5 osim `daywindow`, `secure`, `signals2` (DNS tunela pao usred snimke, stare snimke ostaju); 424 unit testa |
 | S10 | DTC, labels, backlog | otvoreno | | iz pregleda TODO-a 2026-10-11: DTC policy, labels + labels policies, processing `filter`, `allowClientCredentials`, agregati dnevnih limita |
 | S11 | Rezerva | otvoreno | | ostatak S10; zatvara lanac |

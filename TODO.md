@@ -313,8 +313,8 @@ policy validator knows them, but only `access`, `status`, `processing` are appli
 - [x] Line coverage of `server/src` ≥ 90 % (unit + conformance), in `COVERAGE.md`: 99.05 % of
       lines, 91.3 % of branches (`npm run coverage`, from a tsc build: tsx's source maps counted
       uncalled class methods as covered). Never called: `Bridges.inOrder`, `OAuth2Tokens.clear`
-- [ ] Every one of the 146 operations confirmed by a recording (117 today) — S9
-- [ ] Re-record every level on the sandbox's latest version, `SEMVER` in `app.ts`; `cli` with CLI 2.47 — S9
+- [x] Every one of the 146 operations confirmed by a recording: the last 29 by `surface` (S9)
+- [x] Re-record every level on the sandbox's latest version (2.47.5, 2026-10-19), `SEMVER` in `app.ts`; `cli` with CLI 2.47.0 — `daywindow` keeps its 2026-10-11 recording (midnight only)
 - [x] `npm run check`: typecheck, unit tests and every level's conformance, on memory and Postgres
 - [x] Postgres conformance runs get an empty database each (`dev-db.sh fresh`): a server
       resumes every unfinished intent, and l6 leaves one on purpose
