@@ -1,484 +1,1293 @@
-// Logical model of a Minka-compatible ledger, as open-ledger serves it.
+// Logical model of a Minka-compatible ledger, as open-ledger serves it, with the
+// physical Postgres schema it is kept in.
 //
-// Every Minka record kind is a table; fields come from Minka's OpenAPI spec
-// (../docs.minka.io/_raw/openapi.yaml, `<kind>-data` and `<kind>-meta` schemas).
-// Arrays inside a record that carry relations (intent claims, wallet routes, proofs,
-// report assets) are drawn as their own tables. References are by handle, which is
-// unique per ledger; every table except `ledgers` is scoped by `ledger`, left
-// unconnected so the diagram stays readable.
+// Written for DBML 10.x (@dbml/core 10.3.1): open-diagram (github.com/stepanic/open-diagram)
+// and dbdiagram.io. It uses TablePartial, Dep, checks, records, DiagramView and custom
+// properties, which drawDB (@dbml/core 3.13.9) cannot read; drawDB compatibility was
+// given up on 2026-10-19 for a richer model.
 //
-// Physically open-ledger keeps all records in one Postgres table (`records`, data and
-// meta as jsonb; server/src/pg-store.ts). The "Server internals" group is that schema.
-// Open with drawDB (Import → DBML) or dbdiagram.io.
+// Every claim below is taken from server/src (file named in the notes) or from Minka's
+// OpenAPI spec (../docs.minka.io/_raw/openapi.yaml, schemas `<kind>-data`/`<kind>-meta`).
+// Where the two differ, the code wins and the note says so.
 
 Project open_ledger {
   database_type: 'PostgreSQL'
-  Note: 'Logical model of the Minka ledger API (2.47) as implemented by open-ledger. Records reference each other by handle within one ledger.'
+  Note: '''
+    # open-ledger: data model
+
+    Logical model of the Minka ledger API (2.47.4, `SEMVER` in server/src/app.ts) as
+    open-ledger implements it, plus the physical Postgres schema (`pg.*`).
+
+    ## How to read it
+
+    - **A table per record kind.** A record on the wire is `{hash, data, luid, meta}`.
+      Plain columns are `data.*`; quoted columns `"meta.*"` are server-managed metadata.
+      The shared parts come from the partials `envelope`, `record_data` and `record_meta`.
+    - **References are by handle**, unique per (ledger, kind) (`pg.records` unique
+      index). A luid (`$wlt.-…`) identifies a record globally; a path id may be either.
+    - **`parent` is never a parent record.** It is the hash of the version being
+      replaced, required on update and drop (`record.parent-hash-invalid` otherwise).
+    - **Every logical table is scoped by `ledger`** (the `x-ledger` header). Those
+      references are left out to keep the canvas readable; ledgers themselves live in
+      the server scope `ledger = ''`.
+    - Arrays inside a record that carry relations are drawn as their own tables:
+      claims, wallet routes, access rules, policy values, bridge security rules,
+      proofs, report assets, and the entries an intent resolves to.
+    - `Dep` lines are data lineage: what is derived from what (physical → logical,
+      claims → entries → balances, …).
+  '''
 }
 
-// ---- Ledger ------------------------------------------------------------------------
+// =====================================================================================
+// Enums. Closed sets only: each is the list the code validates or produces.
+// =====================================================================================
 
-Table ledgers [headercolor: #334155] {
+// Path segment = store kind (KINDS, app.ts). `events` and `requests` are store kinds without a create route.
+Enum record_kind {
+  ledgers [note: '$ldg']
+  symbols [note: '$sym']
+  wallets [note: '$wlt']
+  intents [note: '$int']
+  signers [note: '$snr']
+  circles [note: '$crc']
+  policies [note: '$plc']
+  "circle-signers" [note: '$csn; keyed by luid, no handle']
+  bridges [note: '$brg']
+  schemas [note: '$sch']
+  effects [note: '$eff']
+  anchors [note: '$anc']
+  domains [note: '$dom']
+  factors [note: '$snf, signer factors']
+  reports [note: '$rep']
+  events [note: '$evd, event deliveries (core.ts enqueue)']
+  requests [note: '$req, request journal (journal.ts)']
+}
+
+// intents."meta.status" (core.ts). The spec enum also has created, failed, accepted; open-ledger never sets them on meta.
+Enum intent_status {
+  pending [note: 'created and being resolved; waits here for missing signatures until expiry']
+  prepared [note: 'every participant prepared (2PC phase 1)']
+  committed [note: 'cleared by the core; bridges asked to commit']
+  completed [note: 'final']
+  aborted [note: 'failure seen; bridges asked to abort']
+  rejected [note: 'final']
+}
+
+// custom.status on an intent proof, i.e. the steps of the trail (core.ts header). Wider than intent_status.
+Enum intent_proof_status {
+  created [note: 'client proof, then the ledger countersigns with the luid']
+  pending
+  resolved [note: 'one proof per resolved entry: wallet, symbol, amount, schema, inputs']
+  prepared [note: 'per entry by core or bridge, then for the intent']
+  committed [note: 'awaiting-clearance, then cleared']
+  completed
+  failed [note: 'reason + detail, e.g. core.limit-exceeded, core.intent-expired']
+  error [note: 'core.bridge-unreachable: a delivery gave up; changes nothing else']
+  aborted
+  rejected
+}
+
+// intent claim oneOf (schemas.ts claims)
+Enum claim_action {
+  issue [note: 'target, symbol, amount > 0']
+  transfer [note: 'source, target, symbol, amount > 0']
+  destroy [note: 'source, symbol, amount > 0']
+  limit [note: 'wallet, symbol, metric, amount (any integer)']
+}
+
+// limit claims and wallet limits
+Enum claim_metric {
+  minBalance [note: 'default 0: no overdraft unless lowered']
+  maxBalance
+  dailyAmount [note: 'only with config.limits.aggregated.enabled']
+  dailyCount [note: 'only with config.limits.aggregated.enabled']
+}
+
+// An entry is one side of a claim after resolution (core.ts Entry)
+Enum entry_schema {
+  debit
+  credit
+}
+
+// store.ts BalanceRow
+Enum balance_schema {
+  available
+  reserved [note: 'held by the core between prepare and commit/abort']
+}
+
+// wallet-route-action (routing.ts)
+Enum route_action {
+  debit [note: 'input route: the wallet is a transfer source']
+  credit [note: 'output route: redirect to target']
+  forward [note: 'output route: accept here, then a new intent (origin = this) moves it on']
+  accept [note: 'output route: stop here']
+}
+
+// event-delivery meta.status (core.ts, bridges.ts Outcome)
+Enum delivery_status {
+  pending
+  running [note: 'an attempt in flight; recorded on the reference, not in the spec enum']
+  delivered [note: '2xx from the target']
+  failed [note: 'retried from 1 s, x1.2, at most 1 h apart']
+  cancelled [note: '501, a rule that cannot be applied, or retry cap (6 attempts)']
+}
+
+// reports.ts REPORT_STATUSES and transition table NEXT
+Enum report_status {
+  created [note: '-> pending | rejected']
+  pending [note: '-> completed | rejected']
+  completed [note: '-> settled; carries meta.assets']
+  rejected [note: '-> pending | completed']
+  settled [note: 'final']
+}
+
+// The eight policy system schemas every ledger publishes (system-schemas.ts)
+Enum policy_schema {
+  status [note: 'which statuses a record may take, and the quorum that must sign (status.ts)']
+  access [note: 'values are access rules; {policy: handle} in a record expands to them']
+  processing [note: 'aspects: per action, a bridge and a strategy (forwarding.ts)']
+  layout
+  labels
+  schedule
+  authentication
+  dtc
+}
+
+// schema-data.record (schemas.ts DATA.schemas)
+Enum schema_record {
+  anchor
+  "anchor-lookup"
+  bridge
+  circle
+  domain
+  effect
+  intent
+  policy
+  report
+  signer
+  "signer-factor"
+  symbol
+  wallet
+}
+
+// signer factor shapes (schemas.ts factorData); system schemas key-pair, oauth-client-credentials, otp
+Enum factor_schema {
+  "key-pair" [note: 'format + public required']
+  "oauth-client-credentials" [note: 'clientId/clientSecret, server-generated when omitted']
+  otp
+}
+
+// ledger config access.strategy (access.ts)
+Enum access_strategy {
+  "record-based" [note: 'default: record, ledger and server rules add up']
+  "policy-based" [note: 'only active access policies count']
+}
+
+// intent config.commit
+Enum commit_mode {
+  auto
+  manual
+}
+
+// schemas.ts accessActions
+Enum access_action {
+  abort
+  access [note: 'gate: any mutation inside a ledger needs it on the ledger']
+  activate
+  "retry-event"
+  any
+  "assign-signer"
+  commit
+  create
+  destroy
+  drop
+  issue
+  limit
+  lookup
+  manage
+  query
+  read
+  "remove-signer"
+  spend
+  update
+  reveal
+}
+
+// schemas.ts accessRecords; `<kind>-proof` covers adding proofs
+Enum access_record {
+  any
+  ledger
+  "ledger-proof"
+  server
+  request
+  symbol
+  "symbol-proof"
+  wallet
+  "wallet-proof"
+  intent
+  "intent-proof"
+  anchor
+  "anchor-proof"
+  domain
+  "domain-proof"
+  signer
+  "signer-proof"
+  "signer-factor"
+  "signer-factor-proof"
+  "signer-factor-secret"
+  circle
+  "circle-proof"
+  "circle-signer"
+  policy
+  "policy-proof"
+  schema
+  "schema-proof"
+  bridge
+  "bridge-proof"
+  effect
+  "effect-proof"
+  report
+  "report-proof"
+}
+
+// schemas.ts trait
+Enum bridge_trait {
+  debits
+  credits
+  statuses
+  anchors
+  domains
+  effects
+  ping
+}
+
+// bridge-security-rule (schemas.ts securityRule, core.ts authorize)
+Enum secure_schema {
+  oauth2 [note: 'clientId, tokenUrl, clientSecret, scope; Bearer token, cached (oauth2.ts)']
+  header [note: 'key, value']
+  mtls [note: 'generic shape {schema, public, secret}; client certificate, https only. Ours: the reference makes no call']
+}
+
+// effect action oneOf
+Enum effect_action_schema {
+  webhook [note: 'endpoint']
+  bridge [note: 'bridge']
+}
+
+// processing policy value action (schemas.ts ASPECT_ACTIONS)
+Enum aspect_action {
+  read
+  query
+  create
+  update
+  drop
+  sign
+}
+
+// forwarding.ts
+Enum aspect_strategy {
+  proxy [note: 'the bridge answers instead of the ledger; nothing kept']
+  validate [note: 'writes only: the bridge accepts first, then the ledger writes']
+  fallback [note: 'reads only: own record if any, else the bridge']
+  synchronize [note: 'writes: keep what the bridge answered']
+}
+
+// changes "meta.action" (app.ts snapshot)
+Enum change_action {
+  create
+  update
+}
+
+Enum key_format {
+  "ed25519-raw" [note: 'raw 32-byte key, base64 (crypto.ts)']
+}
+
+Enum proof_method {
+  "ed25519-v2" [note: 'digest = sha256(hash + JCS(custom)); result = ed25519(digest)']
+}
+
+// Keys made for every ledger (app.ts POST /ledgers), kept in pg.ledger_keys and published as signers
+Enum server_signer {
+  system [note: 'signs ledger-owned proofs and the server envelope']
+  core [note: 'the ledger as a 2PC participant (prepared/committed per entry)']
+  "system.auth"
+  "system.dtc"
+}
+
+// spec event-signal, schemas.ts SIGNALS (54 values). Raised as `<record>-<what>` by app.ts raise.
+Enum event_signal {
+  "anchor-created"
+  "anchor-dropped"
+  "anchor-proofs-added"
+  "anchor-updated"
+  "balance-received"
+  "bridge-created"
+  "bridge-entry-created"
+  "bridge-entry-proofs-added"
+  "bridge-entry-updated"
+  "bridge-proofs-added"
+  "bridge-updated"
+  "circle-created"
+  "circle-proofs-added"
+  "circle-updated"
+  "domain-created"
+  "domain-proofs-added"
+  "domain-updated"
+  "effect-created"
+  "effect-proofs-added"
+  "effect-updated"
+  "effect-dropped"
+  "intent-created"
+  "intent-proofs-added"
+  "intent-updated"
+  "ledger-created"
+  "ledger-proofs-added"
+  "ledger-updated"
+  "policy-created"
+  "policy-proofs-added"
+  "policy-updated"
+  "report-created"
+  "report-dropped"
+  "report-proofs-added"
+  "report-updated"
+  "request-created"
+  "request-proofs-added"
+  "request-updated"
+  "schema-created"
+  "schema-proofs-added"
+  "schema-updated"
+  "signer-created"
+  "signer-proofs-added"
+  "signer-updated"
+  "signer-factor-created"
+  "signer-factor-updated"
+  "signer-factor-proofs-added"
+  "signer-factor-dropped"
+  "symbol-created"
+  "symbol-proofs-added"
+  "symbol-updated"
+  "wallet-created"
+  "wallet-limited"
+  "wallet-proofs-added"
+  "wallet-updated"
+}
+
+// =====================================================================================
+// Partials: the parts every record shares (spec record-envelope, base-data, base-meta)
+// =====================================================================================
+
+TablePartial envelope {
+  luid varchar [pk, note: '`<prefix>.-` + 16 chars (ids.ts); unique across ledgers']
+  hash varchar [not null, note: 'sha256(JCS(data)), hex (crypto.ts)']
+  ledger varchar [not null, note: 'scope: the x-ledger header; "" for ledgers']
+}
+
+TablePartial record_data {
+  handle varchar [not null, note: 'unique per ledger and kind; may be an address `schema:handle@parent`']
+  parent varchar [note: 'hash of the version replaced; required on update and drop']
+  access json [note: 'access rules (drawn as access_rules)']
+  custom json [note: 'free-form; user schemas may constrain it']
+}
+
+TablePartial record_meta {
+  "meta.proofs" json [not null, note: 'signatures (drawn as proofs); the ledger adds its own with custom.luid']
+  "meta.status" varchar [note: 'set by status proofs (status.ts); `created` at creation']
+  "meta.moment" timestamp [note: 'last mutation']
+  "meta.owners" json [note: 'public keys of the creating proofs']
+  "meta.domain" varchar [note: 'domain joined at creation: a proof custom.domain, else the suffix of a handle with one @ (app.ts namedDomain)']
+}
+
+// =====================================================================================
+// Ledger
+// =====================================================================================
+
+Table ledgers [headercolor: #334155, luid_prefix: '$ldg', api: 'POST /ledgers, GET|PUT|DELETE /ledger, GET /ledgers'] {
   luid varchar [pk, note: '$ldg.…']
-  handle varchar [unique, not null]
-  signer varchar [ref: > signers.handle, note: 'the ledger signer (system)']
+  hash varchar [not null, note: 'of data before config was set to null (reference quirk, app.ts create)']
+  ledger varchar [not null, default: '', note: 'server scope']
+  handle varchar [not null, unique, note: 'the x-ledger value for everything inside']
+  signer varchar [not null, ref: > signers.handle, note: 'server signer, `system`']
   parent varchar
-  config json [note: 'access.strategy, intent.expiryThresholdMinutes, request.journalingEnabled, config.limits.aggregated.enabled, …']
-  access json [note: 'access rules']
+  access json
   custom json
-  status varchar
-  moment timestamp
-  owners json
-  proofs json
-  hash varchar
-  Note: 'One ledger: the scope of every other record.'
+  config json [note: 'null when absent; keys below']
+  "config.access.strategy" access_strategy
+  "config.intent.expiryThresholdMinutes" integer [note: 'pending intents older than this are rejected core.intent-expired']
+  "config.request.journalingEnabled" boolean [note: 'only with OPEN_LEDGER_JOURNAL; otherwise 404']
+  "config.limits.aggregated.enabled" boolean [note: 'enables dailyAmount / dailyCount']
+  "config.domain.resolutionFromHandleEnabled" boolean [note: 'false: the @suffix of a handle is not a domain']
+  "meta.proofs" json [not null]
+  "meta.status" varchar
+  "meta.moment" timestamp
+  "meta.owners" json
+  Note: '''
+    The scope of every other record. Creating one also makes the four server
+    signers (pg.ledger_keys, published as `signers`), twelve system schemas and two
+    status policies (`access-policy:status`, `intent:status`). Drop: signed
+    `{luid, data.parent}`, then every record and history of the ledger is gone.
+  '''
 }
 
-Table schemas [headercolor: #334155] {
-  luid varchar [pk, note: '$sch.…']
-  ledger varchar [not null]
-  handle varchar [not null]
-  record varchar [note: 'record kind it validates, e.g. wallet, intent, policy']
-  format varchar [note: 'json-schema']
-  schema json
+Table schemas [headercolor: #334155, luid_prefix: '$sch', api: '/schemas'] {
+  ~envelope
+  ~record_data
+  record schema_record [not null, note: 'kind it validates']
+  format varchar [not null, note: 'json-schema (the only value)']
+  schema json [not null, note: 'JSON Schema draft-07; content checked (user-schemas.ts)']
   extend varchar [ref: > schemas.handle]
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, handle) [unique] }
-  Note: 'User schemas, plus the system schemas every ledger publishes (status, layout, labels, …).'
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: '''
+    A record naming a schema in data.schema is validated against it (every error);
+    once a schema for a kind exists, a record of that kind must name one.
+    Twelve system schemas per ledger: eight policy schemas, bridge `rest`,
+    factor schemas `key-pair`, `oauth-client-credentials`, `otp`.
+  '''
 }
 
-Table requests [headercolor: #334155] {
-  luid varchar [pk]
-  ledger varchar [not null]
+Table requests [headercolor: #334155, luid_prefix: '$req', api: 'GET /system/requests'] {
+  ~envelope
   handle varchar [not null]
-  schema varchar
-  record varchar [note: 'record kind of the request']
-  action varchar [note: 'create, update, drop, …']
-  source varchar
-  target varchar
-  params json
-  result json
-  moment timestamp
-  Note: 'Request journal (GET /system/requests); kept only with request.journalingEnabled.'
+  schema varchar [not null, note: 'protocol']
+  record varchar [not null, note: 'e.g. wallet, wallet:alice, ledger-proof (journal.ts describe)']
+  action varchar [not null, note: 'create, update, drop, read, query, lookup, assign-signer, …']
+  source varchar [not null, note: 'who called']
+  target varchar [not null, note: 'the ledger']
+  params json [not null, note: 'request as sent, bearer redacted']
+  result json [not null, note: 'response as sent']
+  access json [not null]
+  "meta.moment" timestamp
+  Note: 'Request journal, kept only when config.request.journalingEnabled and OPEN_LEDGER_JOURNAL are on.'
 }
 
-// ---- Money -------------------------------------------------------------------------
+// =====================================================================================
+// Money
+// =====================================================================================
 
-Table symbols [headercolor: #0f766e] {
-  luid varchar [pk, note: '$sym.…']
-  ledger varchar [not null]
-  handle varchar [not null, note: 'e.g. usd']
-  factor integer [note: '100 = two decimals']
+Table symbols [headercolor: #0f766e, luid_prefix: '$sym', api: '/symbols'] {
+  ~envelope
+  ~record_data
   schema varchar
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  owners json
-  indexes { (ledger, handle) [unique] }
+  factor integer [not null, note: 'amounts are integers in minor units; 100 = two decimals']
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: 'A currency or asset. Issue and destroy need `issue` / `destroy` access on it.'
 }
 
-Table wallets [headercolor: #0f766e] {
-  luid varchar [pk, note: '$wlt.…']
-  ledger varchar [not null]
-  handle varchar [not null, note: 'may carry a domain: account@domain']
+Table wallets [headercolor: #0f766e, luid_prefix: '$wlt', api: '/wallets, /wallets/{id}/balances|limits|anchors|domains'] {
+  ~envelope
+  ~record_data
   schema varchar
-  bridge varchar [ref: > bridges.handle, note: 'set: the wallet lives in an external system']
-  parent varchar [ref: > wallets.handle]
-  custom json
-  access json
-  moment timestamp
-  owners json
-  indexes { (ledger, handle) [unique] }
+  bridge varchar [ref: >? bridges.handle, note: 'set: entries on this wallet go to that bridge (2PC); must exist']
+  routes json [note: 'drawn as wallet_routes']
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: '''
+    Holds balances. An address that is no wallet resolves up the hierarchy
+    `schema:handle@parent → schema@parent → parent → schema` (routing.ts).
+    A bridge with wallets cannot be dropped.
+  '''
 }
 
-Table balances [headercolor: #0f766e] {
-  luid varchar [pk]
+Table balances [headercolor: #0f766e, luid_prefix: '$wbl', api: 'GET /wallets/{id}/balances'] {
+  luid varchar [pk, note: '$wbl.…']
+  hash varchar
   ledger varchar [not null]
   wallet varchar [not null, ref: > wallets.handle]
   symbol varchar [not null, ref: > symbols.handle]
-  schema varchar [not null, note: 'available, reserved, …']
-  amount bigint
-  parent varchar
-  moment timestamp
-  indexes { (ledger, wallet, symbol, schema) [unique] }
-  Note: 'GET /wallets/{id}/balances; signed rows.'
+  schema balance_schema [not null]
+  amount bigint [not null, note: 'signed, minor units']
+  parent varchar [note: '"" once the row was moved again or reserved; absent on a row made by one credit (core.ts Books.move)']
+  "meta.moment" timestamp
+  indexes {
+    (ledger, wallet, symbol, schema) [unique]
+  }
+  Note: 'One row per wallet × symbol × schema, listed by symbol then schema. Moved only inside the transaction that processes an intent.'
 }
 
-Table limits [headercolor: #0f766e] {
+Table limits [headercolor: #0f766e, luid_prefix: '$wbl', api: 'GET /wallets/{id}/limits'] {
+  luid varchar [pk, note: '$wbl.… like balances']
+  hash varchar [not null]
   ledger varchar [not null]
   wallet varchar [not null, ref: > wallets.handle]
   symbol varchar [not null, ref: > symbols.handle]
-  metric varchar [not null, note: 'minBalance, maxBalance, dailyAmount, dailyCount']
-  amount bigint
-  moment timestamp
-  indexes { (ledger, wallet, symbol, metric) [unique] }
-  Note: 'Set by limit claims; GET /wallets/{id}/limits.'
+  metric claim_metric [not null]
+  amount bigint [not null]
+  "meta.proofs" json [note: 'signed by system']
+  "meta.moment" timestamp
+  indexes {
+    (ledger, wallet, symbol, metric) [unique]
+  }
+  Note: 'Set by limit claims (replaces the row for the same metric). Checked when entries are resolved: debit keeps available ≥ minBalance, credit keeps it ≤ maxBalance.'
 }
 
-// ---- Addressing --------------------------------------------------------------------
+// =====================================================================================
+// Addressing
+// =====================================================================================
 
-Table domains [headercolor: #0369a1] {
-  luid varchar [pk, note: '$dom.…']
-  ledger varchar [not null]
-  handle varchar [not null, note: 'the part after @ in a wallet handle']
+Table domains [headercolor: #0369a1, luid_prefix: '$dom', api: '/domains'] {
+  ~envelope
+  ~record_data
   schema varchar
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, handle) [unique] }
+  domain varchar [ref: >? domains.handle, note: 'parent domain of a subdomain, set by the server after the handle']
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: 'A record joins a domain at creation ("meta.domain"); access policies can be bound to a domain and its parents (access.ts).'
 }
 
-Table anchors [headercolor: #0369a1] {
-  luid varchar [pk, note: '$anc.…']
-  ledger varchar [not null]
-  handle varchar [not null, note: 'an alias, e.g. a phone number or IBAN']
+Table anchors [headercolor: #0369a1, luid_prefix: '$anc', api: '/anchors, /wallets/{id}/anchors, POST /wallets/{id}/anchors/!lookup'] {
+  ~envelope
+  ~record_data
   schema varchar
-  wallet varchar [ref: > wallets.handle]
-  symbol varchar [ref: > symbols.handle]
-  source varchar
-  target varchar
+  wallet varchar [ref: >? wallets.handle, note: 'an address; existence required only with anchor.walletRequired']
+  symbol varchar [note: 'handle or {handle, custom}']
+  source varchar [note: 'handle or {handle, custom}']
+  target varchar [not null, note: 'handle or {handle, custom}; required']
   amount bigint
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, handle) [unique] }
-  Note: 'Resolves an address to a wallet; POST /wallets/{id}/anchors/!lookup.'
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: '''
+    An alias (phone, IBAN, …) for an account. Under a `processing` policy for record
+    `anchor`, reads and writes go to a bridge (forwarding.ts); !lookup finds nothing
+    without one. Anchor changes carry no labels.
+  '''
 }
 
-Table wallet_routes [headercolor: #0369a1] {
+Table wallet_routes [headercolor: #0369a1, note: 'wallets.data.routes[]'] {
   wallet varchar [not null, ref: > wallets.handle]
   position integer [not null]
-  action varchar [note: 'forward, accept, debit, credit']
-  filter json
-  target varchar [ref: > wallets.handle]
-  indexes { (wallet, position) [pk] }
-  Note: 'wallets.data.routes[]: where claims to a wallet go.'
+  action route_action [not null]
+  filter json [note: 'claim paths (symbol.handle, amount) and ctx.intent; equality or $ operators']
+  target varchar [not null, ref: > wallets.handle, note: 'an address, resolved like any other']
+  indexes {
+    (wallet, position) [pk]
+  }
+  Note: 'First matching route of its group wins; no match in a group with routes refuses the claim. debit/credit followed at most 3 hops (MAX_DEPTH), cycles refused.'
 }
 
-// ---- Intents -----------------------------------------------------------------------
+// =====================================================================================
+// Intents
+// =====================================================================================
 
-Table intents [headercolor: #6d28d9] {
-  luid varchar [pk, note: '$int.…']
-  ledger varchar [not null]
-  handle varchar [not null]
-  schema varchar
-  config json [note: 'commit: auto | manual']
-  origin varchar [ref: > intents.handle, note: 'a forward intent: the intent it continues']
-  thread varchar [note: 'meta.thread; intents_by_thread index in Postgres']
-  status varchar [note: 'pending, prepared, committed, completed, rejected, aborted, …']
-  routed boolean
-  domains json
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  owners json
-  indexes { (ledger, handle) [unique] }
-  Note: 'Immutable once created; status moves by proofs.'
+Table intents [headercolor: #6d28d9, luid_prefix: '$int', api: '/intents'] {
+  ~envelope
+  ~record_data
+  schema varchar [note: 'intent type, e.g. transfer']
+  claims json [not null, note: 'drawn as claims']
+  config json
+  "config.commit" commit_mode
+  origin varchar [ref: >? intents.handle, note: 'set on an intent a forward route made: the intent it continues']
+  ~record_meta
+  "meta.status" intent_status [note: 'moved only by the ledger (intent:status policy, quorum system)']
+  "meta.thread" varchar [not null, note: '`-` + 16 chars; inherited from origin. At most 10 intents (MAX_THREAD)']
+  "meta.routed" boolean
+  "meta.domains" json [note: 'domains of the wallets the claims name, sorted']
+  indexes {
+    (ledger, handle) [unique]
+    (ledger, "meta.thread") [name: 'intents_by_thread', note: 'pg.records expression index']
+  }
+  Note: '''
+    Data is immutable once created; everything that happens is appended to the
+    proof trail and mirrored in "meta.status". Processed in one transaction that
+    serialises the ledger, so balances are never seen half-moved (core.ts).
+  '''
 }
 
-Table claims [headercolor: #6d28d9] {
+Table claims [headercolor: #6d28d9, note: 'intents.data.claims[]'] {
   intent varchar [not null, ref: > intents.handle]
   position integer [not null]
-  action varchar [not null, note: 'issue, transfer, destroy, limit']
-  source varchar [ref: > wallets.handle, note: 'transfer, destroy']
-  target varchar [ref: > wallets.handle, note: 'issue, transfer']
-  wallet varchar [ref: > wallets.handle, note: 'limit']
+  action claim_action [not null]
+  source varchar [ref: >? wallets.handle, note: '{handle}: an address; transfer, destroy']
+  target varchar [ref: >? wallets.handle, note: '{handle}: an address; issue, transfer']
+  wallet varchar [ref: >? wallets.handle, note: '{handle}; limit']
+  symbol varchar [not null, ref: > symbols.handle, note: '{handle}']
+  amount bigint [not null, note: 'integer; ≤ 2^53-1']
+  metric claim_metric [note: 'limit only']
+  indexes {
+    (intent, position) [pk]
+  }
+  checks {
+    `action = 'limit' or amount > 0` [name: 'positive_amount']
+    `action not in ('transfer', 'destroy') or source is not null` [name: 'has_source']
+    `action not in ('issue', 'transfer') or target is not null` [name: 'has_target']
+    `action <> 'limit' or (wallet is not null and metric is not null)` [name: 'limit_shape']
+  }
+  Note: 'Validated on create (schemas.ts claims). Permissions: spend on a debited wallet, issue/destroy on the symbol, limit on the wallet; checked after resolution.'
+}
+
+Table intent_entries [headercolor: #6d28d9, note: 'proofs with custom.status = resolved'] {
+  intent varchar [not null, ref: > intents.handle]
+  handle varchar [not null, note: '17 chars (core.ts entryId); the idempotency key towards a bridge']
+  schema entry_schema [not null]
+  wallet varchar [not null, ref: > wallets.handle, note: 'after address resolution and routes']
   symbol varchar [not null, ref: > symbols.handle]
-  amount bigint
-  metric varchar [note: 'limit claims']
-  indexes { (intent, position) [pk] }
-  Note: 'intents.data.claims[]'
+  amount bigint [not null]
+  inputs json [note: 'positions of the claims it came from']
+  bridge varchar [ref: >? bridges.handle, note: 'the wallet’s bridge, if any']
+  indexes {
+    (intent, handle) [pk]
+  }
+  Note: '''
+    Not stored on its own: one `resolved` proof per entry in the intent’s trail.
+    Entries of one bridge may be grouped into a part by the bridge’s
+    debits|credits.claims.groupBy; a part is what the bridge prepares, commits or aborts.
+  '''
 }
 
-// ---- Identity and access -----------------------------------------------------------
+// =====================================================================================
+// Identity and access
+// =====================================================================================
 
-Table signers [headercolor: #b45309] {
-  luid varchar [pk, note: '$snr.…']
-  ledger varchar [not null]
-  handle varchar [not null]
+Table signers [headercolor: #b45309, luid_prefix: '$snr', api: '/signers'] {
+  ~envelope
+  ~record_data
   schema varchar
-  public varchar [note: 'public key']
-  format varchar [note: 'ed25519-raw, …']
-  secret varchar [note: 'sealed; never served']
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, handle) [unique] }
+  public varchar [note: 'base64 public key; filterable']
+  format key_format
+  secret varchar [note: '`{{ secret.<name> }}`; the value is sealed in pg.secrets, never served']
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: 'A key that signs proofs. The four server signers are published here, self-signed and countersigned by system.'
 }
 
-Table signer_factors [headercolor: #b45309] {
-  luid varchar [pk, note: '$snf.…']
-  ledger varchar [not null]
-  handle varchar [not null]
+Table signer_factors [headercolor: #b45309, luid_prefix: '$snf', api: '/signers/{signer}/factors'] {
+  ~envelope
+  ~record_data
   signer varchar [not null, ref: > signers.handle]
-  schema varchar [note: 'key-pair, oauth-credentials, default']
-  public varchar
-  format varchar
-  clientId varchar
-  clientSecret varchar [note: 'sealed']
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, signer, handle) [unique] }
+  schema factor_schema
+  format varchar [note: 'key-pair']
+  public varchar [note: 'key-pair']
+  secret varchar [note: 'key-pair, sealed']
+  clientId varchar [note: 'oauth-client-credentials; used at POST /oauth/token']
+  clientSecret varchar [note: 'oauth-client-credentials, sealed']
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique, note: 'store kind `factors`']
+  }
+  Note: 'Additional credentials of a signer. Each shape is closed (unevaluatedProperties: false).'
 }
 
-Table circles [headercolor: #b45309] {
-  luid varchar [pk, note: '$crc.…']
-  ledger varchar [not null]
-  handle varchar [not null]
+Table circles [headercolor: #b45309, luid_prefix: '$crc', api: '/circles'] {
+  ~envelope
+  ~record_data
   schema varchar
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, handle) [unique] }
-  Note: 'A group of signers that access rules can name.'
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: 'A group of signers; access rules can name a circle.'
 }
 
-Table circle_signers [headercolor: #b45309] {
-  luid varchar [pk, note: '$csn.…']
-  ledger varchar [not null]
+Table circle_signers [headercolor: #b45309, luid_prefix: '$csn', api: '/circles/{id}/signers'] {
+  ~envelope
   circle varchar [not null, ref: > circles.handle]
   signer varchar [not null, ref: > signers.handle]
   schema varchar
   custom json
-  moment timestamp
+  "meta.proofs" json [not null]
+  "meta.moment" timestamp
+  "meta.owners" json
+  Note: 'Keyed by luid (no handle). Raises no events. Access actions assign-signer / remove-signer.'
 }
 
-Table policies [headercolor: #b45309] {
-  luid varchar [pk, note: '$plc.…']
-  ledger varchar [not null]
-  handle varchar [not null]
-  schema varchar [not null, note: 'access, status, processing, labels, layout, schedule, authentication, dtc']
-  record varchar [note: 'record kind it applies to']
-  extend varchar [ref: > policies.handle]
+Table policies [headercolor: #b45309, luid_prefix: '$plc', api: '/policies'] {
+  ~envelope
+  ~record_data
+  schema policy_schema [not null]
+  record varchar [note: 'record kind it applies to; absent: all']
+  extend varchar [ref: >? policies.handle, note: 'values of the extended policy come first']
+  filter json [note: 'data fields the record must match, e.g. {schema: access}']
+  values json [not null, note: 'drawn as policy_values']
+  ~record_meta
+  "meta.status" varchar [note: 'access policies: created, active, inactive (access-policy:status)']
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: 'Every ledger starts with two: access-policy:status and intent:status. Inactive status policies do not apply.'
+}
+
+Table policy_values [headercolor: #b45309, note: 'policies.data.values[]; shape depends on the policy schema'] {
+  policy varchar [not null, ref: > policies.handle]
+  position integer [not null]
+  status json [note: 'status: a status, or {$in}/{$nin}']
+  quorum json [note: 'status: signer matchers that must all sign the same status']
+  action access_action [note: 'access: one action (an array is refused)']
+  record access_record [note: 'access: defaults to the policy record']
+  signer json [note: 'access']
+  filter json [note: 'access: allowed keys per record kind (access.ts FILTER_KEYS)']
+  "aspect.action" aspect_action [note: 'processing']
+  "invoke.bridge" varchar [ref: >? bridges.handle, note: 'processing']
+  "config.strategy" aspect_strategy [note: 'processing']
+  indexes {
+    (policy, position) [pk]
+  }
+}
+
+Table access_rules [headercolor: #b45309, note: 'data.access[] of any record'] {
+  owner_kind record_kind [not null]
+  owner_handle varchar [not null]
+  position integer [not null]
+  action access_action [note: 'or {$in}/{$nin}; required unless policy']
+  record access_record [note: 'absent on a ledger rule: the ledger record only']
+  signer json [note: 'matched against the proofs: public, handle, circle, $record: owner …']
+  bearer json [note: 'matched against the JWT claims; $signer against its key']
   filter json
-  values json [note: 'rules; their shape depends on schema']
-  config json
-  action json [note: 'schedule policies']
-  inputs json
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, handle) [unique] }
+  policy varchar [ref: >? policies.handle, note: '{policy: handle}: stands for that access policy’s values']
+  indexes {
+    (owner_kind, owner_handle, position) [pk]
+  }
+  Note: '''
+    Record, ledger and server rules add up; any match grants. A rule with neither
+    signer nor bearer grants everyone. Every mutation inside a ledger also needs
+    `access` on the ledger. With access.strategy policy-based only active access
+    policies count (access.ts).
+  '''
 }
 
-// ---- Integration -------------------------------------------------------------------
+// =====================================================================================
+// Integration
+// =====================================================================================
 
-Table bridges [headercolor: #be123c] {
-  luid varchar [pk, note: '$brg.…']
-  ledger varchar [not null]
-  handle varchar [not null]
-  schema varchar [note: 'rest']
-  config json [note: 'server, debits.claims.groupBy, credits.claims.groupBy']
-  traits json
-  secure json [note: 'authentication rules: oauth2, mtls, …']
-  status varchar [note: 'active once activated']
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, handle) [unique] }
-  Note: 'An external participant reached over the bridge protocol (2PC).'
+Table bridges [headercolor: #be123c, luid_prefix: '$brg', api: '/bridges, /bridges/{id}/events, /bridges/{id}/activate'] {
+  ~envelope
+  ~record_data
+  schema varchar [note: 'must be a bridge schema: rest']
+  config json [not null]
+  "config.server" varchar [not null, note: 'base URL, ends in /v2']
+  "config.debits.claims.groupBy" json
+  "config.credits.claims.groupBy" json
+  traits json [note: 'bridge_trait names or objects']
+  secure json [not null, note: 'drawn as bridge_secure_rules']
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: '''
+    An external participant reached over the bridge protocol (bridges.ts):
+    prepare POST /debits|/credits, commit / abort POST /<schema>s/<entry>/commit|abort,
+    status PUT /intents/<intent>. It answers 202 and reports later with a proof on
+    the intent.
+  '''
 }
 
-Table effects [headercolor: #be123c] {
-  luid varchar [pk, note: '$eff.…']
-  ledger varchar [not null]
-  handle varchar [not null]
+Table bridge_secure_rules [headercolor: #be123c, note: 'bridges.data.secure[]'] {
+  bridge varchar [not null, ref: > bridges.handle]
+  position integer [not null]
+  schema secure_schema [not null]
+  clientId varchar [note: 'oauth2']
+  tokenUrl varchar [note: 'oauth2']
+  clientSecret varchar [note: 'oauth2, `{{ secret.<name> }}`']
+  scope varchar [note: 'oauth2']
+  key varchar [note: 'header name']
+  value varchar [note: 'header, `{{ secret.<name> }}`']
+  public varchar [note: 'generic / mtls: client certificate']
+  secret varchar [note: 'generic / mtls, `{{ secret.<name> }}`']
+  indexes {
+    (bridge, position) [pk]
+  }
+  Note: 'Secret values travel once, in meta.secret of the create or update, and are sealed into pg.secrets as `bridge/<handle>/<name>`.'
+}
+
+Table effects [headercolor: #be123c, luid_prefix: '$eff', api: '/effects, /effects/{id}/events'] {
+  ~envelope
+  ~record_data
   schema varchar
-  signal varchar [note: 'e.g. intent-created, balance-received']
+  signal event_signal [not null]
   filter json
-  action_schema varchar [note: 'webhook or bridge']
-  action_bridge varchar [ref: > bridges.handle]
-  action_endpoint varchar [note: 'webhook URL']
-  status varchar
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, handle) [unique] }
+  "action.schema" effect_action_schema [not null]
+  "action.endpoint" varchar [note: 'webhook URL']
+  "action.bridge" varchar [ref: >? bridges.handle]
+  ~record_meta
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: 'A subscription: every matching signal becomes a delivery to a webhook or a bridge.'
 }
 
-Table event_deliveries [headercolor: #be123c] {
-  luid varchar [pk, note: '$evd.…']
+Table event_deliveries [headercolor: #be123c, luid_prefix: '$evd', api: 'GET /bridges|effects/{id}/events, …/events/retry'] {
+  luid varchar [pk]
+  hash varchar [not null]
   ledger varchar [not null]
-  handle varchar [not null]
-  bridge varchar [ref: > bridges.handle]
-  effect varchar [ref: > effects.handle]
-  record varchar [note: 'kind of the linked record']
-  linked varchar [note: 'handle of the linked record, e.g. an intent']
-  status varchar [note: 'pending, running, delivered, failed, cancelled']
-  replay integer
-  output json [note: 'the call body, sent unchanged on retry']
-  moment timestamp
-  proofs json
-  Note: 'Every call to a bridge or webhook; GET /bridges/{id}/events.'
+  handle varchar [not null, note: '17 chars (core.ts entryId)']
+  bridge varchar [ref: >? bridges.handle]
+  effect varchar [ref: >? effects.handle]
+  record varchar [note: 'intent for bridge calls; the raised record for effects']
+  linked varchar [note: 'handle of that record']
+  "meta.status" delivery_status [not null]
+  "meta.replay" integer [not null, default: 0, note: 'attempts made']
+  "meta.output" json [note: 'the call body, sent unchanged on every retry']
+  "meta.proofs" json [note: 'one system proof per attempt, with its outcome']
+  "meta.moment" timestamp
+  indexes {
+    (ledger, handle) [unique, note: 'store kind `events`']
+  }
+  Note: 'Written in the same transaction as the step that caused the call, so no call is lost between the trail and the wire; resumed on start.'
 }
 
-// ---- Reports -----------------------------------------------------------------------
+// =====================================================================================
+// Reports
+// =====================================================================================
 
-Table reports [headercolor: #1d4ed8] {
-  luid varchar [pk, note: '$rep.…']
-  ledger varchar [not null]
-  handle varchar [not null]
-  schema varchar
-  status varchar
-  labels json
-  parent varchar
-  custom json
-  access json
-  moment timestamp
-  indexes { (ledger, handle) [unique] }
+Table reports [headercolor: #1d4ed8, luid_prefix: '$rep', api: '/reports, GET /reports/{id}/assets/{asset}'] {
+  ~envelope
+  ~record_data
+  schema varchar [not null, note: 'report type; its schema (record: report) gives the parameters in custom']
+  ~record_meta
+  "meta.status" report_status [note: 'moved by status proofs of the reporting bridge; a repeat of the current status is dropped']
+  "meta.assets" json [note: 'drawn as report_assets']
+  indexes {
+    (ledger, handle) [unique]
+  }
+  Note: 'Status policies on reports must allow `created`, or creation is refused.'
 }
 
-Table report_assets [headercolor: #1d4ed8] {
+Table report_assets [headercolor: #1d4ed8, note: 'reports."meta.assets"[]'] {
   report varchar [not null, ref: > reports.handle]
-  handle varchar [not null]
-  output varchar [note: 'location in the reporting bucket']
-  indexes { (report, handle) [pk] }
-  Note: 'reports.meta.assets[]'
+  handle varchar [not null, note: 'file name']
+  output varchar [not null, note: 'gs://{bucket}/ledgers/{ledger}[/domains/{domain}]/schemas/{schema}/reports/{luid}/assets/{file}']
+  indexes {
+    (report, handle) [pk]
+  }
+  Note: 'Served from OPEN_LEDGER_REPORTS_DIR when configured.'
 }
 
-// ---- History and proofs ------------------------------------------------------------
+// =====================================================================================
+// History and proofs
+// =====================================================================================
 
-Table proofs [headercolor: #4b5563] {
-  ledger varchar [not null]
-  record_kind varchar [not null]
+Table proofs [headercolor: #4b5563, note: '"meta.proofs"[] of any record'] {
+  record_kind record_kind [not null]
   record_handle varchar [not null]
   position integer [not null]
-  signer varchar [ref: > signers.handle]
-  method varchar
-  public varchar
-  digest varchar
-  result varchar [note: 'signature']
-  custom json [note: 'for intents: status, handle of the entry, coreId, reason, detail']
-  moment timestamp
-  indexes { (ledger, record_kind, record_handle, position) [pk] }
-  Note: 'meta.proofs[] of any record: signatures, and the status trail of intents.'
+  signer varchar [ref: >? signers.handle, note: 'resolved from the public key']
+  method proof_method
+  public varchar [not null]
+  digest varchar [not null, note: 'sha256(hash + JCS(custom))']
+  result varchar [not null, note: 'ed25519 signature, base64']
+  custom json
+  "custom.moment" timestamp
+  "custom.status" varchar [note: 'a status request; on intents see intent_proof_status']
+  "custom.luid" varchar [note: 'the ledger’s countersignature at creation']
+  "custom.domain" varchar [note: 'the domain a new record joins']
+  "custom.handle" varchar [note: 'intents: entry or part handle']
+  "custom.coreId" varchar [note: 'intents: id in the external system']
+  "custom.reason" varchar [note: 'intents: e.g. core.limit-exceeded']
+  "custom.detail" varchar
+  indexes {
+    (record_kind, record_handle, position) [pk]
+  }
+  Note: 'Append-only. Status proofs go through status policies (status.ts): refused, stored without effect until the quorum signs, or applied.'
 }
 
-Table changes [headercolor: #4b5563] {
-  seq bigint [pk, increment]
+Table changes [headercolor: #4b5563, api: 'GET /<kind>/{id}/changes[/{change}]'] {
   ledger varchar [not null]
-  kind varchar [not null]
-  handle varchar [not null]
-  record json [not null, note: 'the record as it was after this change']
-  indexes { (ledger, kind, handle, seq) }
-  Note: 'GET /<kind>/{id}/changes for every record kind.'
+  kind record_kind [not null]
+  handle varchar [not null, note: 'luid for circle signers']
+  "meta.change" integer [not null, note: '1, 2, … per record']
+  "meta.action" change_action [not null]
+  "meta.moment" timestamp
+  "meta.labels" json [note: 'always null; absent on anchors']
+  record json [not null, note: 'the full record as it was after this change']
+  indexes {
+    (ledger, kind, handle, "meta.change") [pk]
+  }
+  Note: 'Kept after a record is dropped.'
 }
 
-// ---- Server internals (the physical Postgres schema) ------------------------------
+// =====================================================================================
+// Physical schema: what pg-store.ts creates. The memory store (store.ts) has the same shape.
+// =====================================================================================
 
-Table records [headercolor: #a16207] {
-  seq bigserial [pk]
+Table pg.records [headercolor: #a16207] {
+  seq bigserial [pk, note: 'list order = creation order']
   ledger text [not null]
-  kind text [not null, note: 'ledgers, symbols, wallets, intents, … (17 kinds)']
-  handle text [not null]
-  luid text [unique, not null]
+  kind text [not null, note: 'record_kind']
+  handle text [not null, note: 'keyOf: handle, or luid for circle signers']
+  luid text [not null, unique]
   hash text [not null]
   data jsonb [not null]
   meta jsonb [not null]
   indexes {
     (ledger, kind, handle) [unique]
-    (ledger, kind) [name: 'intents_by_thread', note: 'partial: (ledger, meta->>thread) where kind = intents']
+    (ledger, `(meta->>'thread')`) [name: 'intents_by_thread', note: 'partial: where kind = intents']
   }
-  Note: 'Every record above, in its wire form.'
+  Note: 'Every logical record kind, in its wire form.'
 }
 
-Table ledger_keys [headercolor: #a16207] {
+Table pg.balances [headercolor: #a16207] {
+  seq bigserial [pk]
   ledger text [not null]
-  signer text [not null, default: 'system']
-  key jsonb [not null]
-  indexes { (ledger, signer) [pk] }
-  Note: 'The ledger server signers (system, core). Never served.'
+  luid text [not null, unique]
+  wallet text [not null]
+  symbol text [not null]
+  schema text [not null]
+  row jsonb [not null, note: 'the balance record as served']
+  indexes {
+    (ledger, wallet, symbol, schema) [unique]
+  }
 }
 
-Table marks [headercolor: #a16207] {
+Table pg.limits [headercolor: #a16207] {
+  seq bigserial [pk]
+  ledger text [not null]
+  wallet text [not null]
+  symbol text [not null]
+  metric text [not null]
+  row jsonb [not null]
+  indexes {
+    (ledger, wallet, symbol, metric) [unique]
+  }
+}
+
+Table pg.changes [headercolor: #a16207] {
+  seq bigserial [pk]
+  ledger text [not null]
+  kind text [not null]
+  handle text [not null]
+  record jsonb [not null]
+  indexes {
+    (ledger, kind, handle, seq) [name: 'changes_by_record']
+  }
+}
+
+Table pg.ledger_keys [headercolor: #a16207] {
+  ledger text [not null]
+  signer text [not null, default: 'system', note: 'server_signer']
+  key jsonb [not null, note: 'ed25519 key pair, secret included']
+  indexes {
+    (ledger, signer) [pk]
+  }
+  Note: 'Never served.'
+}
+
+Table pg.marks [headercolor: #a16207] {
   ledger text [not null]
   key text [not null]
-  indexes { (ledger, key) [pk] }
-  Note: 'Store.once: steps taken once, e.g. the credit phase of an intent.'
+  indexes {
+    (ledger, key) [pk]
+  }
+  Note: 'Store.once: steps taken exactly once that the proof trail cannot record, e.g. the credit prepares of an intent, a thread forwarding.'
 }
 
-Table secrets [headercolor: #a16207] {
+Table pg.secrets [headercolor: #a16207] {
   ledger text [not null]
-  name text [not null]
-  sealed text [not null]
-  indexes { (ledger, name) [pk] }
-  Note: 'Sealed with OPEN_LEDGER_MASTER_KEY (secrets.ts).'
+  name text [not null, note: '<record>/<handle>/<secret>']
+  sealed text [not null, note: 'v1.<iv>.<tag>.<ciphertext>, AES-256-GCM']
+  indexes {
+    (ledger, name) [pk]
+  }
+  Note: 'Sealed with OPEN_LEDGER_MASTER_KEY (secrets.ts). Never served.'
 }
 
-// ---- Groups ------------------------------------------------------------------------
+// =====================================================================================
+// References not written inline
+// =====================================================================================
 
-TableGroup ledger [color: #334155] {
+Ref record_domain: wallets."meta.domain" > domains.handle [color: #0369a1]
+
+// =====================================================================================
+// Data lineage: source -> derived
+// =====================================================================================
+
+// The logical kinds are views of pg.records (kind column) …
+Dep: pg.records -> ledgers
+Dep: pg.records -> schemas
+Dep: pg.records -> requests
+Dep: pg.records -> symbols
+Dep: pg.records -> wallets
+Dep: pg.records -> domains
+Dep: pg.records -> anchors
+Dep: pg.records -> intents
+Dep: pg.records -> signers
+Dep: pg.records -> signer_factors
+Dep: pg.records -> circles
+Dep: pg.records -> circle_signers
+Dep: pg.records -> policies
+Dep: pg.records -> bridges
+Dep: pg.records -> effects
+Dep: pg.records -> event_deliveries
+Dep: pg.records -> reports
+// … except these three, which have tables of their own.
+Dep: pg.balances -> balances
+Dep: pg.limits -> limits
+Dep: pg.changes -> changes
+
+Dep resolution [color: #6d28d9] {
+  claims -> intent_entries
+  wallet_routes -> intent_entries
+  wallets -> intent_entries
+  note: 'An address resolves to a wallet (hierarchy), then routes redirect it (routing.ts).'
+}
+
+Dep: intent_entries.amount -> balances.amount [note: 'debit from available (reserved first when the core prepares), credit to available']
+Dep: claims.amount -> limits.amount [note: 'limit claims']
+Dep: wallet_routes -> intents [note: 'a forward route makes a new intent with origin and the same thread']
+Dep: proofs."custom.status" -> intents."meta.status" [note: 'status.ts applyStatus']
+Dep: proofs -> report_assets [note: 'a completed proof with assets sets meta.assets']
+
+Dep calls [color: #be123c] {
+  intent_entries -> event_deliveries
+  effects -> event_deliveries
+  note: 'prepare / commit / abort / status calls to bridges, and effect deliveries'
+}
+
+Dep sealed [color: #a16207] {
+  bridge_secure_rules -> pg.secrets
+  signers -> pg.secrets
+  signer_factors -> pg.secrets
+  note: 'values from meta.secret, sealed; the record keeps only {{ secret.<name> }}'
+}
+
+Dep: pg.ledger_keys.key -> signers.public [note: 'server signers are published with their public key']
+Dep: intents -> pg.marks [note: 'once: credit phase, thread forwarding']
+
+Dep history [color: #4b5563] {
+  ledgers -> changes
+  schemas -> changes
+  symbols -> changes
+  wallets -> changes
+  domains -> changes
+  anchors -> changes
+  intents -> changes
+  signers -> changes
+  signer_factors -> changes
+  circles -> changes
+  circle_signers -> changes
+  policies -> changes
+  bridges -> changes
+  effects -> changes
+  reports -> changes
+  note: 'a snapshot on every create and update'
+}
+
+// =====================================================================================
+// Example data (the first L1 test: one symbol, one wallet, an issue of 0.01 usd)
+// =====================================================================================
+
+records symbols(luid, ledger, handle, factor, "meta.status") {
+  '$sym.-example000000001', 'demo', 'usd', 100, 'created'
+}
+
+records wallets(luid, ledger, handle, "meta.status") {
+  '$wlt.-example000000001', 'demo', 'alice', 'created'
+}
+
+records intents(luid, ledger, handle, "meta.status", "meta.thread") {
+  '$int.-example000000001', 'demo', 'p1', 'completed', '-example000000001'
+}
+
+records claims(intent, position, action, target, symbol, amount) {
+  'p1', 0, 'issue', 'alice', 'usd', 1
+}
+
+records balances(luid, ledger, wallet, symbol, schema, amount) {
+  '$wbl.-example000000001', 'demo', 'alice', 'usd', 'available', 1
+}
+
+// =====================================================================================
+// Notes on the canvas
+// =====================================================================================
+
+Note how_to_read [color: #334155] {
+  '''
+  How to read this model
+  - plain columns: data.*; quoted "meta.*": server metadata
+  - references are by handle within one ledger
+  - parent = hash of the replaced version, not a parent record
+  - every table is scoped by ledger; those lines are left out
+  - Dep lines: lineage (open-diagram does not draw them yet)
+  '''
+}
+
+Note intent_trail [color: #6d28d9] {
+  '''
+  Intent proof trail (core.ts)
+  created → pending → pending+luid → resolved per entry
+  → [core prepared per entry] → prepared
+  → committed awaiting-clearance → cleared → completed
+  Failure: … → failed {reason, detail} → aborted → rejected
+  Bridged entries wait for each bridge's proof (2PC).
+  A crash leaves the intent pending; it resumes on start.
+  '''
+}
+
+Note address_resolution [color: #0369a1] {
+  '''
+  Address resolution (routing.ts)
+  schema:handle@parent → schema@parent → parent → schema
+  then routes: debit (as source); credit, forward, accept (as target)
+  at most 3 hops, cycles refused
+  '''
+}
+
+Note access_evaluation [color: #b45309] {
+  '''
+  Access (access.ts)
+  record rules + ledger rules + server rules, any match grants
+  signer: matched against proofs (mutations only)
+  bearer: matched against the JWT
+  gate: a mutation in a ledger also needs `access` on it
+  policy-based: only active access policies count
+  '''
+}
+
+Note bridge_protocol [color: #be123c] {
+  '''
+  Bridge calls (bridges.ts), each one a delivery
+  prepare  POST /debits | /credits
+  commit   POST /<schema>s/<entry>/commit
+  abort    POST /<schema>s/<entry>/abort
+  status   PUT  /intents/<intent>
+  retry 1 s × 1.2 up to 1 h, 6 attempts, 501 cancels
+  '''
+}
+
+Note signing [color: #4b5563] {
+  '''
+  Hash and sign (crypto.ts)
+  hash   = sha256(JCS(data))
+  digest = sha256(hash + JCS(custom))
+  result = ed25519(digest), method ed25519-v2
+  '''
+}
+
+Note storage [color: #a16207] {
+  '''
+  Storage (store.ts, pg-store.ts)
+  All money-moving work runs in transaction(ledger):
+  a mutex in memory, an advisory transaction lock in Postgres.
+  One ledger is serialised; ledgers run in parallel.
+  '''
+}
+
+// =====================================================================================
+// Groups
+// =====================================================================================
+
+TableGroup ledger [color: #334155, note: 'The ledger, its schemas and its request journal'] {
   ledgers
   schemas
   requests
-  Note: 'The ledger, its schemas and its request journal'
 }
 
-TableGroup money [color: #0f766e] {
+TableGroup money [color: #0f766e, note: 'What is held and by whom'] {
   symbols
   wallets
   balances
   limits
-  Note: 'What is held and by whom'
 }
 
-TableGroup addressing [color: #0369a1] {
+TableGroup addressing [color: #0369a1, note: 'How an address finds a wallet'] {
   domains
   anchors
   wallet_routes
-  Note: 'How an address finds a wallet'
 }
 
-TableGroup intents [color: #6d28d9] {
+TableGroup intents [color: #6d28d9, note: 'Money movement'] {
   intents
   claims
-  Note: 'Money movement'
+  intent_entries
 }
 
-TableGroup identity_and_access [color: #b45309] {
+TableGroup identity_and_access [color: #b45309, note: 'Who may do what'] {
   signers
   signer_factors
   circles
   circle_signers
   policies
-  Note: 'Who may do what'
+  policy_values
+  access_rules
 }
 
-TableGroup integration [color: #be123c] {
+TableGroup integration [color: #be123c, note: 'External participants and outgoing calls'] {
   bridges
+  bridge_secure_rules
   effects
   event_deliveries
-  Note: 'External participants and outgoing calls'
 }
 
-TableGroup reports [color: #1d4ed8] {
+TableGroup reports [color: #1d4ed8, note: 'Reports made by a reporting bridge'] {
   reports
   report_assets
 }
 
-TableGroup history [color: #4b5563] {
+TableGroup history [color: #4b5563, note: 'Signatures and change history of every record'] {
   proofs
   changes
-  Note: 'Signatures and change history of every record'
 }
 
-TableGroup server_internals [color: #a16207] {
-  records
-  ledger_keys
-  marks
-  secrets
-  Note: 'The physical Postgres schema of open-ledger'
+TableGroup server_internals [color: #a16207, note: 'The physical Postgres schema of open-ledger'] {
+  pg.records
+  pg.balances
+  pg.limits
+  pg.changes
+  pg.ledger_keys
+  pg.marks
+  pg.secrets
+}
+
+// =====================================================================================
+// Views
+// =====================================================================================
+
+DiagramView money_movement {
+  TableGroups {
+    money
+    addressing
+    intents
+  }
+  Notes {
+    intent_trail
+    address_resolution
+  }
+}
+
+DiagramView access {
+  TableGroups {
+    identity_and_access
+  }
+  Tables {
+    ledgers
+    proofs
+  }
+  Notes {
+    access_evaluation
+    signing
+  }
+}
+
+DiagramView integration {
+  TableGroups {
+    integration
+    reports
+  }
+  Tables {
+    wallets
+    intents
+    intent_entries
+  }
+  Notes {
+    bridge_protocol
+  }
+}
+
+DiagramView physical {
+  TableGroups {
+    server_internals
+  }
+  Notes {
+    storage
+  }
 }
