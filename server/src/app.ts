@@ -352,18 +352,29 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   }
 
   // Records that lose a unique label to `record` (labels.ts), each with a new change.
+  // Returns the versions made, to be announced once the transaction is in (`announce`).
   async function relabel(tx: Store, scope: string, kind: Kind, record: StoredRecord, key: KeyPair, unique: Awaited<ReturnType<typeof checkLabels>>) {
-    for (const [other] of await reassign(tx, scope, kind, record, key, unique)) {
+    const made: [StoredRecord, StoredRecord, Proof][] = []
+    for (const [other, before, proof] of await reassign(tx, scope, kind, record, key, unique)) {
       await tx.update(scope, kind, other)
       const n = (await tx.changes(scope, kind, keyOf(other))).length + 1
       await tx.addChange(scope, kind, keyOf(other), snapshot(other, n, 'update', now()))
+      made.push([structuredClone(other), before, proof])
     }
+    return made
   }
 
   // An event about a record (effects): `<record>-<what>`, linked to the record.
   const intentVersion = (r: StoredRecord) => ({ hash: r.hash, data: r.data, luid: r.luid, meta: r.meta })
   const raise = (scope: string, kind: Kind, what: string, payload: Record<string, unknown>, r: StoredRecord) =>
     core.announce(scope, `${KINDS[kind].record}-${what}`, payload, { record: KINDS[kind].record, linked: keyOf(r) })
+  // A proof added to a record: `proofs-added`, and `updated` with the version before as
+  // `parent` (recorded: signals2 for intents, labels2 for wallets and the system's proof).
+  async function proofAdded(scope: string, kind: Kind, proof: Proof, current: StoredRecord, parent: StoredRecord) {
+    const record = KINDS[kind].record
+    await raise(scope, kind, 'proofs-added', { proofs: [proof], [record]: keyOf(current) }, current)
+    await raise(scope, kind, 'updated', { [record]: intentVersion(current), parent: intentVersion(parent) }, current)
+  }
 
   // ---- secrets (secrets.ts; recorded, secure) -----------------------------------------
 
@@ -457,12 +468,13 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (!(await store.insert(scope, kind, record))) throw errors.duplicated(KINDS[kind].name, body.data.handle)
     await keepSecrets(scope, kind, keyOf(record), secrets)
     await addChange(scope, kind, record, 'create')
-    if (unique.length) await relabel(store, scope, kind, record, key, unique)
+    const relabelled = unique.length ? await relabel(store, scope, kind, record, key, unique) : []
     if (scope && kind !== 'circle-signers') await raise(scope, kind, 'created', { [KINDS[kind].record]: record }, record)
     // Recorded (reports, signals2: reports, wallets, intents): the ledger's own `created`
     // proof counts as added proofs.
     if (scope && kind !== 'circle-signers')
       await raise(scope, kind, 'proofs-added', { proofs: [record.meta.proofs.at(-1)], [KINDS[kind].record]: keyOf(record) }, record)
+    for (const [other, before, proof] of relabelled) await proofAdded(scope, kind, proof, other, before)
     if (kind === 'intents') core.schedule(scope, body.data.handle)
     return record
   }
@@ -796,12 +808,13 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     // Intents are also written by the core; append under the ledger's lock.
     let dropped = false
     let parent: StoredRecord | undefined
+    let relabelled: Awaited<ReturnType<typeof relabel>> = []
     return store.transaction(t.ledger.data.handle, async (tx) => {
       const current = (await tx.get(t.scope, t.kind, keyOf(t.found))) ?? t.found
       // Labels are checked before anything changes: a refused one leaves no proof (labels).
       const labels = labelsAfter(current.meta.labels, [stored])
       const unique = labels ? await checkLabels(tx, t.ledger.data.handle, record, current.data, current.meta.labels ?? [], labels) : []
-      if (t.kind === 'intents') parent = structuredClone(current)
+      parent = structuredClone(current)
       const status = stored.custom?.status
       // A report's status moves along its table; a proof repeating it is dropped (reports.ts).
       if (t.kind === 'reports' && typeof status === 'string' && !statusChange(String(current.meta.status), status)) {
@@ -819,16 +832,15 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       else await applyStatus(tx, acl, t.ledger, record, current, stored)
       if (labels) current.meta = { ...current.meta, labels }
       await tx.update(t.scope, t.kind, current)
-      if (unique.length) await relabel(tx, t.scope, t.kind, current, req.ledgerKey!, unique)
+      if (unique.length) relabelled = await relabel(tx, t.scope, t.kind, current, req.ledgerKey!, unique)
       const n = (await tx.changes(t.scope, t.kind, keyOf(current))).length + 1
       await tx.addChange(t.scope, t.kind, keyOf(current), snapshot(current, n, 'update', now(), t.kind !== 'anchors'))
       return current
     }).then(async (current) => {
       if (dropped) return current
-      if (t.scope) await raise(t.scope, t.kind, 'proofs-added', { proofs: [stored], [record]: keyOf(current) }, current)
-      // Recorded (signals2): a proof on an intent is also a new version of it, the one
-      // before as `parent`; both as stored, `domains` included (the core leaves it out).
-      if (t.scope && parent) await raise(t.scope, t.kind, 'updated', { intent: intentVersion(current), parent: intentVersion(parent) }, current)
+      // Both versions as stored, an intent's `domains` included (the core leaves it out).
+      if (t.scope) await proofAdded(t.scope, t.kind, stored, current, parent!)
+      for (const [other, before, proof] of relabelled) await proofAdded(t.scope!, t.kind, proof, other, before)
       // A participant reporting on an entry (`custom.handle`) may let the intent move on.
       if (t.kind === 'intents' && typeof stored.custom?.handle === 'string') core.schedule(t.scope, current.data.handle)
       return current

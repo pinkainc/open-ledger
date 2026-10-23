@@ -319,9 +319,10 @@ policy validator knows them, but only `access`, `status`, `processing`, `labels`
 - [ ] Conformance on memory: twice on 2026-10-23 the server vanished mid-scenario (`l9mixed`, then
       `waits`; ECONNREFUSED on :4620, nothing in `.rec/server.log`, so a signal, not a crash); each
       level passed on rerun (`waits` 3/3). Capture the server's stdout and exit signal if it recurs
-- [ ] Labels: unrecorded corners — a change's `labels` (snapshots carry the record's), events for
-      the system proof that moves a unique label (none raised), invalid labels at creation (path
-      `/meta/proofs/<i>/custom/labels` is a guess), `$addToSet` with `$position/$sort/$slice`
+- [x] Labels corners (`labels2` 43/43 + 2/2, S11): changes carry each version's labels; invalid labels at
+      creation at `/body/meta/proofs/<i>/custom/labels`; `$addToSet` with the `$push` modifiers; the
+      system proof that takes a unique label raises `wallet-updated` (any proof does, every kind) and
+      leaves no `meta.labels` when the list is emptied
 - [ ] `schedule` and `layout` policies: spec only, no prose on the server side (layouts are the
       CLI's `minka layout apply/export/sync`, which writes ordinary records) — backlog; a CLI
       layout run in the `cli` level would show whether the server needs anything

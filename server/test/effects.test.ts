@@ -92,6 +92,31 @@ for (const [storeName, makeStore] of STORES) {
       assert.deepEqual([created.meta.output.data.intent.meta.status, created.meta.output.data.intent.meta.proofs.length], ['pending', 3])
     })
 
+    test('wallet-updated: a proof is a new version, the system proof that takes a unique label too (labels2)', async () => {
+      const s = await books()
+      await s.policy.init().data({ handle: 'lp', schema: 'labels', record: 'wallet', filter: { 'custom.kind': 'acct' }, values: [{ labels: ['pref'], unique: ['custom.owner'] }] }).hash().sign(sign()).send()
+      for (const h of ['b1', 'b2']) await s.wallet.init().data({ handle: h, custom: { kind: 'acct', owner: 'o1' } }).hash().sign(sign()).send()
+      await effect(s, { handle: 'wu', signal: 'wallet-updated', filter: { 'wallet.data.handle': 'b1' }, action: hook('wu') })
+      const label = async (h: string) => s.wallet.from((await s.wallet.read(h)).response.data).sign([{ keyPair: kp, custom: { labels: { $push: 'pref' } } }]).send()
+      await label('b1')
+      await label('b2')
+      const rows = await until(async () => {
+        const r = await events(s, 'wu')
+        return r.length === 2 && final(r) && r
+      }, 'two events')
+      const seen = rows
+        .map((d: any) => d.meta.output.data)
+        .map((e: any) => [e.wallet.meta.proofs.length, e.wallet.meta.labels ?? null, e.parent.meta.proofs.length, e.parent.meta.labels ?? null])
+        .sort((a: any, b: any) => a[0] - b[0])
+      assert.deepEqual(seen, [
+        [3, ['pref'], 2, null],
+        [4, null, 3, ['pref']],
+      ])
+      const b1 = (await s.wallet.read('b1')).response.data
+      assert.equal('labels' in b1.meta, false, 'an emptied list is gone')
+      assert.equal(b1.meta.proofs.at(-1).signer, 'system')
+    })
+
     test('one event for every effect it reaches; 501 cancels, a retry by handle delivers', async () => {
       const s = await books()
       let closed = true

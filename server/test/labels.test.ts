@@ -100,16 +100,18 @@ describe('labels policies', () => {
 
   test('a unique label moves to the record that gains it', async () => {
     const store = await ledger()
-    for (const w of [wallet('a1', { kind: 'account', owner: 'o1' }, ['other', 'preferred']), wallet('a3', { kind: 'account', owner: 'o2' }, ['preferred']), wallet('c1', { kind: 'card', owner: 'o1' }, ['preferred'])])
+    for (const w of [wallet('a1', { kind: 'account', owner: 'o1' }, ['other', 'preferred']), wallet('a3', { kind: 'account', owner: 'o2' }, ['preferred']), wallet('a4', { kind: 'account', owner: 'o1' }, ['preferred']), wallet('c1', { kind: 'card', owner: 'o1' }, ['preferred'])])
       await store.insert(L, 'wallets', w)
     const a2 = wallet('a2', { kind: 'account', owner: 'o1' }, ['preferred'])
     const unique = await checkLabels(store, L, 'wallet', a2.data, [], ['preferred'])
     const moved = await reassign(store, L, 'wallets', a2, generateKeyPair(), unique)
     assert.deepEqual(
       moved.map(([r]) => [r.data.handle, r.meta.labels]),
-      [['a1', ['other']]],
+      [['a1', ['other']], ['a4', undefined]],
     )
-    const proof = moved[0][1]
+    assert.equal('labels' in moved[1][0].meta, false, 'a list left empty is gone (labels2)')
+    assert.deepEqual(moved[0][1].meta.labels, ['other', 'preferred'], 'the version before')
+    const proof = moved[0][2]
     assert.equal(proof.signer, 'system')
     assert.deepEqual(Object.keys(proof.custom), ['detail', 'labels', 'moment'])
     assert.equal(proof.custom.detail, 'Reassigning {preferred} label to the record {a2}')

@@ -4,6 +4,27 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-24 — Labels corners (S11)
+
+Recorded on 2.47.9: `labels2` (43 + 2 webhook calls), one ledger.
+
+- **Changes carry the labels of their version**: each snapshot's `meta.labels`, `null` while
+  the record had none (`labels` matched this already).
+- **Invalid labels at creation** are 422 `record.schema-invalid` at
+  `/body/meta/proofs/<i>/custom/labels`, `<i>` the proof that carries them (the second one
+  too), with the same errors as on a later proof. No record is made.
+- **`$addToSet` takes the `$push` modifiers**: the labels the list already has are dropped
+  from `$each`, the rest goes in at `$position`, then `$sort` and `$slice` apply to the
+  whole list (`[m, b]` + `{$each: [a, b], $position: 0}` → `[a, m, b]`).
+- **The system proof that takes a `unique` label away** leaves no `meta.labels` at all
+  when the list becomes empty: not `[]` (a client's `$pop` to empty keeps `[]`); the change
+  shows `labels: null`.
+- **A proof on a wallet raises `wallet-updated`**, `{handle, parent, signal, wallet}` with
+  the version before as `parent` and the new one as `wallet`: the client's proof and the
+  system's alike. So far this was recorded for intents only (signals2); we now raise
+  `<record>-updated` for a proof on any kind. A `wallet-proofs-added` filter on
+  `wallet.data.handle` matches nothing: that event names the wallet by its handle.
+
 ## 2026-10-23 — Filters on processing policies (S10)
 
 Recorded on the sandbox: `forwarding2` (71 + 5 bridge calls), two ledgers (the first run had

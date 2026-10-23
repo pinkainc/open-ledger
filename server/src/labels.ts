@@ -82,10 +82,10 @@ export async function checkLabels(store: Store, ledger: string, recordType: stri
 
 /**
  * Takes the unique labels `record` just gained from every other record that shares the
- * policy's fields with it. Returns the records changed, each with its new proof.
+ * policy's fields with it. Returns each record changed, as it was before, and its proof.
  */
 export async function reassign(store: Store, ledger: string, kind: string, record: StoredRecord, key: KeyPair, unique: Awaited<ReturnType<typeof checkLabels>>) {
-  const changed: [StoredRecord, ReturnType<typeof serverProof>][] = []
+  const changed: [StoredRecord, StoredRecord, ReturnType<typeof serverProof>][] = []
   for (const { policy, labels, unique: fields } of unique) {
     for (const other of await store.list(ledger, kind)) {
       if (other.data.handle === record.data.handle) continue
@@ -95,9 +95,13 @@ export async function reassign(store: Store, ledger: string, kind: string, recor
         const current = changed.find(([r]) => r.data.handle === other.data.handle)?.[0] ?? other
         if (!(current.meta.labels ?? []).includes(label)) continue
         const proof = serverProof(current.hash, { detail: `Reassigning {${label}} label to the record {${record.data.handle}}`, labels: { $pull: label }, moment: new Date().toISOString() }, key, 'system')
+        const before = structuredClone(current)
         current.meta.proofs.push(proof)
-        current.meta = { ...current.meta, labels: applyLabels(current.meta.labels, { $pull: label }) }
-        changed.push([current, proof])
+        // Recorded (labels2): a list this leaves empty is gone, not `[]`.
+        const { labels: _, ...meta } = current.meta
+        const left = applyLabels(current.meta.labels, { $pull: label })
+        current.meta = left.length ? { ...meta, labels: left } : meta
+        changed.push([current, before, proof])
       }
     }
   }
