@@ -8,6 +8,7 @@ import { LedgerSdk } from '@minka/ledger-sdk'
 import { createRsaKeyPair } from '@minka/ledger-sdk/crypto'
 import { OAuth2Tokens, lifetimeMs } from '../src/oauth2.js'
 import { hashData } from '../src/crypto.js'
+import { MemoryStore } from '../src/store.js'
 import { STORES, failure, newKeyPair, newLedger, startServer, type KeyPair } from './helpers.js'
 
 const PKCS8 = Buffer.from('302e020100300506032b657004220420', 'hex')
@@ -161,6 +162,43 @@ for (const [storeName, makeStore] of STORES) {
       assert.equal(again.meta.secret.clientSecret, made.meta.secret.clientSecret)
       const own = await failure(factors().init().data({ ...sent, handle: 'c2', clientId: 'mine' }).meta({ proofs: [] }).hash().sign([{ keyPair: owner }]).send())
       assert.equal(own.reason, 'record.invalid')
+      assert.match(own.detail, /allowClientCredentials/)
+      // Recorded (oauthcc): an empty clientId counts as not given; a secret reference without
+      // its value is refused for that, before the flag.
+      const empty: any = await raw(factors().init().data({ ...sent, handle: 'c3', clientId: '' }).meta({ proofs: [] }).hash().sign([{ keyPair: owner }]).send())
+      assert.match(empty.data.clientId, /^[A-Za-z0-9_-]{22}$/)
+      const novalue = await failure(factors().init().data({ ...sent, handle: 'c4', clientId: 'mine', clientSecret: '{{ secret.clientSecret }}' }).meta({ proofs: [] }).hash().sign([{ keyPair: owner }]).send())
+      assert.match(novalue.detail, /no secret value was provided in 'meta.secret.clientSecret'/)
+    })
+
+    test('own oauth client credentials: a deployment flag, not the ledger config', async () => {
+      const sent = (handle: string, data: object, meta: object = {}) =>
+        ({ handle, signer: 'admin', schema: 'oauth-client-credentials', access: mine(), ...data, _meta: meta })
+      const create = (factors: any, d: any) => {
+        const { _meta, ...data } = d
+        return factors().init().data(data).meta({ proofs: [], ..._meta }).hash().sign([{ keyPair: owner }]).send({ query: { include: ['meta.secret'] } })
+      }
+      // The key in the ledger's config is stored and ignored (recorded, oauthcc).
+      const flagged = await newLedger(server.base, owner, undefined, { 'signer.factor.oauth.allowClientCredentials': true })
+      const fs: any = flagged.sdk
+      await fs.signer.init().data({ handle: 'admin', public: owner.public, format: 'ed25519-raw', access: mine() }).hash().sign([{ keyPair: owner }]).send()
+      const refused = await failure(create(() => fs.signer.with('admin').factor, sent('f1', { clientId: 'mine' })))
+      assert.match(refused.detail, /allowClientCredentials/)
+
+      const allowing = await startServer(new MemoryStore(), undefined, { clientCredentials: true })
+      try {
+        const l = await newLedger(allowing.base, owner)
+        const s: any = l.sdk
+        await s.signer.init().data({ handle: 'admin', public: owner.public, format: 'ed25519-raw', access: mine() }).hash().sign([{ keyPair: owner }]).send()
+        const factors = () => s.signer.with('admin').factor
+        const both: any = await raw(create(factors, sent('both', { clientId: 'mine', clientSecret: '{{ secret.clientSecret }}' }, { secret: { clientSecret: 'brought' } })))
+        assert.equal(both.data.clientId, 'mine')
+        assert.equal(both.meta.secret.clientSecret, 'brought')
+        const idOnly: any = await raw(create(factors, sent('id', { clientId: 'mine-2' })))
+        assert.match(idOnly.meta.secret.clientSecret, /^[A-Za-z0-9_-]{43}$/)
+      } finally {
+        await allowing.close()
+      }
     })
 
     async function oauthLedger(policy = true) {

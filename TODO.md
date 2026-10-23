@@ -107,7 +107,7 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] `GET /ledgers` — recorded (`ledgers`), filtered on the run's `custom.run`: owned ledgers, newest first; a stranger `[]`, anonymous 403, `x-ledger` 422
 - [x] Lists are newest change first (`meta.moment`, recorded `uschema2`); ties (a ledger's system records) come in no fixed order on the reference
 - [x] Lists are `query`: the ledger gate decides (`Cannot query wallet.`), then the page keeps what the caller may read (recorded in `domains2`: A, C and the operator list different wallets)
-## Authentication (recorded: `factors` 43/43, `oauth` 21/21, `hsh` 18/18)
+## Authentication (recorded: `factors` 43/43, `oauth` 21/21, `hsh` 18/18, `oauthcc` 19/19)
 
 - [x] Signer factors `$snf`: 9 operations, generic lifecycle, `secret: null` on key pairs,
       generated OAuth client credentials, signer in path vs data, list `total: 0`
@@ -118,7 +118,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] A read with `include=meta.secret` returns the creation's client secret, the same every time (`auth2`)
 - [x] `target.schema` limits a value to signers of that schema (else as no policy); an external IdP token (public key only) whose `sub` is no signer authenticates but matches no `sub` rule (`auth2`)
 - [x] `include=meta.secret` needs a signer rule (`reveal`/`any`) matching the token key; a bearer read rule, even on `signer-factor-secret`, gives 403 `Missing permissions` (`auth2`)
-- [ ] `signer.factor.oauth.allowClientCredentials`: implemented (`app.ts`, the reference's message), not recorded — S10
+- [x] `signer.factor.oauth.allowClientCredentials` (`oauthcc` 19/19): a deployment flag, not ledger config — the key in a
+      ledger's `config` is stored and ignored, so the public reference refuses every brought `clientId`/`clientSecret`.
+      Ours: `OPEN_LEDGER_CLIENT_CREDENTIALS=1` (`clientCredentials` in `buildApp`), off by default; with it on, the
+      brought values are kept (not recordable on the reference). An empty `clientId` counts as not given; a secret
+      reference without its value is refused for that first
 
 ## Reports (recorded: `reports` 49/54 + 13/14, `reports2` 236/243, `reports3`–`reports5`; the rest deliberate)
 

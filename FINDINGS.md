@@ -490,7 +490,12 @@ reproduced (`server/test/factors.test.ts`).
 - **`oauth-client-credentials`**: the ledger adds `clientId` (22 chars) and
   `clientSecret: "{{ secret.clientSecret }}"` (value 43 chars base64url) and re-hashes
   the data; the **client's proofs are dropped**, no status, `owners: []`, one system
-  proof without status. Giving `clientId` is refused (`…allowClientCredentials flag…`).
+  proof without status. Giving `clientId` is refused (`…allowClientCredentials flag…`),
+  **also when the ledger's `config` sets `signer.factor.oauth.allowClientCredentials: true`**:
+  the key is stored and ignored, the flag belongs to the deployment (`oauthcc`). An empty
+  `clientId` counts as not given (generated). `clientSecret: "{{ secret.clientSecret }}"`
+  without `meta.secret.clientSecret` is refused for the missing value first (`Record data has
+  a secret reference to new secret 'clientSecret' but no secret value was provided…`).
 - **`?include=meta.secret` reveals secrets in the clear** — a key pair's private key
   included — on create and read. Without it, never. (We additionally require `read`
   on `signer-factor-secret`; with the scenario's open ledger rule the reference's own

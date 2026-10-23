@@ -51,6 +51,13 @@ export type AppOptions = {
    */
   ledgerDrop?: boolean
   journal?: boolean
+  /**
+   * `signer.factor.oauth.allowClientCredentials`: clients may bring their own `clientId` and
+   * `clientSecret` for an `oauth-client-credentials` factor. A deployment flag, off on the
+   * public reference: the same key in a ledger's `config` is stored and ignored (recorded,
+   * oauthcc).
+   */
+  clientCredentials?: boolean
 }
 
 /** The reference release whose API this server answers (published spec version). */
@@ -94,7 +101,7 @@ declare module 'fastify' {
   }
 }
 
-export function buildApp({ store, core = new Core(store), onRoute, serverRules = DEFAULT_SERVER_RULES, server = {}, reports = {}, ledgerDrop = false, journal = false }: AppOptions) {
+export function buildApp({ store, core = new Core(store), onRoute, serverRules = DEFAULT_SERVER_RULES, server = {}, reports = {}, ledgerDrop = false, journal = false, clientCredentials = false }: AppOptions) {
   const app = Fastify({ logger: false })
   if (onRoute) app.addHook('onRoute', (r) => [r.method].flat().forEach((m) => onRoute(m, r.url)))
   const acl = new AccessControl(store, serverRules)
@@ -1215,24 +1222,25 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     return { ...out, meta: { ...out.meta, secret } }
   }
 
-  // Credentials are the ledger's to make unless the ledger allows clients to bring
-  // their own (`signer.factor.oauth.allowClientCredentials`; then a secret comes as
-  // `{{ secret.clientSecret }}` with its value in `meta.secret`).
+  // Credentials are the ledger's to make unless the deployment allows clients to bring
+  // their own (`clientCredentials`; then a secret comes as `{{ secret.clientSecret }}` with
+  // its value in `meta.secret`). Recorded (oauthcc): an empty string counts as not given, and
+  // a secret reference without its value is refused before the flag is looked at.
   async function createOauthFactor(ledger: StoredRecord, key: KeyPair, req: FastifyRequest) {
     const body = req.body as any
     const scope = ledger.data.handle
     verifyProofs(body)
-    const own = body.data.clientId !== undefined || body.data.clientSecret !== undefined
-    if (own && ledger.data.config?.['signer.factor.oauth.allowClientCredentials'] !== true)
+    const given = secretsOf(body.data, body.meta)
+    const own = [body.data.clientId, body.data.clientSecret].some((v) => v !== undefined && v !== '')
+    if (own && !clientCredentials)
       throw new LedgerError(
         422,
         'record.invalid',
         'Providing clientId or clientSecret is not allowed. Leave the fields blank and ledger will generate the credentials instead.Enable the signer.factor.oauth.allowClientCredentials flag to use be able to provide credentials.',
       )
-    const given = secretsOf(body.data, body.meta)
     const clientSecret = given.find(([n]) => n === 'clientSecret')?.[1] ?? randomBytes(32).toString('base64url')
     const { handle, schema, signer, clientId: _id, clientSecret: _secret, ...rest } = body.data
-    const data = { handle, schema, signer, clientId: body.data.clientId ?? customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-', 22)(), clientSecret: '{{ secret.clientSecret }}', ...rest }
+    const data = { handle, schema, signer, clientId: body.data.clientId || customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-', 22)(), clientSecret: '{{ secret.clientSecret }}', ...rest }
     const hash = hashData(data)
     const luid = newLuid('$snf')
     const moment = now()

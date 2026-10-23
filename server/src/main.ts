@@ -29,7 +29,8 @@ const reports = { bucket: process.env.OPEN_LEDGER_REPORTS_BUCKET, dir: process.e
 // the request journal. Both are off on the public reference, and by default here.
 const ledgerDrop = process.env.OPEN_LEDGER_LEDGER_DROP === '1'
 const journal = process.env.OPEN_LEDGER_JOURNAL === '1'
-const app = buildApp({ store, core, server: { handle: process.env.SERVER_HANDLE, url: process.env.PUBLIC_URL }, reports, ledgerDrop, journal })
+const clientCredentials = process.env.OPEN_LEDGER_CLIENT_CREDENTIALS === '1'
+const app = buildApp({ store, core, server: { handle: process.env.SERVER_HANDLE, url: process.env.PUBLIC_URL }, reports, ledgerDrop, journal, clientCredentials })
 // OPEN_LEDGER_LOG=1 prints one line per request (method, url, status) to stderr.
 if (process.env.OPEN_LEDGER_LOG) app.addHook('onResponse', async (req, reply) => console.error(`${req.method} ${req.url} ${reply.statusCode}`))
 // Exit on SIGTERM/SIGINT rather than being killed by them, so a run under
