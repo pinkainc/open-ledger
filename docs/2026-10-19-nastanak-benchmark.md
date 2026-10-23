@@ -80,3 +80,32 @@ je otkrila dvije razlike:
   na vezi kruga vraćali 500 (`verifyProofs(undefined)`), a na walletu poruku Ajv-a. Sada
   to radi jedan `preValidation` hook u `app.ts`.
 - **Čitanje veze koje nema** je 422 `record.relation-not-found` „Link not found”, ne 404.
+
+## S10, točka 5: dnevni limiti s agregatima (2026-10-24)
+
+`checkDaily` je pri svakoj provjeri čitao sve završene intente ledgera, pa je trošak rastao s
+poviješću. `scripts/bench.ts daily [runde] [po rundi]` to mjeri na jednom ledgeru s
+`limits.aggregated.enabled`, gdje svaki izvorni wallet ima `dailyCount`. Svaka runda šalje 200
+transfera.
+
+| Store | Prije (runda 1 → zadnja) | Poslije |
+| --- | --- | --- |
+| memorija, 8 rundi | 185 → 36/s | ravno, ~850/s |
+| Postgres, 5 rundi | 94 → 34/s | 210 → 174/s |
+
+Na Postgresu propusnost i poslije lagano pada. Taj ostatak ne dolazi od dnevne provjere: tablica
+`records` raste, a ostali upiti po intentu ostaju (TODO: ~40 round tripova).
+
+**Kako radi:** za svaki wallet × symbol × metric postoji jedan interni zapis vrste `daily-usage`
+(nikad se ne poslužuje) s poljima `{start, day, count, amount}`. `countDaily` ga ažurira u
+`Run.finish` kad intent završi, nakon `putLimit`, pa vidi i limit koji je postavio isti prolaz.
+Pravila su ista kao prije:
+- brojanje počinje prvim intentom koji je postavio limit;
+- intent iz ranijeg dana se ne broji, a intent iz kasnijeg dana počinje dan iznova;
+- broje se transferi u oba smjera i limit intenti, a issue i destroy ne.
+
+Ako zapis nedostaje (ledger iz vremena prije ovih zapisa), `rebuildUsage` ga jednom izgradi iz
+povijesti. Dok intent koji postavlja limit nije završen, ne sprema se ništa.
+
+**Odbačeno:** brojači samo „po danu” bez `start`. Snimka `limits2` pokazuje da prijelazi prije
+postavljanja limita ne ulaze u brojanje, pa `start` mora postojati.
