@@ -196,8 +196,9 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
       `server/src/forwarding.ts`, `server/test/forwarding.test.ts`
 - [x] Policy `filter` on processing policies: recorded (`forwarding2`), applied on anchor `create` with
       context `{new: <sent anchor>}`; a value's filter replaces the policy's — S10
-- [ ] Processing filters on read/query/update/sign/drop: context not recorded (today none, so a
-      filtered value never applies there); `ctx.req.headers` from the docs not recorded either
+- [x] Processing filters on read/query/update/sign/drop (`forwarding3` 241/241 + 15/15, S11): `old` (the
+      local anchor, its data also at the root) on read/update/sign/drop, `new` on create/update,
+      `ctx.req.headers` always; `_request.headers` and `ctx.req.method` match nothing
 - [x] Domains: `$dom` records, `meta.domain` from a proof or a one-`@` handle suffix,
       subdomain `data.domain`, intent `meta.domains` (recorded `domains` 31/31)
 - [x] Domain access inheritance (rules of a domain apply to its records and subdomains) —

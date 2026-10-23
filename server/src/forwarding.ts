@@ -53,10 +53,11 @@ const unexpected = (detail = 'Unexpected error while forwarding request to bridg
  * does not exist (recorded; both 500).
  *
  * A value applies only when its `filter`, else its policy's, matches the context
- * (recorded, forwarding2): `new` is the anchor sent to `create` (`new.data.custom.x`);
- * `data.…` or `custom.…` match nothing. Values whose filter does not match do not
- * count as several. Other actions get no context yet, so a filter there never
- * matches (not recorded).
+ * (recorded, forwarding2 and forwarding3; built in app.ts): `ctx.req.headers.<name>`
+ * always; `old` (the local anchor) and its data at the root on read, update, sign and
+ * drop; `new` (the anchor sent) on create and update. `data.…` matches nothing, nor do
+ * `_request.headers` and `ctx.req.method`. Values whose filter does not match do not
+ * count as several.
  */
 export async function aspectFor(store: Store, scope: string, action: Action, ctx: Record<string, unknown> = {}): Promise<Aspect | undefined> {
   const values = (await store.list(scope, 'policies'))

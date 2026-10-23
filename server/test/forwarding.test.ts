@@ -194,6 +194,49 @@ for (const [storeName, makeStore] of STORES) {
       assert.deepEqual((await raw(s.anchor.list())).data.map((r: any) => r.data.handle), ['syn-1'])
     })
 
+    test('filter context per action: old and its data, new, ctx.req.headers (forwarding3)', async () => {
+      const { s, ledger, send, policy } = await books()
+      const anchor = (h: string) => send(s.anchor.init().data({ handle: h, wallet: 'alice', target: 'alice', custom: { rail: 'r1' } }))
+      const local = async (h: string) => raw(s.anchor.read(h))
+      const ops: Record<string, (h: string) => Promise<unknown>> = {
+        read: (h) => raw(s.anchor.read(h)),
+        query: () => raw(s.anchor.list()),
+        update: async (h) => send(s.anchor.from(await local(h)).data({ custom: { rail: 'r1', v: 2 } })),
+        sign: async (h) => raw(s.anchor.from(await local(h)).sign([{ keyPair: kp, custom: { status: 'inactive' } }]).send()),
+        drop: (h) => raw(s.anchor.drop(h).hash().sign([{ keyPair: kp }]).send()),
+        create: (h) => anchor(h),
+      }
+      const filters: Record<string, Record<string, unknown>> = {
+        old: { 'old.data.custom.rail': 'r1' },
+        new: { 'new.data.custom.rail': 'r1' },
+        data: { 'data.custom.rail': 'r1' },
+        root: { 'custom.rail': 'r1' },
+        header: { 'ctx.req.headers.x-ledger': ledger },
+        request: { '_request.headers.x-ledger': ledger },
+      }
+      const proxied: Record<string, string[]> = {}
+      let n = 0
+      for (const [action, op] of Object.entries(ops)) {
+        for (const [name, filter] of Object.entries(filters)) {
+          const h = `p${++n}`
+          if (action !== 'create') await anchor(h)
+          await policy(h, [{ ...aspect(action, 'proxy'), filter }])
+          const calls = bridge.calls.length
+          await op(h).catch(() => undefined)
+          if (bridge.calls.length > calls) (proxied[action] ??= []).push(name)
+          await raw(s.policy.drop(h).hash().sign([{ keyPair: kp }]).send())
+        }
+      }
+      assert.deepEqual(proxied, {
+        read: ['old', 'root', 'header'],
+        query: ['header'],
+        update: ['old', 'new', 'root', 'header'],
+        sign: ['old', 'root', 'header'],
+        drop: ['old', 'root', 'header'],
+        create: ['new', 'header'],
+      })
+    })
+
     test('two values for one action fail at use, whatever their policies status', async () => {
       const { policy, read, anchor } = await books([aspect('read', 'proxy')])
       await anchor('x')

@@ -966,9 +966,22 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     meta: { ...body.meta, proofs: [...(body.meta?.proofs ?? []), serverProof(body.hash, { moment: now(), ...custom }, req.ledgerKey!, 'system')] },
   })
   const anchorPath = (id: string) => `/${encodeURIComponent(id)}`
+  // The context a policy's filter sees (recorded, forwarding2 and forwarding3): the
+  // request's headers as `ctx.req.headers`; the anchor kept here as `old`, its data also
+  // at the root, on read, update, sign and drop; the anchor sent as `new` on create and
+  // update. A query has only the headers.
+  const forwardingContext = async (req: FastifyRequest, ledger: StoredRecord, action: Action) => {
+    const id = (req.params as { id?: string })?.id
+    const old = id && action !== 'create' && action !== 'query' ? await find(ledger.data.handle, 'anchors', id) : undefined
+    return {
+      ...(old ? { ...old.data, old: intentVersion(old) } : {}),
+      ...(action === 'create' || action === 'update' ? { new: req.body } : {}),
+      ctx: { req: { headers: req.headers } },
+    }
+  }
   const anchorAspect = async (req: FastifyRequest, action: Action) => {
     const ledger = await hostedLedger(req)
-    return { ledger, aspect: await aspectFor(store, ledger.data.handle, action) }
+    return { ledger, aspect: await aspectFor(store, ledger.data.handle, action, await forwardingContext(req, ledger, action)) }
   }
 
   // The ledger draws a luid for what it sends; validate keeps the record under another
@@ -1066,7 +1079,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       const subject = { data: (req.body as any)?.data ?? {}, meta: domain ? { domain } : {} }
       await acl.authorize('create', record, { who, proofs: keys }, { ledger, domain, subject })
       await related(kind, ledger.data.handle, (req.body as any).data)
-      const aspect = kind === 'anchors' ? await aspectFor(store, ledger.data.handle, 'create', { new: req.body }) : undefined
+      const aspect = kind === 'anchors' ? await aspectFor(store, ledger.data.handle, 'create', await forwardingContext(req, ledger, 'create')) : undefined
       reply.status(201).send(aspect ? await createAnchor(req, ledger, aspect) : await create(kind, ledger.data.handle, req.ledgerKey!, req))
     })
 

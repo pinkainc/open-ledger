@@ -4,6 +4,28 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-24 — Filter context of processing policies per action (S11)
+
+Recorded on 2.47.9: `forwarding3` (241 + 15 bridge calls), one ledger. Per phase: a local
+anchor with `custom.rail: r1`, one policy whose only value proxies one action under one
+candidate filter, an empty directory (so a proxied action answers its 404).
+
+| action | `old.data.…` | `new.data.…` | `data.…` | root `custom.…` | `ctx.req.headers.x-ledger` |
+| --- | --- | --- | --- | --- | --- |
+| read | yes | no | no | yes | yes |
+| query | no | no | no | no | yes |
+| update | yes | yes | no | yes | yes |
+| sign | yes | no | no | yes | yes |
+| drop | yes | no | no | yes | yes |
+| create | no | yes (forwarding2) | no | no | yes |
+
+- **`old` is the anchor the ledger keeps**, and its data is also spread at the root, as the
+  status-policies page says; `new` is the anchor sent, on create and update only. A query
+  sees no record. `data.…` matches nothing anywhere.
+- **`ctx.req.headers.<name>` is the request's headers** (lower case), for every action.
+  `_request.headers.…` (processing-policies) matches nothing, nor does `ctx.req.method`
+  under `$in` of the four methods.
+
 ## 2026-10-24 — Labels corners (S11)
 
 Recorded on 2.47.9: `labels2` (43 + 2 webhook calls), one ledger.
