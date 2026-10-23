@@ -13,7 +13,8 @@ import { digestFor, generateKeyPair, hashData, publicKeyObject, serverProof, sig
 import { LedgerError, errors } from './errors.js'
 import { newLuid, newThread } from './ids.js'
 import { matches, parseQuery, unsupportedFilters } from './query.js'
-import { validateBody, validateDtc, validateLedgerDrop, validatePolicyValues, validateProcessing, validateReportProof, type ValidatedKind } from './schemas.js'
+import { checkLabels, labelsAfter, reassign } from './labels.js'
+import { validateBody, validateDtc, validateLabels, validateLedgerDrop, validatePolicyValues, validateProcessing, validateReportProof, type ValidatedKind } from './schemas.js'
 import { CAUSED_BY, ForwardedError, aspectFor, forward, type Action, type Aspect } from './forwarding.js'
 import { describe, redact } from './journal.js'
 import { keyOf, type Store, type StoredRecord } from './store.js'
@@ -332,15 +333,24 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // ---- record creation -----------------------------------------------------------
 
   // A change is the full record as it was after one create/update, numbered from 1.
-  // Anchors' changes carry no `labels` (recorded, anchors); every other kind's `null`.
+  // Anchors' changes carry no `labels` (recorded, anchors); every other kind's, or `null`.
   const snapshot = (r: StoredRecord, change: number, action: 'create' | 'update', moment = r.meta.moment, labels = true): StoredRecord => ({
     ...r,
-    meta: { ...r.meta, moment, change, action, ...(labels ? { labels: null } : {}) },
+    meta: { ...r.meta, moment, change, action, ...(labels ? { labels: r.meta.labels ?? null } : {}) },
   })
 
   async function addChange(scope: string, kind: Kind, r: StoredRecord, action: 'create' | 'update', moment?: string) {
     const n = (await store.changes(scope, kind, keyOf(r))).length + 1
     await store.addChange(scope, kind, keyOf(r), snapshot(r, n, action, moment, kind !== 'anchors'))
+  }
+
+  // Records that lose a unique label to `record` (labels.ts), each with a new change.
+  async function relabel(tx: Store, scope: string, kind: Kind, record: StoredRecord, key: KeyPair, unique: Awaited<ReturnType<typeof checkLabels>>) {
+    for (const [other] of await reassign(tx, scope, kind, record, key, unique)) {
+      await tx.update(scope, kind, other)
+      const n = (await tx.changes(scope, kind, keyOf(other))).length + 1
+      await tx.addChange(scope, kind, keyOf(other), snapshot(other, n, 'update', now()))
+    }
   }
 
   // An event about a record (effects): `<record>-<what>`, linked to the record.
@@ -378,6 +388,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   async function create(kind: Kind, scope: string, key: KeyPair, req: FastifyRequest, finish?: (r: StoredRecord) => Promise<StoredRecord>) {
     const body = req.body as any
     const proofs = verifyProofs(body)
+    proofs.forEach((p, i) => validateLabels(p.custom?.labels, `/meta/proofs/${i}/custom/labels`))
     const secrets = kind === 'intents' ? [] : secretsOf(body.data, body.meta)
     const luid = newLuid(KINDS[kind].luid)
     const moment = now()
@@ -388,6 +399,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     const link = kind === 'circle-signers'
     const clientProofs = await annotate(scope, proofs, !link)
     const domain = !scope ? undefined : await domainOf(scope, body.data.handle, proofs)
+    // Recorded (labels): a policy refuses a label before the record exists.
+    const labels = labelsAfter(undefined, proofs)
+    const unique = labels ? await checkLabels(store, scope, KINDS[kind].record, body.data, [], labels) : []
 
     let record: StoredRecord
     if (kind === 'intents')
@@ -405,6 +419,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
           owners,
           // Recorded (domains2): an intent joins the domain its proof names, like any record.
           ...(domain ? { domain } : {}),
+          ...(labels ? { labels } : {}),
         },
       }
     else
@@ -427,6 +442,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
           moment,
           owners,
           ...(domain ? { domain } : {}),
+          ...(labels ? { labels } : {}),
         },
       }
     if (finish) record = await finish(record)
@@ -434,6 +450,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     if (!(await store.insert(scope, kind, record))) throw errors.duplicated(KINDS[kind].name, body.data.handle)
     await keepSecrets(scope, kind, keyOf(record), secrets)
     await addChange(scope, kind, record, 'create')
+    if (unique.length) await relabel(store, scope, kind, record, key, unique)
     if (scope && kind !== 'circle-signers') await raise(scope, kind, 'created', { [KINDS[kind].record]: record }, record)
     // Recorded (reports, signals2: reports, wallets, intents): the ledger's own `created`
     // proof counts as added proofs.
@@ -746,6 +763,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // intent is not processed again.
   // `before` runs once the proof is checked, before it is stored (anchor forwarding).
   async function addProof(req: FastifyRequest, t: Target, before?: (stored: Proof) => Promise<void>) {
+    validateLabels((req.body as any)?.custom?.labels, '/custom/labels')
     const who = await authenticate(req)
     const record = KINDS[t.kind].record
     // A proof without `public` is a template the token's signer is impersonated on.
@@ -773,6 +791,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
     let parent: StoredRecord | undefined
     return store.transaction(t.ledger.data.handle, async (tx) => {
       const current = (await tx.get(t.scope, t.kind, keyOf(t.found))) ?? t.found
+      // Labels are checked before anything changes: a refused one leaves no proof (labels).
+      const labels = labelsAfter(current.meta.labels, [stored])
+      const unique = labels ? await checkLabels(tx, t.ledger.data.handle, record, current.data, current.meta.labels ?? [], labels) : []
       if (t.kind === 'intents') parent = structuredClone(current)
       const status = stored.custom?.status
       // A report's status moves along its table; a proof repeating it is dropped (reports.ts).
@@ -789,7 +810,9 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       // duplicate `committed` must not move a completed intent back.
       if (t.kind === 'intents') current.meta.proofs.push(stored)
       else await applyStatus(tx, acl, t.ledger, record, current, stored)
+      if (labels) current.meta = { ...current.meta, labels }
       await tx.update(t.scope, t.kind, current)
+      if (unique.length) await relabel(tx, t.scope, t.kind, current, req.ledgerKey!, unique)
       const n = (await tx.changes(t.scope, t.kind, keyOf(current))).length + 1
       await tx.addChange(t.scope, t.kind, keyOf(current), snapshot(current, n, 'update', now(), t.kind !== 'anchors'))
       return current

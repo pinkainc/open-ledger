@@ -4,6 +4,37 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-19 — Labels and labels policies (S10)
+
+Recorded on 2.47.5: `labels` (124), one ledger; implemented 2026-10-23 (`labels.ts`).
+
+- **`custom.labels` in a proof sets `meta.labels`**, at creation or by `POST …/proofs`, on
+  wallets, symbols and intents alike. `meta.labels` does not exist until set and is then the
+  last key of `meta`; `meta.moment` does not move.
+- **An array is appended, not a replacement** (the docs say replace); `[]` changes nothing.
+  The operators are MongoDB's: `$push` a label or `{$each, $position, $sort, $slice}` (insert,
+  sort the whole list, cut; `$slice: -2` keeps the last two), `$pull` a label or `{$in}`
+  (every occurrence), `$pullAll`, `$pop: 1 | -1`. `$addToSet` compares only with the list
+  before: `$each [x, n, n]` on `[x, y]` gives `[x, y, n, n]`.
+- **Validation** is the spec's oneOf [object with oneOf of the five operators, array of
+  strings], Ajv with all errors: a string or `null` → must be object, must be array, oneOf;
+  `[1]` → must be object, `/0` must be string, oneOf; `{$set}` → five `required`, oneOf,
+  must be array, oneOf; two operators → only `$pop`'s `required` (oneOf stops at the second
+  branch that fits). 422 `record.schema-invalid`.
+- **A list filter on `meta.labels` is accepted and compares the whole list**: `meta.labels=q`
+  finds nothing while a wallet has `q`.
+- **Labels policies** apply without activation; `filter` is relative to `data`. Only labels a
+  change adds are checked: one outside every matching policy's `values[].labels` is 422
+  `record.labels-policy-violation`, `Labels not allowed by policy. Forbidden labels: gold`,
+  `custom: {labels: ['gold']}`, at creation too (no record is made). Removing is always
+  allowed; a record no policy picks takes any label. A value without `labels` is refused
+  (`values/0 must have required property 'labels'`, labels branch of `policy-data`).
+- **`unique`** names data fields: when a2 gains `preferred` and a1 (same `custom.owner`, also
+  picked by the policy) has it, the ledger appends to a1 a proof signed by `system`,
+  `{detail: 'Reassigning {preferred} label to the record {a2}', labels: {$pull: 'preferred'},
+  moment}`. A record with another owner keeps it; pushing it twice on one record gives
+  `[preferred, preferred]`.
+
 ## 2026-10-19 — DTC policies (S10)
 
 Recorded on 2.47.5: `dtc` (92 + 17 bridge calls), one ledger.

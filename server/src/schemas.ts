@@ -261,9 +261,50 @@ export const validateBody = (kind: ValidatedKind, body: unknown) => check(valida
 
 function check(validate: ReturnType<typeof ajv.compile>, body: unknown) {
   if (validate(body ?? {})) return
-  const errs = validate.errors ?? []
+  throw schemaInvalid(validate.errors ?? [])
+}
+
+function schemaInvalid(errs: ErrorObject[]) {
   const detail = `Schema validation error: ${errs.map((e) => `request/body${e.instancePath} ${messageOf(e)}`).join(', ')}`
-  throw new LedgerError(422, 'record.schema-invalid', detail, { errors: errs.map(toWire) })
+  return new LedgerError(422, 'record.schema-invalid', detail, { errors: errs.map(toWire) })
+}
+
+// Labels in a proof's `custom` (spec: label-query-*; recorded, labels): an array of
+// strings, or an object with exactly one of five operators. Written out rather than
+// compiled, to give the reference's errors in its order: an object's failed operators
+// up to the second one that fits (Ajv's `oneOf` stops there), then `oneOf`, `must be
+// array`, `oneOf`; an array's items that are no string between `must be object` and `oneOf`.
+const LABEL = { type: 'string' }
+const LABEL_EACH = { type: 'object', required: ['$each'], properties: { $each: { type: 'array', items: LABEL }, $position: { type: 'integer', minimum: 0 }, $slice: { type: 'integer' }, $sort: { type: 'integer', enum: [1, -1] } } }
+const LABEL_OPS = [
+  ['$pop', { type: 'number', enum: [1, -1] }],
+  ['$push', { oneOf: [LABEL, LABEL_EACH] }],
+  ['$pull', { oneOf: [LABEL, { type: 'object', required: ['$in'], properties: { $in: { type: 'array', items: LABEL } } }] }],
+  ['$pullAll', { type: 'array', items: LABEL }],
+  ['$addToSet', { oneOf: [LABEL, LABEL_EACH] }],
+].map(([op, value]) => ajv.compile({ type: 'object', required: [op], properties: { [op as string]: value } }))
+
+export function validateLabels(labels: unknown, at: string) {
+  if (labels === undefined) return
+  const e = (path: string, keyword: string, message: string) => ({ instancePath: at + path, keyword, message, params: {}, schemaPath: '' }) as ErrorObject
+  const oneOf = e('', 'oneOf', 'must match exactly one schema in oneOf')
+  let errs: ErrorObject[]
+  if (Array.isArray(labels)) {
+    const items = labels.flatMap((l, i) => (typeof l === 'string' ? [] : [e(`/${i}`, 'type', 'must be string')]))
+    if (!items.length) return
+    errs = [e('', 'type', 'must be object'), ...items, oneOf]
+  } else if (labels !== null && typeof labels === 'object') {
+    const failed: ErrorObject[] = []
+    let fits = 0
+    for (const op of LABEL_OPS) {
+      if (op(labels)) {
+        if (++fits === 2) break
+      } else failed.push(...op.errors!.map((x) => ({ ...x, instancePath: at + x.instancePath })))
+    }
+    if (fits === 1) return
+    errs = [...failed, oneOf, e('', 'type', 'must be array'), oneOf]
+  } else errs = [e('', 'type', 'must be object'), e('', 'type', 'must be array'), oneOf]
+  throw schemaInvalid(errs)
 }
 
 // A processing policy's values (spec: aspect-processing-value; recorded, forwarding).
@@ -311,6 +352,9 @@ const ACCESS_ACTIONS = ['abort', 'access', 'activate', 'retry-event', 'any', 'as
 export function validatePolicyValues(data: any) {
   const values: any[] = Array.isArray(data?.values) ? data.values : []
   values.forEach((v, i) => {
+    // Recorded (labels): a labels value needs its `labels`.
+    if (data.schema === 'labels' && v && typeof v === 'object' && !('labels' in v))
+      throw policyInvalid('labels', [wire(`/values/${i}/labels`, "must have required property 'labels'", 'required')])
     if (data.schema === 'status' && v && typeof v === 'object' && !('quorum' in v))
       throw policyInvalid('status', [wire(`/values/${i}/quorum`, "must have required property 'quorum'", 'required')])
     if (data.schema === 'access' && v && typeof v === 'object' && 'action' in v && typeof v.action !== 'string') {

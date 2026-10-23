@@ -299,12 +299,19 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 ## Labels and the remaining policy schemas (found in the S8 TODO review, 2026-10-11)
 
 Every ledger publishes the policy schemas `layout`, `labels`, `schedule` (FINDINGS), and the
-policy validator knows them, but only `access`, `status`, `processing` are applied.
+policy validator knows them, but only `access`, `status`, `processing`, `labels` are applied.
 
-- [ ] Labels (`structuring-data/labels.md`): `meta.labels` set by a proof on any record kind;
-      today every change carries `labels: null` and nothing sets them — record first — S10
-- [ ] Labels policies (`labels-policies.md`): `record` + `filter` choose the records, `values[].labels`
-      whitelist; no matching policy → any label allowed — S10, after labels
+- [x] Labels (`structuring-data/labels.md`): `meta.labels` set by a proof's `custom.labels` on any
+      record kind, the array form appended and the MongoDB-like expressions (`labels.ts`); recorded
+      and passing (`labels` 124/124) — S10
+- [x] Labels policies (`labels-policies.md`): `record` + `filter` choose the records, `values[].labels`
+      whitelist of added labels, `unique` moves a label by a system proof — S10
+- [ ] Conformance on memory: twice on 2026-10-23 the server vanished mid-scenario (`l9mixed`, then
+      `waits`; ECONNREFUSED on :4620, nothing in `.rec/server.log`, so a signal, not a crash); each
+      level passed on rerun (`waits` 3/3). Capture the server's stdout and exit signal if it recurs
+- [ ] Labels: unrecorded corners — a change's `labels` (snapshots carry the record's), events for
+      the system proof that moves a unique label (none raised), invalid labels at creation (path
+      `/meta/proofs/<i>/custom/labels` is a guess), `$addToSet` with `$position/$sort/$slice`
 - [ ] `schedule` and `layout` policies: spec only, no prose on the server side (layouts are the
       CLI's `minka layout apply/export/sync`, which writes ordinary records) — backlog; a CLI
       layout run in the `cli` level would show whether the server needs anything

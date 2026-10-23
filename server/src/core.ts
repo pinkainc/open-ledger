@@ -30,7 +30,7 @@ import { createHash } from 'node:crypto'
 import { RoutingError, filterMatches, resolveAddress, route } from './routing.js'
 import { SecretBox, resolveRefs, secretRefs } from './secrets.js'
 import { OAuth2Tokens } from './oauth2.js'
-import { matches, parseQuery } from './query.js'
+import { flatFilter, matches, parseQuery } from './query.js'
 
 const entryId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 17)
 // Event handles: `evt_` and 17 characters, `-` and `_` among them (recorded).
@@ -299,7 +299,7 @@ export class Core {
     intent.meta.proofs.push(serverProof(intent.hash, { detail, moment, reason: 'core.bridge-unreachable', status: 'error' }, key, 'system'))
     const n = (await tx.changes(ledger, 'intents', intent.data.handle)).length
     const { routed: _r, ...meta } = intent.meta
-    await tx.addChange(ledger, 'intents', intent.data.handle, { ...intent, meta: { ...meta, moment, change: n + 1, action: 'update', labels: null } })
+    await tx.addChange(ledger, 'intents', intent.data.handle, { ...intent, meta: { ...meta, moment, change: n + 1, action: 'update', labels: meta.labels ?? null } })
     await tx.update(ledger, 'intents', intent)
   }
 
@@ -1002,7 +1002,7 @@ async function save(tx: Store, ledger: string, intent: StoredRecord, trail: Proo
   for (const st of stages) {
     const proofs = [...earlier, ...trail.slice(0, st.proofs)]
     const moment = proofs.at(-1)?.custom?.moment ?? intent.meta.moment
-    const meta = { ...before, proofs, status: st.status, ...(st.routed ? { routed: true } : {}), moment, change: ++n, action: 'update', labels: null }
+    const meta = { ...before, proofs, status: st.status, ...(st.routed ? { routed: true } : {}), moment, change: ++n, action: 'update', labels: before.labels ?? null }
     await tx.addChange(ledger, 'intents', intent.data.handle, { ...intent, meta })
   }
   intent.meta.proofs.push(...trail)
@@ -1053,17 +1053,6 @@ export function hasTrait(bridge: Record<string, any>, method: string, data: unkn
   const t = traits.find((t) => t === method || t?.method === method)
   if (!t) return false
   return typeof t === 'string' || !t.filter || matches(data as object, parseQuery(flatFilter(t.filter)))
-}
-
-// `{amount: {$gte: 100}}` → `{'amount.$gte': 100}`, the form query.ts parses.
-function flatFilter(filter: Record<string, unknown>) {
-  const out: Record<string, unknown> = {}
-  for (const [path, cond] of Object.entries(filter)) {
-    if (cond && typeof cond === 'object' && !Array.isArray(cond) && Object.keys(cond).every((k) => k.startsWith('$')))
-      for (const [op, v] of Object.entries(cond)) out[`${path}.${op}`] = v
-    else out[path] = cond
-  }
-  return out
 }
 
 // Parts that were asked to prepare: every debit, and the credits once all debits were

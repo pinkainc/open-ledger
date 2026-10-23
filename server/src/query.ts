@@ -129,13 +129,16 @@ function words(record: any): Set<string> {
   return out
 }
 
+// Recorded (labels): a filter on `meta.labels` compares the whole list, never its labels.
+const WHOLE = new Set(['meta.labels'])
+
 export function matches(record: unknown, q: Query): boolean {
   if (q.text !== undefined && !words(record).has(q.text.toLowerCase())) return false
-  return q.filters.every((f) => test(f, valuesAt(record, f.path)))
+  return q.filters.every((f) => test(f, WHOLE.has(f.path.join('.')) ? valuesAt(record, f.path).slice(0, 1) : valuesAt(record, f.path)))
 }
 
 // Which filters a record list accepts (recorded, filters): `data.handle`,
-// `data.schema` (not on schemas), `data.custom.*`, `meta.status` and `meta.domain`
+// `data.schema` (not on schemas), `data.custom.*`, `meta.status`, `meta.labels` and `meta.domain`
 // (not on domains) everywhere, plus a few fields per kind; anything else under `data.`
 // or `meta.` is 400 `api.query-malformed` naming every such filter, operator included
 // (`data.handle.$foo`). Keys outside `data.`/`meta.` (`luid`, `hash`, others) pass.
@@ -160,6 +163,8 @@ export function unsupportedFilters(kind: string, query: Record<string, unknown>)
         path === 'meta.status' ||
         path === 'meta.moment' ||
         (path === 'meta.domain' && kind !== 'domains') ||
+        // Recorded (labels): accepted, but compared with the whole list, so `q` finds nothing.
+        path === 'meta.labels' ||
         (EXTRA_FILTERS[kind] ?? []).includes(path))
     const name = raw.replace(/\[\d*\]$/, '')
     if (!ok && !out.includes(name)) out.push(name)
@@ -187,3 +192,14 @@ export function likePattern(p: string): RegExp {
   return new RegExp(out)
 }
 const escapeRe = (c: string) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// `{amount: {$gte: 100}}` → `{'amount.$gte': 100}`, the form `parseQuery` takes.
+export function flatFilter(filter: Record<string, unknown>) {
+  const out: Record<string, unknown> = {}
+  for (const [path, cond] of Object.entries(filter)) {
+    if (cond && typeof cond === 'object' && !Array.isArray(cond) && Object.keys(cond).every((k) => k.startsWith('$')))
+      for (const [op, v] of Object.entries(cond)) out[`${path}.${op}`] = v
+    else out[path] = cond
+  }
+  return out
+}
