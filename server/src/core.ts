@@ -933,36 +933,101 @@ export class Core {
   // issues and destroys do not count, neither do rejected intents. Bounds are inclusive. The
   // reference checks after commit and leaves a breaking intent `committed` forever; we
   // check before prepare and reject (divergences.json, as for maxBalance).
+  //
+  // The counts are kept as they happen (`countDaily`, one usage row per wallet × symbol ×
+  // metric); only a row that is missing — a ledger from before the rows — is rebuilt from
+  // the completed intents, once.
   private async checkDaily(tx: Store, ledger: string, intent: StoredRecord, entries: Entry[]) {
     if (!(await aggregated(tx, ledger))) return
     const claims: any[] = intent.data.claims
     const moving = entries.filter((e) => claims[e.input]?.action === 'transfer')
     const pairs = new Map(moving.map((e) => [`${e.wallet}\u0000${e.symbol}`, e] as const))
     if (!pairs.size) return
-    let history: StoredRecord[] | undefined
+    const today = dayStart(Date.now())
     for (const e of pairs.values()) {
       const rows = (await tx.limits(ledger, e.wallet)).filter((r) => r.data.symbol === e.symbol && DAILY.includes(r.data.metric))
-      if (!rows.length) continue
-      history ??= (await tx.list(ledger, 'intents')).filter((i) => i.meta.status === 'completed')
-      const since = dayStart(Date.now())
       for (const row of rows) {
-        const touches = (i: StoredRecord, action?: string) =>
-          (i.data.claims as any[]).filter((c) => c.symbol?.handle === e.symbol && (action === undefined || c.action === action) &&
-            (c.action === 'limit' ? c.wallet?.handle === e.wallet : [c.source?.handle, c.target?.handle].includes(e.wallet)))
-        const start = history.find((i) => touches(i, 'limit').some((c) => c.metric === row.data.metric))
-        if (!start) continue
-        const counted = history.filter((i) => i.meta.moment >= start.meta.moment && Date.parse(i.meta.moment) >= since)
+        const usage = (await tx.get(ledger, USAGE, usageKey(e.wallet, e.symbol, row.data.metric)))?.data ?? (await rebuildUsage(tx, ledger, e.wallet, e.symbol, row.data.metric, today))
+        if (!usage) continue
+        const current = usage.day === today
         const now = moving.filter((m) => m.wallet === e.wallet && m.symbol === e.symbol)
         if (row.data.metric === 'dailyCount') {
-          const n = counted.filter((i) => touches(i).some((c) => c.action === 'transfer' || c.action === 'limit')).length + 1
-          if (n > row.data.amount) throw new Rejection('core.limit-exceeded', `Daily transactions limit exceeded for wallet ${e.wallet}`)
+          if ((current ? usage.count : 0) + 1 > row.data.amount) throw new Rejection('core.limit-exceeded', `Daily transactions limit exceeded for wallet ${e.wallet}`)
         } else {
-          const sum = counted.flatMap((i) => touches(i, 'transfer')).reduce((t, c) => t + c.amount, 0) + now.reduce((t, m) => t + m.amount, 0)
+          const sum = (current ? usage.amount : 0) + now.reduce((t, m) => t + m.amount, 0)
           if (sum > row.data.amount) throw new Rejection('core.limit-exceeded', `Daily amount limit exceeded for wallet ${e.wallet}`)
         }
       }
     }
   }
+}
+
+/** Internal kind, never served: what counts against a daily limit today. */
+const USAGE = 'daily-usage'
+type Usage = { wallet: string; symbol: string; metric: string; start: string; day: number; count: number; amount: number }
+const usageKey = (wallet: string, symbol: string, metric: string) => JSON.stringify([wallet, symbol, metric])
+
+/** The claims of an intent on a wallet × symbol that count against its daily limits. */
+function dailyClaims(intent: StoredRecord, wallet: string, symbol: string) {
+  return (intent.data.claims as any[]).filter((c) => c.symbol?.handle === symbol &&
+    (c.action === 'limit' ? c.wallet?.handle === wallet : c.action === 'transfer' && [c.source?.handle, c.target?.handle].includes(wallet)))
+}
+
+async function putUsage(tx: Store, ledger: string, usage: Usage, existing?: StoredRecord) {
+  const data = { handle: usageKey(usage.wallet, usage.symbol, usage.metric), ...usage }
+  const record: StoredRecord = { hash: '', data, luid: existing?.luid ?? newLuid('$dly'), meta: { moment: new Date().toISOString() } }
+  if (existing) await tx.update(ledger, USAGE, record)
+  else await tx.insert(ledger, USAGE, record)
+}
+
+// A completed intent adds itself to the usage of every daily limit on the wallets and symbols
+// it moves or limits. The intent that sets a daily limit first starts its usage; one from an
+// earlier day than the usage's is no longer counted, one from a later day starts the day anew.
+async function countDaily(tx: Store, ledger: string, intent: StoredRecord) {
+  const moment: string = intent.meta.moment
+  const day = dayStart(Date.parse(moment))
+  const pairs = new Set<string>()
+  for (const c of intent.data.claims as any[]) {
+    if (c.action === 'limit') pairs.add(usageKey(c.wallet?.handle, c.symbol?.handle, ''))
+    if (c.action === 'transfer') for (const w of [c.source?.handle, c.target?.handle]) pairs.add(usageKey(w, c.symbol?.handle, ''))
+  }
+  for (const pair of pairs) {
+    const [wallet, symbol] = JSON.parse(pair) as string[]
+    if (typeof wallet !== 'string' || typeof symbol !== 'string') continue
+    const mine = dailyClaims(intent, wallet, symbol)
+    const moved = mine.filter((c) => c.action === 'transfer').reduce((t, c) => t + c.amount, 0)
+    const rows = (await tx.limits(ledger, wallet)).filter((r) => r.data.symbol === symbol && DAILY.includes(r.data.metric))
+    for (const row of rows) {
+      const metric = row.data.metric
+      const existing = await tx.get(ledger, USAGE, usageKey(wallet, symbol, metric))
+      if (!existing) {
+        if (mine.some((c) => c.action === 'limit' && c.metric === metric))
+          await putUsage(tx, ledger, { wallet, symbol, metric, start: moment, day, count: 1, amount: moved })
+        continue
+      }
+      const u = existing.data as Usage
+      if (moment < u.start || day < u.day) continue
+      const base = day > u.day ? { count: 0, amount: 0 } : u
+      await putUsage(tx, ledger, { ...u, day, count: base.count + 1, amount: base.amount + moved }, existing)
+    }
+  }
+}
+
+// The usage of a daily limit from the completed intents, for a ledger whose usage rows were
+// not kept yet. Nothing is stored while the intent that sets the limit has not completed.
+async function rebuildUsage(tx: Store, ledger: string, wallet: string, symbol: string, metric: string, today: number) {
+  const history = (await tx.list(ledger, 'intents')).filter((i) => i.meta.status === 'completed')
+  const start = history.find((i) => dailyClaims(i, wallet, symbol).some((c) => c.action === 'limit' && c.metric === metric))
+  if (!start) return undefined
+  const counted = history.filter((i) => i.meta.moment >= start.meta.moment && dayStart(Date.parse(i.meta.moment)) === today)
+  const claims = counted.map((i) => dailyClaims(i, wallet, symbol)).filter((cs) => cs.length)
+  const usage: Usage = {
+    wallet, symbol, metric, start: start.meta.moment, day: today,
+    count: claims.length,
+    amount: claims.flat().filter((c) => c.action === 'transfer').reduce((t, c) => t + c.amount, 0),
+  }
+  await putUsage(tx, ledger, usage)
+  return usage
 }
 
 const DAILY = ['dailyCount', 'dailyAmount']
@@ -1204,6 +1269,7 @@ class Run {
   async finish() {
     for (const row of this.books.changed()) await this.tx.putBalance(this.ledger, row)
     for (const row of this.limitWrites) await this.tx.putLimit(this.ledger, row)
+    if (this.stages.some((s) => s.status === 'completed')) await countDaily(this.tx, this.ledger, { ...this.intent, meta: { ...this.intent.meta, status: 'completed' } })
     await save(this.tx, this.ledger, this.intent, this.trail, this.stages)
   }
 }

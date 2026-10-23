@@ -59,8 +59,11 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] `dailyAmount`, `dailyCount` (need `limits.aggregated.enabled`): recorded `limits2`–`limits5`;
       stuck intents of the reference rejected by us (divergences.json)
 - [x] The daily window is the UTC day (a count used up before midnight is free after it); a destroy does not count towards `dailyAmount` (`daywindow`, recorded across midnight)
-- [ ] Daily limits read every completed intent of the ledger per check; keep aggregates instead — S10
-      (with S9's benchmark; `daywindow` and `limits2`–`limits5` are the regression tests)
+- [x] Daily limits keep aggregates (S10): one internal `daily-usage` row per wallet × symbol × metric, updated
+      when an intent completes (`countDaily` in `core.ts`); a missing row (a ledger from before) is rebuilt once
+      from the history. `scripts/bench.ts daily 5 200`, 200 transfers per round with every source wallet limited:
+      memory 185 → 36/s over 8 rounds before, flat ~850/s after; Postgres 94 → 34/s before, 210 → 174/s after
+      (the remaining drift is not the daily check). `daywindow`, `limits2`–`limits5` unchanged
 - [x] L6 unit test "a bridge that never answers a prepare" timed out: the unit tests' Postgres database had grown to
       3735 ledgers and the expiry scan read them all; `check.sh` now gives the tests an empty one per run
 - [x] A limit on a wallet with no balance row creates an `available` row of 0 (`limits2`); a daily one does not

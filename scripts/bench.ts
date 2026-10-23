@@ -7,13 +7,22 @@
 //
 //   npx tsx scripts/bench.ts [transfers=200] [ledgers=1,8]
 //
+// `daily` mode (S10 point 5): one ledger with `limits.aggregated.enabled` and a
+// `dailyCount` limit on every source wallet, transfers sent in rounds. A daily check that
+// reads the ledger's whole intent history slows down round after round; one that keeps
+// aggregates stays flat.
+//
+//   npx tsx scripts/bench.ts daily [rounds=10] [perRound=200]
+//
 // DATABASE_URL picks Postgres (scripts/dev-db.sh fresh bench), otherwise memory.
 import { MemoryStore, type Store } from '../server/src/store.js'
 import { PgStore } from '../server/src/pg-store.js'
 import { newKeyPair, newLedger, ref, sendIntent, setupBooks, startServer } from '../server/test/helpers.js'
 
-const transfers = Number(process.argv[2] ?? 200)
-const spreads = (process.argv[3] ?? '1,8').split(',').map(Number)
+const daily = process.argv[2] === 'daily'
+const args = daily ? process.argv.slice(3) : process.argv.slice(2)
+const transfers = Number(args[0] ?? 200)
+const spreads = (args[1] ?? '1,8').split(',').map(Number)
 const FINAL = new Set(['completed', 'rejected'])
 
 async function run(ledgers: number) {
@@ -60,5 +69,34 @@ async function allFinal(store: Store, ledger: string, handles: string[], timeout
   }
 }
 
-console.log(`store: ${process.env.DATABASE_URL ? 'postgres' : 'memory'}, ${transfers} transfers between disjoint pairs`)
-for (const l of spreads) console.log(JSON.stringify(await run(l)))
+async function runDaily(rounds: number, perRound: number) {
+  const store: Store & { close?: () => Promise<void> } = process.env.DATABASE_URL ? await PgStore.connect(process.env.DATABASE_URL) : new MemoryStore()
+  const server = await startServer(store)
+  const kp = await newKeyPair()
+  const usd = ref('usd')
+  const { handle, sdk } = await newLedger(server.base, kp, undefined, { 'limits.aggregated.enabled': true })
+  const wallets = Array.from({ length: perRound }, (_, i) => [`a${i}`, `b${i}`]).flat()
+  await setupBooks(sdk, kp, wallets)
+  const setup = await Promise.all(Array.from({ length: perRound }, (_, i) => sendIntent(sdk, kp, [
+    { action: 'issue', target: ref(`a${i}`), symbol: usd, amount: rounds * 100 },
+    { action: 'limit', metric: 'dailyCount', wallet: ref(`a${i}`), symbol: usd, amount: rounds * 10 },
+  ])))
+  await allFinal(store, handle, setup)
+  for (let r = 0; r < rounds; r++) {
+    const start = performance.now()
+    const handles = await Promise.all(Array.from({ length: perRound }, (_, i) => sendIntent(sdk, kp, [{ action: 'transfer', source: ref(`a${i}`), target: ref(`b${i}`), symbol: usd, amount: 100 }])))
+    const statuses = await allFinal(store, handle, handles)
+    const ms = performance.now() - start
+    const completed = statuses.filter((s) => s === 'completed').length
+    console.log(JSON.stringify({ round: r + 1, history: perRound * (r + 1), completed, ms: Math.round(ms), perSecond: Math.round((perRound / ms) * 1000) }))
+  }
+  await server.close()
+}
+
+if (daily) {
+  console.log(`store: ${process.env.DATABASE_URL ? 'postgres' : 'memory'}, daily limits, ${transfers} rounds of ${args[1] ?? 200} transfers`)
+  await runDaily(Number(args[0] ?? 10), Number(args[1] ?? 200))
+} else {
+  console.log(`store: ${process.env.DATABASE_URL ? 'postgres' : 'memory'}, ${transfers} transfers between disjoint pairs`)
+  for (const l of spreads) console.log(JSON.stringify(await run(l)))
+}

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { STORES, balanceOf, newKeyPair, newLedger, ref, sendIntent, settle, setupBooks, startServer, type KeyPair } from './helpers.js'
 import { digestFor, hashData, verifyDigest } from '../src/crypto.js'
 import { dayStart } from '../src/core.js'
+import type { Store } from '../src/store.js'
 
 const usd = ref('usd')
 const issue = (to: string, amount: number, symbol = usd) => ({ action: 'issue', target: ref(to), symbol, amount })
@@ -16,17 +17,19 @@ for (const [storeName, makeStore] of STORES) {
   describe(`L3 on ${storeName}`, () => {
     let server: Awaited<ReturnType<typeof startServer>>
     let kp: KeyPair
+    let store: Store
     before(async () => {
-      server = await startServer(await makeStore())
+      store = await makeStore()
+      server = await startServer(store)
       kp = await newKeyPair()
     })
     after(() => server.close())
 
     async function books(wallets = ['alice', 'bob']) {
-      const { sdk } = await newLedger(server.base, kp)
+      const { sdk, handle } = await newLedger(server.base, kp)
       await setupBooks(sdk, kp, wallets)
       const run = async (...claims: unknown[]) => settle(sdk, await sendIntent(sdk, kp, claims))
-      return { sdk, run }
+      return { sdk, run, handle }
     }
 
     test('minBalance allows an overdraft down to the limit and no further', async () => {
@@ -154,6 +157,35 @@ for (const [storeName, makeStore] of STORES) {
         const { run } = await aggregatedBooks()
         for (let i = 0; i < 3; i++) await run(transfer('alice', 'bob', 1))
         await run(limit('alice', 'dailyCount', 2))
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'completed')
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'rejected')
+      })
+
+      // The counts are kept per wallet × symbol × metric as intents complete, not read from
+      // the history on every check (S10 point 5, scripts/bench.ts daily).
+      const usageKey = JSON.stringify(['alice', 'usd', 'dailyCount'])
+
+      test('a missing usage row is rebuilt from the completed intents', async () => {
+        const { run, handle } = await aggregatedBooks()
+        await run(limit('alice', 'dailyCount', 3)) // 1
+        await run(transfer('alice', 'bob', 1)) // 2
+        const kept = await store.get(handle, 'daily-usage', usageKey)
+        assert.equal(kept?.data.count, 2)
+        await store.remove(handle, 'daily-usage', usageKey)
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'completed') // 3, rebuilt
+        assert.equal((await store.get(handle, 'daily-usage', usageKey))?.data.count, 3)
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'rejected')
+      })
+
+      test('usage from an earlier day counts nothing today', async () => {
+        const { run, handle } = await aggregatedBooks()
+        await run(limit('alice', 'dailyCount', 2))
+        await run(transfer('alice', 'bob', 1))
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'rejected')
+        const row = (await store.get(handle, 'daily-usage', usageKey))!
+        await store.update(handle, 'daily-usage', { ...row, data: { ...row.data, day: row.data.day - 86_400_000 } })
+        assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'completed')
+        assert.equal((await store.get(handle, 'daily-usage', usageKey))?.data.count, 1)
         assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'completed')
         assert.equal((await run(transfer('alice', 'bob', 1))).meta.status, 'rejected')
       })
