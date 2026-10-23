@@ -1047,7 +1047,7 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
       const subject = { data: (req.body as any)?.data ?? {}, meta: domain ? { domain } : {} }
       await acl.authorize('create', record, { who, proofs: keys }, { ledger, domain, subject })
       await related(kind, ledger.data.handle, (req.body as any).data)
-      const aspect = kind === 'anchors' ? await aspectFor(store, ledger.data.handle, 'create') : undefined
+      const aspect = kind === 'anchors' ? await aspectFor(store, ledger.data.handle, 'create', { new: req.body }) : undefined
       reply.status(201).send(aspect ? await createAnchor(req, ledger, aspect) : await create(kind, ledger.data.handle, req.ledgerKey!, req))
     })
 

@@ -187,7 +187,10 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] Anchor forwarding (processing policy, strategies proxy/fallback/validate/synchronize) —
       `forwarding` 65/67 + 29/30 (synchronize `sign` is a reference 500, divergences.json);
       `server/src/forwarding.ts`, `server/test/forwarding.test.ts`
-- [ ] Policy `filter` on processing policies (spec: policy-filter; status policies apply it already) — not recorded, not applied — S10
+- [x] Policy `filter` on processing policies: recorded (`forwarding2`), applied on anchor `create` with
+      context `{new: <sent anchor>}`; a value's filter replaces the policy's — S10
+- [ ] Processing filters on read/query/update/sign/drop: context not recorded (today none, so a
+      filtered value never applies there); `ctx.req.headers` from the docs not recorded either
 - [x] Domains: `$dom` records, `meta.domain` from a proof or a one-`@` handle suffix,
       subdomain `data.domain`, intent `meta.domains` (recorded `domains` 31/31)
 - [x] Domain access inheritance (rules of a domain apply to its records and subdomains) —

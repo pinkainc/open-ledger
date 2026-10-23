@@ -4,6 +4,19 @@ Behaviour of the reference ledger (Minka public sandbox, `https://ldg-stg.one/ap
 service 2.45.5 — 2.46.5 since the effects recording, 2.47.4 since `abort`, also for reports; SDK 2.47.0) established by recording it. Each entry says how it was
 established. Newest first.
 
+## 2026-10-23 — Filters on processing policies (S10)
+
+Recorded on the sandbox: `forwarding2` (71 + 5 bridge calls), two ledgers (the first run had
+phases pa–pf only). Each phase: one `processing` policy with a `create` aspect, anchors with
+`custom.rail` r1/r2(/r3), a local read to see whether the anchor was proxied.
+
+- **The filter context of a create is `new`**, the anchor sent: `new.data.custom.rail` matches,
+  at the policy's root and on a value alike. `data.custom.rail` and `custom.rail` match nothing
+  (the policy never applies), at either level.
+- **A value's filter replaces its policy's**: root r1 with value r2 forwards r2 only.
+- **Filters choose among values**: two `create` values, r1 `proxy` and r2 `validate`, are no
+  500 (several values without filters are, forwarding); r3 matches neither and stays local.
+
 ## 2026-10-19 — Labels and labels policies (S10)
 
 Recorded on 2.47.5: `labels` (124), one ledger; implemented 2026-10-23 (`labels.ts`).

@@ -21,6 +21,7 @@
 import { SignJWT } from 'jose'
 import { canonical, hashData, privateKeyObject, verifyDigest, digestFor, type KeyPair, type Proof } from './crypto.js'
 import { LedgerError } from './errors.js'
+import { flatFilter, matches, parseQuery } from './query.js'
 import type { Store, StoredRecord } from './store.js'
 
 export type Strategy = 'proxy' | 'fallback' | 'validate' | 'synchronize'
@@ -50,12 +51,18 @@ const unexpected = (detail = 'Unexpected error while forwarding request to bridg
  * The aspect an action on anchors is forwarded by, if any. Several values for one
  * action — in one policy or across policies — fail at use, as does a bridge that
  * does not exist (recorded; both 500).
+ *
+ * A value applies only when its `filter`, else its policy's, matches the context
+ * (recorded, forwarding2): `new` is the anchor sent to `create` (`new.data.custom.x`);
+ * `data.…` or `custom.…` match nothing. Values whose filter does not match do not
+ * count as several. Other actions get no context yet, so a filter there never
+ * matches (not recorded).
  */
-export async function aspectFor(store: Store, scope: string, action: Action): Promise<Aspect | undefined> {
+export async function aspectFor(store: Store, scope: string, action: Action, ctx: Record<string, unknown> = {}): Promise<Aspect | undefined> {
   const values = (await store.list(scope, 'policies'))
     .filter((p) => p.data.schema === 'processing' && p.data.record === 'anchor')
-    .flatMap((p) => (Array.isArray(p.data.values) ? p.data.values : []))
-    .filter((v: any) => v?.schema === 'aspect' && v.action === action)
+    .flatMap((p) => (Array.isArray(p.data.values) ? p.data.values.map((v: any) => ({ ...v, filter: v?.filter ?? p.data.filter })) : []))
+    .filter((v: any) => v?.schema === 'aspect' && v.action === action && (!v.filter || matches(ctx, parseQuery(flatFilter(v.filter)))))
   if (!values.length) return undefined
   if (values.length > 1) throw unexpected(`Multiple processing aspect values found for action ${action}.`)
   const [v] = values
