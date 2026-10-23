@@ -54,7 +54,10 @@ povijest.
 - Nepovratne vanjske akcije, npr. objavu ili brisanje izvan repoa, ostavi korisniku.
 - **Token budget:** bez Monitora koji javlja napredak. Duge jobove pokreni s
   `run_in_background` i javi se tek na kraju. Bez fan-outa subagenata za rutinski posao.
-  Oko 150k konteksta zatvori sesiju po koraku 3 iz lanca.
+  **Soft limit sesije je 300k tokena konteksta** (odluka korisnika 2026-10-23, vrijedi za
+  svaki budući handoff): oko 300k zatvori sesiju po koraku 3 iz lanca. Hook
+  `context-guard` javlja već na 180k; to je upozorenje, ne kraj, osim ako je ostatak
+  posla velik (tada prvo commit). Svaki handoff prompt ponavlja ovo pravilo.
 - Ako docs mirror (`../docs.minka.io`) ili sandbox imaju noviju verziju od zadnje snimke,
   zapiši to u handoff sljedeće sesije. Ne snimaj sve iznova usred paketa.
 
