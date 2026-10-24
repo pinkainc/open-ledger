@@ -60,6 +60,8 @@ Svih jedanaest sesija je gotovo (tablica „Stanje lanca” u `docs/handoffs/REA
   in-flight runovi adaptera `bridges/ledger-bridge`, manje round tripova po intentu i nestanak
   servera na memoriji ako se ponovi. Uz to DTC executor ako ga sandbox ikad počne izvršavati
   (`dtc` ponovno snimiti na novoj verziji).
+- **Nova verzija Minke:** `scripts/minka-version.sh` kaže je li se išta pomaknulo (samo čita),
+  a postupak je u `docs/handoffs/nova-verzija.md`.
 
 **Procjena: 9 planiranih sesija, s rezervom 9–11 handoff promptova.** Najrizičniji
 su S3 i S6. Reports i cross-ledger imaju vlastiti protokol, a docs su dosad u više

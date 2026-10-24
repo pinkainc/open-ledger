@@ -21,6 +21,8 @@ Korisnik nakon `/clear` kaže „nastavi zadnji handoff” ili zalijepi prompt i
 5. Ako je posljednji paket gotov, a rezervne sesije nisu potrebne, lanac je zatvoren. Tada
    se samo osvježi „Gdje smo” u planu i `README.md`.
 
+Lanac je zatvoren. Provjere kasnijih verzija Minke idu po `nova-verzija.md`.
+
 Handoff se smije mijenjati samo prema naprijed: gotovi `SN` se ne prepisuju, služe kao
 povijest.
 
