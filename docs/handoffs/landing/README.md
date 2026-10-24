@@ -26,6 +26,11 @@ Gotovi `WN.md` se ne prepisuju.
 
 - **Samo lokalno.** Nema `wrangler deploy`, nema objave, nema DNS-a. To je korak D1 i
   radi se tek na izričit „deployaj” korisnika.
+- **Placeholderi** (odluka korisnika 2026-10-24): gdje ne znaš što staviti (kontakt,
+  slike, tekst koji traži korisnikovu odluku), ne izmišljaj i ne izostavljaj, nego stavi
+  vidljiv placeholder `[[TODO: kratki opis]]` (u tekstu i u UI-ju, prepoznatljiv stil) i
+  dopiši ga u `site/PLACEHOLDERS.md` (gdje, što treba, tko odlučuje). Rješavaju se kasnije
+  zajedno s korisnikom.
 - **Hrvatski i engleski**, ravnopravno. Brojke samo iz `site/src/data/facts.json` (od W2).
 - **Browser:** claude-in-chrome, uvijek Brave `ms@ff.hr`, deviceId
   `80df9c18-1811-478c-80bc-8ead45619cfc` (`list_connected_browsers` → `select_browser`).
