@@ -60,4 +60,4 @@ Gotovi `WN.md` se ne prepisuju.
 | W5 | Sekcije i dijagrami | gotovo 2026-10-24 | 0e48255 | `ProofDiagram`/`LevelsTable`/`CodeBlock`; linkovi na `/{lang}/coverage/` i `/{lang}/findings/` već su na početnoj (404 do W6) |
 | W6 | `/coverage`, `/findings` | gotovo 2026-10-24 | ae6819c | `site/src/lib/repo-docs.ts` čita COVERAGE.md, FINDINGS.md, divergences.json pri buildu, baca grešku ako se brojke ne poklapaju s `facts.json`; `marked` 18.1.1; filtar po resursu = chipovi + inline skripta |
 | W7 | SEO, a11y, Lighthouse | gotovo 2026-10-24 | 881faaa | OG PNG iz `npm --prefix site run og` (rsvg-convert, PNG-ovi commitani), `404.html`, `llms.txt.ts`; Lighthouse 100/100/100/100 na 6 stranica; svi interni linkovi 200 |
-| W8 | Završni pregled, dry run | — | | |
+| W8 | Završni pregled, dry run | gotovo 2026-10-24 | 29f1531 | `site/wrangler.jsonc`, `wrangler deploy --dry-run` prolazi; OG sha256 provjera u `npm run check`; tvrdnje EN+HR provjerene; jedini UI placeholder kontakt; D1 čeka „deployaj” |

@@ -1,6 +1,9 @@
 # Plan: landing stranica `open-ledger.mpt.hr`
 
-Stanje: plan, ništa nije napravljeno. Polazni commit `c033b0b`.
+Stanje (2026-10-24, W8): **W1–W8 gotovi, ništa nije objavljeno.** Stranica se gradi lokalno
+(`npm --prefix site run build`), `npx wrangler deploy --dry-run` u `site/` prolazi (wrangler 4.151.3,
+`site/wrangler.jsonc`). Sljedeće je D1 (deploy) i to tek na izričit „deployaj” korisnika:
+`docs/handoffs/landing/D1.md`. Što čeka korisnika: `site/PLACEHOLDERS.md`. Polazni commit plana `c033b0b`.
 
 ## Odluke (zapisane, ne otvaraju se po koracima)
 
