@@ -56,7 +56,7 @@ Gotovi `WN.md` se ne prepisuju.
 | W1 | Inventar sadržaja | gotovo 2026-10-24 | f97e12c | `site/CONTENT.md`; README repoa ima 2 zastarjele brojke (217 testova, „one” divergencija), vidi W2.md |
 | W2 | Generator brojki | gotovo 2026-10-24 | 7fe5b35 | `scripts/site-facts.ts`, `--check` u `npm run check`; README ispravljen (451 testova, 21 divergencija, bench, L7) |
 | W3 | Kostur Astra, i18n | gotovo 2026-10-24 | 386b53c | Astro 7.4.2, `/` po jeziku preglednika, tema bez bljeska, 360 px bez scrolla; `astro dev` se sam daemonizira (`astro dev stop`) |
-| W4 | Tekst EN + HR | — | | |
+| W4 | Tekst EN + HR | gotovo 2026-10-24 | f463ea6 | `site/src/i18n/copy/{en,hr}.ts` `satisfies Copy`; `title`/`description` preseljeni iz `ui.ts`; `tsc` u `npm --prefix site run build` |
 | W5 | Sekcije i dijagrami | — | | |
 | W6 | `/coverage`, `/findings` | — | | |
 | W7 | SEO, a11y, Lighthouse | — | | |
