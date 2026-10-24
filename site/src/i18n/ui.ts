@@ -1,4 +1,4 @@
-// UI strings and section headings. Body copy for the sections comes in W4.
+// UI strings and section headings. Body copy and <title>/description: ./copy/ (W4).
 export const languages = { en: 'English', hr: 'Hrvatski' } as const;
 export type Lang = keyof typeof languages;
 export const langs = Object.keys(languages) as Lang[];
@@ -20,8 +20,6 @@ export const sectionIds = [
 export type SectionId = (typeof sectionIds)[number];
 
 type Dict = {
-  title: string;
-  description: string;
   skip: string;
   navLabel: string;
   nav: Partial<Record<SectionId, string>>;
@@ -36,9 +34,6 @@ type Dict = {
 
 export const ui: Record<Lang, Dict> = {
   en: {
-    title: 'open-ledger: a Minka-compatible ledger',
-    description:
-      'An open-source (MIT) server that answers the Minka Ledger API the way Minka does.',
     skip: 'Skip to content',
     navLabel: 'Sections',
     nav: {
@@ -52,7 +47,7 @@ export const ui: Record<Lang, Dict> = {
       hero: 'A Minka-compatible ledger',
       numbers: 'Numbers',
       proof: 'How compatibility is proven',
-      levels: 'Levels L0-L9',
+      levels: 'Levels L0–L9',
       interop: 'Interoperability with Minka',
       coverage: 'API coverage',
       running: 'Running it',
@@ -74,9 +69,6 @@ export const ui: Record<Lang, Dict> = {
     },
   },
   hr: {
-    title: 'open-ledger: ledger kompatibilan s Minkom',
-    description:
-      'Server otvorenog koda (MIT) koji odgovara na Minka Ledger API onako kako odgovara Minka.',
     skip: 'Preskoči na sadržaj',
     navLabel: 'Odjeljci',
     nav: {
@@ -90,7 +82,7 @@ export const ui: Record<Lang, Dict> = {
       hero: 'Ledger kompatibilan s Minkom',
       numbers: 'Brojke',
       proof: 'Kako se kompatibilnost dokazuje',
-      levels: 'Razine L0-L9',
+      levels: 'Razine L0–L9',
       interop: 'Interoperabilnost s Minkom',
       coverage: 'Pokrivenost API-ja',
       running: 'Pokretanje',
@@ -98,15 +90,15 @@ export const ui: Record<Lang, Dict> = {
       'non-goals': 'Što ovo nije',
       findings: 'Nalazi o referenci',
     },
-    themeToggle: 'Promijeni temu',
+    themeToggle: 'Promijeni temu boja',
     themeLight: 'Svijetla',
     themeDark: 'Tamna',
     langSwitch: 'English',
-    heroBadge: (c, t) => `${c}/${t} operacija potvrđeno protiv sandboxa`,
+    heroBadge: (c, t) => `${c}/${t} operacija potvrđeno snimkama sa sandboxa`,
     footer: {
       license: 'Licenca MIT',
       disclaimer:
-        'open-ledger je nezavisan projekt, nije povezan s tvrtkom Minka Inc. niti ga ona podržava; „Minka” ovdje označava njihov proizvod samo da bi se imenovao API s kojim je ovaj server kompatibilan.',
+        'open-ledger je nezavisan projekt koji nije povezan s tvrtkom Minka Inc. niti ga ona podržava. Ime „Minka” ovdje označava njihov proizvod samo zato da se imenuje API s kojim je ovaj server kompatibilan.',
       source: 'Izvorni kod na GitHubu',
       contact: 'Kontakt',
     },

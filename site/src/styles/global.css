@@ -95,3 +95,6 @@ h2 { font-size: clamp(1.35rem, 3.5vw, 1.85rem); }
   padding: .15rem .75rem;
   color: var(--fg-muted);
 }
+
+/* W4: code blocks scroll inside themselves, never the page (W5 styles them properly). */
+pre { max-width: 100%; overflow-x: auto; }

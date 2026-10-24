@@ -1,0 +1,10 @@
+---
+// Renders one copy text: `backticks` become <code>, everything else is escaped text.
+import { text, type Text } from '../i18n/copy';
+import facts from '../data/facts.json';
+
+interface Props { t: Text; as?: 'p' | 'li' | 'span' }
+const { t, as: Tag = 'p' } = Astro.props;
+const parts = text(t, facts).split('`');
+---
+<Tag>{parts.map((s, i) => (i % 2 ? <code>{s}</code> : s))}</Tag>

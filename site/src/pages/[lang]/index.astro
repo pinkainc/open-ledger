@@ -1,27 +1,112 @@
 ---
+// W4: copy shown as plain text in the W3 sections. Components, tables, diagrams: W5.
 import Base from '../../layouts/Base.astro';
+import Prose from '../../components/Prose.astro';
 import facts from '../../data/facts.json';
-import { ui, langs, sectionIds, type Lang } from '../../i18n/ui';
+import { ui, langs, type Lang } from '../../i18n/ui';
+import { copy, text } from '../../i18n/copy';
+import { commands, clientSnippets } from '../../i18n/copy/code';
 
 export function getStaticPaths() {
   return langs.map((lang) => ({ params: { lang } }));
 }
 const lang = Astro.params.lang as Lang;
 const t = ui[lang];
-const [hero, ...rest] = sectionIds;
+const c = copy[lang];
+const s = t.sections;
+const snippets = clientSnippets(facts);
+const repo = 'https://github.com/pinkainc/open-ledger';
 ---
 <Base lang={lang}>
-  <section id={hero} class="hero">
+  <section id="hero" class="hero">
     <div class="wrap">
-      <h1>{t.sections[hero]}</h1>
+      <h1>{s.hero}</h1>
       <p class="badge">{t.heroBadge(facts.operations.confirmed, facts.operations.total)}</p>
+      {c.hero.lead.map((p) => <Prose t={p} />)}
+      <p>
+        <a href={repo}>{c.hero.buttons.github}</a> ·
+        <a href="#running">{c.hero.buttons.run}</a> ·
+        <a href="#proof">{c.hero.buttons.proof}</a>
+      </p>
     </div>
   </section>
-  {rest.map((id) => (
-    <section id={id}>
-      <div class="wrap">
-        <h2>{t.sections[id]}</h2>
-      </div>
-    </section>
-  ))}
+
+  <section id="numbers"><div class="wrap">
+    <h2>{s.numbers}</h2>
+    <ul>{c.numbers.items.map((i) => <li><strong>{text(i.value, facts)}</strong> <Prose as="span" t={i.label} /></li>)}</ul>
+    <Prose t={c.numbers.intro} />
+  </div></section>
+
+  <section id="proof"><div class="wrap">
+    <h2>{s.proof}</h2>
+    <Prose t={c.proof.intro} />
+    <ol>{c.proof.steps.map((p) => <Prose as="li" t={p} />)}</ol>
+    <Prose t={c.proof.placeholders} />
+    <Prose t={c.proof.bridges} />
+    <Prose t={c.proof.divergences} />
+    <Prose t={c.proof.example} />
+    <Prose t={c.proof.precedence} />
+  </div></section>
+
+  <section id="levels"><div class="wrap">
+    <h2>{s.levels}</h2>
+    <Prose t={c.levels.intro} />
+    <ul>{facts.levels.map((l) => (
+      <li>
+        <strong>{l.id}</strong> <Prose as="span" t={c.levels.scope(l)} />:
+        {l.fixtures.map((x) => `${x.name} ${x.clientMatched}/${x.clientTotal}` +
+          (x.bridgeTotal ? ` + ${x.bridgeMatched}/${x.bridgeTotal}` : '') +
+          (x.differ ? ` (${c.levels.columns.differ.toLowerCase()}: ${x.differ})` : '')).join('; ')}
+      </li>
+    ))}</ul>
+    {c.levels.notes.map((p) => <Prose t={p} />)}
+  </div></section>
+
+  <section id="interop"><div class="wrap">
+    <h2>{s.interop}</h2>
+    {c.interop.paragraphs.map((p) => <Prose t={p} />)}
+    <p><a href="https://docs.minka.io/ledger/connecting-systems/cross-ledger-payments">{c.interop.docsLink}</a></p>
+  </div></section>
+
+  <section id="coverage"><div class="wrap">
+    <h2>{s.coverage}</h2>
+    <Prose t={c.coverage.teaser} />
+    <p>{c.coverage.link}</p>
+  </div></section>
+
+  <section id="running"><div class="wrap">
+    <h2>{s.running}</h2>
+    <Prose t={c.running.requirements} />
+    <Prose t={c.running.commandsIntro} />
+    <pre><code>{commands(facts).map(({ id, cmd }) => `${cmd.padEnd(34)}# ${text(c.running.commands[id], facts)}`).join('\n')}</code></pre>
+    <Prose t={c.running.envIntro} />
+    <ul>{Object.entries(c.running.env).map(([k, v]) => <li><code>{k}</code>: <Prose as="span" t={v} /></li>)}</ul>
+    <Prose t={c.running.clients} />
+    <pre><code>{snippets.cli}</code></pre>
+    <pre><code>{snippets.sdk}</code></pre>
+    <Prose t={c.running.record} />
+  </div></section>
+
+  <section id="design"><div class="wrap">
+    <h2>{s.design}</h2>
+    <Prose t={c.design.stores} />
+    <Prose t={c.design.serialisation} />
+    <Prose t={c.design.invariantsIntro} />
+    <ul>{c.design.invariants.map((p) => <Prose as="li" t={p} />)}</ul>
+    <Prose t={c.design.lineCoverage} />
+    <h3>{c.design.gapsTitle}</h3>
+    <ul>{c.design.gaps.map((p) => <Prose as="li" t={p} />)}</ul>
+    <Prose t={c.design.backlog} />
+  </div></section>
+
+  <section id="non-goals"><div class="wrap">
+    <h2>{s['non-goals']}</h2>
+    {c.nonGoals.paragraphs.map((p) => <Prose t={p} />)}
+  </div></section>
+
+  <section id="findings"><div class="wrap">
+    <h2>{s.findings}</h2>
+    {c.findings.teaser.map((p) => <Prose t={p} />)}
+    <p>{c.findings.link}</p>
+  </div></section>
 </Base>

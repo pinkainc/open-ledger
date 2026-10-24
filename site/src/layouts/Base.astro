@@ -3,6 +3,8 @@ import '../styles/global.css';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 import { ui, langs, type Lang } from '../i18n/ui';
+import { copy, text } from '../i18n/copy';
+import facts from '../data/facts.json';
 
 interface Props {
   lang: Lang;
@@ -11,6 +13,7 @@ interface Props {
 }
 const { lang, path = '' } = Astro.props;
 const t = ui[lang];
+const meta = copy[lang].meta;
 const site = Astro.site!;
 const href = (l: Lang) => new URL(`/${l}/${path}`, site).href;
 ---
@@ -19,8 +22,8 @@ const href = (l: Lang) => new URL(`/${l}/${path}`, site).href;
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{t.title}</title>
-    <meta name="description" content={t.description} />
+    <title>{text(meta.title, facts)}</title>
+    <meta name="description" content={text(meta.description, facts)} />
     <link rel="canonical" href={href(lang)} />
     {langs.map((l) => <link rel="alternate" hreflang={l} href={href(l)} />)}
     <link rel="alternate" hreflang="x-default" href={new URL('/', site).href} />
