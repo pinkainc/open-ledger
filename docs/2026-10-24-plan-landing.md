@@ -1,6 +1,9 @@
 # Plan: landing stranica `open-ledger.mpt.hr`
 
-Stanje (2026-10-24, W8): **W1–W8 gotovi, ništa nije objavljeno.** Stranica se gradi lokalno
+Stanje (2026-10-24, D1): **W1–W8 gotovi, D1 deployan: https://open-ledger.mpt.hr je živ**
+(Worker `open-ledger-site`, račun D.O.M. koji drži zonu `mpt.hr`, `account_id` u `site/wrangler.jsonc`;
+ponovni deploy: `cd site && npm run build && npx wrangler deploy`). Ostaje: kontakt u podnožju,
+GitHub Action, demo instanca (`site/PLACEHOLDERS.md`). Povijest prije deploya: Stranica se gradi lokalno
 (`npm --prefix site run build`), `npx wrangler deploy --dry-run` u `site/` prolazi (wrangler 4.151.3,
 `site/wrangler.jsonc`). Sljedeće je D1 (deploy) i to tek na izričit „deployaj” korisnika:
 `docs/handoffs/landing/D1.md`. Što čeka korisnika: `site/PLACEHOLDERS.md`. Polazni commit plana `c033b0b`.

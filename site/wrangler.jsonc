@@ -5,6 +5,8 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "open-ledger-site",
+  // Account D.O.M., which holds the zone mpt.hr (the login sees many accounts).
+  "account_id": "7dc7167b7e2e00923bfa7cd697df14e4",
   "compatibility_date": "2026-10-24",
   "assets": {
     "directory": "./dist",

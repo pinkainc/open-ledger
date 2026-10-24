@@ -354,4 +354,4 @@ checks each step in the browser before the next.
 - [x] W6 `/coverage` and `/findings` generated from the repo
 - [x] W7 SEO, meta, accessibility, Lighthouse ≥ 95 (100/100/100/100 on /en/, /hr/, coverage, findings)
 - [x] W8 final review, `site/wrangler.jsonc` (wrangler 4.151.3 pinned), `wrangler deploy --dry-run` passes, OG staleness check in `npm run check`
-- [ ] D1 deploy — only on the user's explicit go (`docs/handoffs/landing/D1.md`; open items in `site/PLACEHOLDERS.md`)
+- [x] D1 deploy 2026-10-24: https://open-ledger.mpt.hr live (Worker `open-ledger-site`, account D.O.M.); GitHub Action not made (`docs/handoffs/landing/D1.md`; open items in `site/PLACEHOLDERS.md`)

@@ -12,7 +12,5 @@ Sve što na stranici čeka korisnikovu odluku. U UI-ju je vidljivo kao `[[TODO: 
 
 | Što | Gdje | Što treba | Tko odlučuje |
 | --- | --- | --- | --- |
-| Prvi deploy | `site/wrangler.jsonc`, `docs/handoffs/landing/D1.md` | izričit „deployaj”; `! npx wrangler login` na računu sa zonom `mpt.hr`; provjera da u zoni nema postojećeg zapisa `open-ledger.mpt.hr` | korisnik |
 | GitHub Action za deploy | (nije napravljen) | želi li deploy na push u `site/**`; ako da, secret `CLOUDFLARE_API_TOKEN` (i `CLOUDFLARE_ACCOUNT_ID`) postavlja korisnik | korisnik |
 | Javna demo instanca servera | plan, „Otvoreno za korisnika” | treba li „probaj odmah” (Node + Postgres, nije Workers); sad samo upute za lokalno pokretanje | korisnik |
-| Oznaka „not live yet” | `README.md` repoa (redak „Website”) | maknuti nakon prvog uspješnog deploya | tko radi D1 |

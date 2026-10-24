@@ -8,9 +8,9 @@ MinIO, Ceph and R2 implement that contract with their own internals. Minka is a 
 box in the same way: what is public is the API its clients speak. Everything behind
 that API here is our own design and is free to be better than the original.
 
-Website: [open-ledger.mpt.hr](https://open-ledger.mpt.hr) — **not live yet**; the page is
-built from this repository (`site/`, see [`site/README.md`](site/README.md)) and
-deployed only when the owner says so.
+Website: [open-ledger.mpt.hr](https://open-ledger.mpt.hr), in English and Croatian. It is
+built from this repository (`site/`, see [`site/README.md`](site/README.md)): every number
+on it comes from `site/src/data/facts.json`, which `npm run check` keeps in step with the repo.
 
 ## How compatibility is established
 
