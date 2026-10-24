@@ -319,7 +319,8 @@ policy validator knows them, but only `access`, `status`, `processing`, `labels`
       whitelist of added labels, `unique` moves a label by a system proof — S10
 - [ ] Conformance on memory: twice on 2026-10-23 the server vanished mid-scenario (`l9mixed`, then
       `waits`; ECONNREFUSED on :4620, nothing in `.rec/server.log`, so a signal, not a crash); each
-      level passed on rerun (`waits` 3/3). Capture the server's stdout and exit signal if it recurs
+      level passed on rerun (`waits` 3/3). Capture the server's stdout and exit signal if it recurs.
+      Full `npm run check` on 2026-10-24 (after the chain): no recurrence
 - [x] Labels corners (`labels2` 43/43 + 2/2, S11): changes carry each version's labels; invalid labels at
       creation at `/body/meta/proofs/<i>/custom/labels`; `$addToSet` with the `$push` modifiers; the
       system proof that takes a unique label raises `wallet-updated` (any proof does, every kind) and
