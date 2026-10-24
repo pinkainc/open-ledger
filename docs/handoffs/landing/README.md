@@ -47,7 +47,7 @@ Gotovi `WN.md` se ne prepisuju.
 
 | Korak | Paket | Stanje | Commit | Napomena |
 | --- | --- | --- | --- | --- |
-| W1 | Inventar sadržaja | gotovo 2026-10-24 | HASH | `site/CONTENT.md`; README repoa ima 2 zastarjele brojke (217 testova, „one” divergencija), vidi W2.md |
+| W1 | Inventar sadržaja | gotovo 2026-10-24 | f97e12c | `site/CONTENT.md`; README repoa ima 2 zastarjele brojke (217 testova, „one” divergencija), vidi W2.md |
 | W2 | Generator brojki | — | | |
 | W3 | Kostur Astra, i18n | — | | |
 | W4 | Tekst EN + HR | — | | |
