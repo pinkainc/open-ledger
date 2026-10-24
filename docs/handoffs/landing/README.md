@@ -59,5 +59,5 @@ Gotovi `WN.md` se ne prepisuju.
 | W4 | Tekst EN + HR | gotovo 2026-10-24 | f463ea6 | `site/src/i18n/copy/{en,hr}.ts` `satisfies Copy`; `title`/`description` preseljeni iz `ui.ts`; `tsc` u `npm --prefix site run build` |
 | W5 | Sekcije i dijagrami | gotovo 2026-10-24 | 0e48255 | `ProofDiagram`/`LevelsTable`/`CodeBlock`; linkovi na `/{lang}/coverage/` i `/{lang}/findings/` već su na početnoj (404 do W6) |
 | W6 | `/coverage`, `/findings` | gotovo 2026-10-24 | ae6819c | `site/src/lib/repo-docs.ts` čita COVERAGE.md, FINDINGS.md, divergences.json pri buildu, baca grešku ako se brojke ne poklapaju s `facts.json`; `marked` 18.1.1; filtar po resursu = chipovi + inline skripta |
-| W7 | SEO, a11y, Lighthouse | gotovo 2026-10-24 | HASH | OG PNG iz `npm --prefix site run og` (rsvg-convert, PNG-ovi commitani), `404.html`, `llms.txt.ts`; Lighthouse 100/100/100/100 na 6 stranica; svi interni linkovi 200 |
+| W7 | SEO, a11y, Lighthouse | gotovo 2026-10-24 | 881faaa | OG PNG iz `npm --prefix site run og` (rsvg-convert, PNG-ovi commitani), `404.html`, `llms.txt.ts`; Lighthouse 100/100/100/100 na 6 stranica; svi interni linkovi 200 |
 | W8 | Završni pregled, dry run | — | | |
