@@ -340,3 +340,18 @@ policy validator knows them, but only `access`, `status`, `processing`, `labels`
 - [x] `npm run check`: typecheck, unit tests and every level's conformance, on memory and Postgres
 - [x] Postgres conformance runs get an empty database each (`dev-db.sh fresh`): a server
       resumes every unfinished intent, and l6 leaves one on purpose
+
+## Website `open-ledger.mpt.hr` (plan: `docs/2026-10-24-plan-landing.md`)
+
+Local only until the user says deploy; HR + EN; one subagent per step, the main session
+checks each step in the browser before the next.
+
+- [ ] W1 content inventory with sources (`site/CONTENT.md`)
+- [ ] W2 `scripts/site-facts.ts` → `site/src/data/facts.json`, stale check in `npm run check`
+- [ ] W3 Astro skeleton in `site/`, i18n `hr`/`en`, light/dark theme
+- [ ] W4 copy, EN and HR
+- [ ] W5 home page sections and diagrams
+- [ ] W6 `/coverage` and `/findings` generated from the repo
+- [ ] W7 SEO, meta, accessibility, Lighthouse ≥ 95
+- [ ] W8 final review, `wrangler.jsonc` ready, dry run only
+- [ ] D1 deploy — only on the user's explicit go
