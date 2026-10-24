@@ -1,0 +1,27 @@
+---
+import Base from '../../layouts/Base.astro';
+import facts from '../../data/facts.json';
+import { ui, langs, sectionIds, type Lang } from '../../i18n/ui';
+
+export function getStaticPaths() {
+  return langs.map((lang) => ({ params: { lang } }));
+}
+const lang = Astro.params.lang as Lang;
+const t = ui[lang];
+const [hero, ...rest] = sectionIds;
+---
+<Base lang={lang}>
+  <section id={hero} class="hero">
+    <div class="wrap">
+      <h1>{t.sections[hero]}</h1>
+      <p class="badge">{t.heroBadge(facts.operations.confirmed, facts.operations.total)}</p>
+    </div>
+  </section>
+  {rest.map((id) => (
+    <section id={id}>
+      <div class="wrap">
+        <h2>{t.sections[id]}</h2>
+      </div>
+    </section>
+  ))}
+</Base>

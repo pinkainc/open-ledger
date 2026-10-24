@@ -348,7 +348,7 @@ checks each step in the browser before the next.
 
 - [x] W1 content inventory with sources (`site/CONTENT.md`)
 - [x] W2 `scripts/site-facts.ts` → `site/src/data/facts.json`, stale check in `npm run check`
-- [ ] W3 Astro skeleton in `site/`, i18n `hr`/`en`, light/dark theme
+- [x] W3 Astro skeleton in `site/` (Astro 7.4.2), i18n `hr`/`en`, light/dark theme
 - [ ] W4 copy, EN and HR
 - [ ] W5 home page sections and diagrams
 - [ ] W6 `/coverage` and `/findings` generated from the repo

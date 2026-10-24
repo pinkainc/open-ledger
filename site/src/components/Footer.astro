@@ -1,0 +1,26 @@
+---
+import { ui, type Lang } from '../i18n/ui';
+interface Props { lang: Lang }
+const t = ui[Astro.props.lang];
+---
+<footer class="site-footer" id="footer">
+  <div class="wrap">
+    <p>
+      <a href="https://github.com/pinkainc/open-ledger/blob/main/LICENSE">{t.footer.license}</a>
+      · Copyright (c) 2026 Matija Stepanic
+      · <a href="https://github.com/pinkainc/open-ledger">{t.footer.source}</a>
+      · {t.footer.contact}: <span class="todo">[[TODO: kontakt]]</span>
+    </p>
+    <p class="disclaimer">{t.footer.disclaimer}</p>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--border);
+    padding: 2rem 0 3rem;
+    color: var(--fg-muted);
+    font-size: .9rem;
+  }
+  .disclaimer { max-width: 60rem; }
+</style>

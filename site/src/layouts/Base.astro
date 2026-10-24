@@ -1,0 +1,45 @@
+---
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { ui, langs, type Lang } from '../i18n/ui';
+
+interface Props {
+  lang: Lang;
+  /** Path after the language prefix, e.g. '' for the home page or 'coverage/'. */
+  path?: string;
+}
+const { lang, path = '' } = Astro.props;
+const t = ui[lang];
+const site = Astro.site!;
+const href = (l: Lang) => new URL(`/${l}/${path}`, site).href;
+---
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{t.title}</title>
+    <meta name="description" content={t.description} />
+    <link rel="canonical" href={href(lang)} />
+    {langs.map((l) => <link rel="alternate" hreflang={l} href={href(l)} />)}
+    <link rel="alternate" hreflang="x-default" href={new URL('/', site).href} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Theme before first paint: a stored choice wins, otherwise prefers-color-scheme (CSS). -->
+    <script is:inline>
+      try {
+        var t = localStorage.getItem('theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">{t.skip}</a>
+    <Header lang={lang} path={path} />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer lang={lang} />
+  </body>
+</html>

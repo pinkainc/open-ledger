@@ -1,0 +1,122 @@
+---
+import { ui, otherLang, type Lang } from '../i18n/ui';
+interface Props { lang: Lang; path?: string }
+const { lang, path = '' } = Astro.props;
+const t = ui[lang];
+const other = otherLang(lang);
+---
+<header class="site-header">
+  <div class="wrap bar">
+    <a class="logo" href={`/${lang}/`}>open-ledger</a>
+    <nav aria-label={t.navLabel}>
+      <ul>
+        {Object.entries(t.nav).map(([id, label]) => (
+          <li><a href={`/${lang}/#${id}`}>{label}</a></li>
+        ))}
+      </ul>
+    </nav>
+    <div class="controls">
+      <a class="lang" href={`/${other}/${path}`} hreflang={other} lang={other} data-lang={other}>
+        {t.langSwitch}
+      </a>
+      <button
+        type="button"
+        class="theme"
+        aria-label={t.themeToggle}
+        title={t.themeToggle}
+        data-light={t.themeLight}
+        data-dark={t.themeDark}
+      >
+        <span class="theme-label">{t.themeDark}</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<script is:inline>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.querySelector('.site-header .theme');
+    var label = btn.querySelector('.theme-label');
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    function current() {
+      return root.dataset.theme || (mq.matches ? 'dark' : 'light');
+    }
+    function render() {
+      // The button names the theme it switches to.
+      var next = current() === 'dark' ? 'light' : 'dark';
+      label.textContent = btn.dataset[next];
+      btn.setAttribute('aria-pressed', String(current() === 'dark'));
+    }
+    btn.addEventListener('click', function () {
+      var next = current() === 'dark' ? 'light' : 'dark';
+      root.dataset.theme = next;
+      try { localStorage.setItem('theme', next); } catch (e) {}
+      render();
+    });
+    mq.addEventListener('change', render);
+    render();
+
+    // Language: a plain link; remember the choice for `/` and keep the section anchor.
+    var lang = document.querySelector('.site-header .lang');
+    lang.addEventListener('click', function () {
+      try { localStorage.setItem('lang', lang.dataset.lang); } catch (e) {}
+      if (location.hash) lang.href = lang.href.split('#')[0] + location.hash;
+    });
+  })();
+</script>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem 1rem;
+    padding-top: .6rem;
+    padding-bottom: .6rem;
+  }
+  .logo {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--fg);
+    text-decoration: none;
+  }
+  /* Narrow screens: nav is a second row that scrolls sideways inside itself,
+     so the sticky header stays two rows and the page never scrolls horizontally. */
+  nav { order: 3; flex-basis: 100%; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  nav ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    gap: .25rem 1rem;
+    font-size: .95rem;
+    white-space: nowrap;
+  }
+  nav a { color: var(--fg-muted); text-decoration: none; }
+  nav a:hover { color: var(--fg); text-decoration: underline; }
+  .controls { margin-left: auto; display: flex; gap: .5rem; align-items: center; }
+  .lang, .theme {
+    font: inherit;
+    font-size: .9rem;
+    color: var(--fg);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .2rem .6rem;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .lang:hover, .theme:hover { border-color: var(--fg-muted); }
+  @media (min-width: 768px) {
+    nav { order: 0; flex-basis: auto; }
+  }
+</style>
