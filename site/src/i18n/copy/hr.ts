@@ -106,6 +106,7 @@ export const hr = {
       candidate: 'snimka kandidata',
       compare: 'usporedba',
       exceptions: 'divergences.json',
+      caption: 'Isti scenarij dvaput prolazi kroz proxy za snimanje: jednom prema Minkinom sandboxu (snimka reference, korak 2), jednom prema open-ledgeru (snimka kandidata, korak 3). Usporedba sparuje dvije snimke razmjenu po razmjenu, a razmjene upisane u divergences.json samo prijavljuje, ne broji ih kao pogreške (korak 4).',
     },
   },
 

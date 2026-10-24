@@ -1,7 +1,10 @@
 ---
-// W4: copy shown as plain text in the W3 sections. Components, tables, diagrams: W5.
+// Home page. All text from copy[lang] (src/i18n/copy), all numbers from facts.json.
 import Base from '../../layouts/Base.astro';
 import Prose from '../../components/Prose.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import ProofDiagram from '../../components/ProofDiagram.astro';
+import LevelsTable from '../../components/LevelsTable.astro';
 import facts from '../../data/facts.json';
 import { ui, langs, type Lang } from '../../i18n/ui';
 import { copy, text } from '../../i18n/copy';
@@ -15,6 +18,7 @@ const t = ui[lang];
 const c = copy[lang];
 const s = t.sections;
 const snippets = clientSnippets(facts);
+const cb = { copy: c.running.copy, copied: c.running.copied };
 const repo = 'https://github.com/pinkainc/open-ledger';
 ---
 <Base lang={lang}>
@@ -22,91 +26,126 @@ const repo = 'https://github.com/pinkainc/open-ledger';
     <div class="wrap">
       <h1>{s.hero}</h1>
       <p class="badge">{t.heroBadge(facts.operations.confirmed, facts.operations.total)}</p>
-      {c.hero.lead.map((p) => <Prose t={p} />)}
-      <p>
-        <a href={repo}>{c.hero.buttons.github}</a> ·
-        <a href="#running">{c.hero.buttons.run}</a> ·
-        <a href="#proof">{c.hero.buttons.proof}</a>
+      <div class="lead">{c.hero.lead.map((p) => <Prose t={p} />)}</div>
+      <p class="actions">
+        <a class="btn primary" href={repo}>{c.hero.buttons.github}</a>
+        <a class="btn" href="#running">{c.hero.buttons.run}</a>
+        <a class="btn" href="#proof">{c.hero.buttons.proof}</a>
       </p>
     </div>
   </section>
 
   <section id="numbers"><div class="wrap">
     <h2>{s.numbers}</h2>
-    <ul>{c.numbers.items.map((i) => <li><strong>{text(i.value, facts)}</strong> <Prose as="span" t={i.label} /></li>)}</ul>
-    <Prose t={c.numbers.intro} />
+    <ul class="cards">{c.numbers.items.map((i) => (
+      <li class="card">
+        <span class="value">{text(i.value, facts)}</span>
+        <Prose as="span" t={i.label} />
+      </li>
+    ))}</ul>
+    <p class="fineprint"><Prose as="span" t={c.numbers.intro} /></p>
   </div></section>
 
   <section id="proof"><div class="wrap">
     <h2>{s.proof}</h2>
     <Prose t={c.proof.intro} />
-    <ol>{c.proof.steps.map((p) => <Prose as="li" t={p} />)}</ol>
-    <Prose t={c.proof.placeholders} />
-    <Prose t={c.proof.bridges} />
-    <Prose t={c.proof.divergences} />
-    <Prose t={c.proof.example} />
-    <Prose t={c.proof.precedence} />
+    <div class="proof-grid">
+      <ProofDiagram d={c.proof.diagram} />
+      <ol class="steps">{c.proof.steps.map((p) => <Prose as="li" t={p} />)}</ol>
+    </div>
+    <div class="prose">
+      <Prose t={c.proof.placeholders} />
+      <Prose t={c.proof.bridges} />
+      <Prose t={c.proof.divergences} />
+      <blockquote class="note"><Prose t={c.proof.example} /></blockquote>
+      <Prose t={c.proof.precedence} />
+    </div>
   </div></section>
 
   <section id="levels"><div class="wrap">
     <h2>{s.levels}</h2>
     <Prose t={c.levels.intro} />
-    <ul>{facts.levels.map((l) => (
-      <li>
-        <strong>{l.id}</strong> <Prose as="span" t={c.levels.scope(l)} />:
-        {l.fixtures.map((x) => `${x.name} ${x.clientMatched}/${x.clientTotal}` +
-          (x.bridgeTotal ? ` + ${x.bridgeMatched}/${x.bridgeTotal}` : '') +
-          (x.differ ? ` (${c.levels.columns.differ.toLowerCase()}: ${x.differ})` : '')).join('; ')}
-      </li>
-    ))}</ul>
-    {c.levels.notes.map((p) => <Prose t={p} />)}
+    <LevelsTable c={c.levels} label={s.levels} />
+    <div class="fineprint">{c.levels.notes.map((p) => <Prose t={p} />)}</div>
   </div></section>
 
-  <section id="interop"><div class="wrap">
+  <section id="interop"><div class="wrap prose">
     <h2>{s.interop}</h2>
     {c.interop.paragraphs.map((p) => <Prose t={p} />)}
     <p><a href="https://docs.minka.io/ledger/connecting-systems/cross-ledger-payments">{c.interop.docsLink}</a></p>
   </div></section>
 
-  <section id="coverage"><div class="wrap">
+  <section id="coverage"><div class="wrap prose">
     <h2>{s.coverage}</h2>
     <Prose t={c.coverage.teaser} />
-    <p>{c.coverage.link}</p>
+    <p><a class="more" href={`/${lang}/coverage/`}>{c.coverage.link}</a></p>
   </div></section>
 
   <section id="running"><div class="wrap">
     <h2>{s.running}</h2>
-    <Prose t={c.running.requirements} />
-    <Prose t={c.running.commandsIntro} />
-    <pre><code>{commands(facts).map(({ id, cmd }) => `${cmd.padEnd(34)}# ${text(c.running.commands[id], facts)}`).join('\n')}</code></pre>
+    <div class="prose">
+      <Prose t={c.running.requirements} />
+      <Prose t={c.running.commandsIntro} />
+    </div>
+    <ul class="commands">{commands(facts).map(({ id, cmd }) => (
+      <li>
+        <CodeBlock code={cmd} {...cb} />
+        <Prose t={c.running.commands[id]} />
+      </li>
+    ))}</ul>
     <Prose t={c.running.envIntro} />
-    <ul>{Object.entries(c.running.env).map(([k, v]) => <li><code>{k}</code>: <Prose as="span" t={v} /></li>)}</ul>
+    <dl class="env">{Object.entries(c.running.env).map(([k, v]) => (
+      <div><dt><code>{k}</code></dt><dd><Prose as="span" t={v} /></dd></div>
+    ))}</dl>
     <Prose t={c.running.clients} />
-    <pre><code>{snippets.cli}</code></pre>
-    <pre><code>{snippets.sdk}</code></pre>
+    <CodeBlock code={snippets.cli} {...cb} label="minka CLI" />
+    <CodeBlock code={snippets.sdk} {...cb} label="@minka/ledger-sdk" />
     <Prose t={c.running.record} />
   </div></section>
 
-  <section id="design"><div class="wrap">
+  <section id="design"><div class="wrap prose">
     <h2>{s.design}</h2>
     <Prose t={c.design.stores} />
     <Prose t={c.design.serialisation} />
     <Prose t={c.design.invariantsIntro} />
     <ul>{c.design.invariants.map((p) => <Prose as="li" t={p} />)}</ul>
     <Prose t={c.design.lineCoverage} />
-    <h3>{c.design.gapsTitle}</h3>
-    <ul>{c.design.gaps.map((p) => <Prose as="li" t={p} />)}</ul>
+    <h3 id="gaps">{c.design.gapsTitle}</h3>
+    <ul class="gaps">{c.design.gaps.map((p) => <Prose as="li" t={p} />)}</ul>
     <Prose t={c.design.backlog} />
   </div></section>
 
-  <section id="non-goals"><div class="wrap">
+  <section id="non-goals"><div class="wrap prose">
     <h2>{s['non-goals']}</h2>
     {c.nonGoals.paragraphs.map((p) => <Prose t={p} />)}
   </div></section>
 
-  <section id="findings"><div class="wrap">
+  <section id="findings"><div class="wrap prose">
     <h2>{s.findings}</h2>
     {c.findings.teaser.map((p) => <Prose t={p} />)}
-    <p>{c.findings.link}</p>
+    <p><a class="more" href={`/${lang}/findings/`}>{c.findings.link}</a></p>
   </div></section>
+
+  <!-- The only client script of the page besides theme/language: copy buttons. -->
+  <script is:inline>
+    (function () {
+      if (!navigator.clipboard) return;
+      document.querySelectorAll('[data-code] .copy').forEach(function (btn) {
+        btn.hidden = false;
+        var timer;
+        btn.addEventListener('click', function () {
+          var code = btn.parentElement.querySelector('pre').innerText;
+          navigator.clipboard.writeText(code).then(function () {
+            btn.textContent = btn.dataset.copied;
+            btn.classList.add('done');
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+              btn.textContent = btn.dataset.copy;
+              btn.classList.remove('done');
+            }, 2000);
+          });
+        });
+      });
+    })();
+  </script>
 </Base>

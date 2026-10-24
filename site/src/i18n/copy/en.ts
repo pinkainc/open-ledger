@@ -86,6 +86,7 @@ export const en = {
       candidate: 'candidate recording',
       compare: 'compare',
       exceptions: 'divergences.json',
+      caption: 'The same scenario goes through the recording proxy twice: once to the Minka sandbox (the reference recording, step 2) and once to open-ledger (the candidate recording, step 3). The comparator matches the two recordings exchange by exchange, and the entries of divergences.json are reported instead of failed (step 4).',
     },
   },
 

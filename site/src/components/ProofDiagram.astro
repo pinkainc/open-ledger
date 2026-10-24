@@ -1,0 +1,77 @@
+---
+// "How compatibility is measured": SDK → proxy → {sandbox, open-ledger} → two recordings →
+// compare, with divergences.json as the list of exceptions. Labels from copy.proof.diagram;
+// the numbered marks are the steps of copy.proof.steps. Colours come from CSS tokens
+// (global.css, .diagram), so the figure follows the theme. Vertical layout: the viewBox is
+// 340 wide, so at 360 px the 13 px labels render at about 12.5 px.
+import type { Copy } from '../i18n/copy';
+
+interface Props { d: Copy['proof']['diagram'] }
+const { d } = Astro.props;
+
+const W = 150, H = 36;
+const box = (x: number, y: number) => ({ x, y, width: W, height: H, rx: 6 });
+const mid = (x: number) => x + W / 2;
+const L = 10, R = 180, C = 95;
+const rows = { sdk: 10, proxy: 84, target: 176, rec: 262, compare: 348, exc: 432 };
+// Step marks: [step, cx, cy]
+const marks: [number, number, number][] = [
+  [1, 190, 65],
+  [2, 108, 150],
+  [3, 232, 150],
+  [4, 170, 325],
+];
+---
+<figure class="diagram">
+  <svg viewBox="0 0 340 478" role="img" aria-label={d.caption} xmlns="http://www.w3.org/2000/svg">
+    <title>{d.caption}</title>
+    <defs>
+      <marker id="proof-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" class="head" />
+      </marker>
+    </defs>
+
+    <g class="edges">
+      <line x1={mid(C)} y1={rows.sdk + H} x2={mid(C)} y2={rows.proxy - 2} marker-end="url(#proof-arrow)" />
+      <line x1={mid(C) - 20} y1={rows.proxy + H} x2={mid(L)} y2={rows.target - 2} marker-start="url(#proof-arrow)" marker-end="url(#proof-arrow)" />
+      <line x1={mid(C) + 20} y1={rows.proxy + H} x2={mid(R)} y2={rows.target - 2} marker-start="url(#proof-arrow)" marker-end="url(#proof-arrow)" />
+      <line x1={mid(L)} y1={rows.target + H} x2={mid(L)} y2={rows.rec - 2} marker-end="url(#proof-arrow)" />
+      <line x1={mid(R)} y1={rows.target + H} x2={mid(R)} y2={rows.rec - 2} marker-end="url(#proof-arrow)" />
+      <line x1={mid(L)} y1={rows.rec + H} x2={mid(C) - 30} y2={rows.compare - 2} marker-end="url(#proof-arrow)" />
+      <line x1={mid(R)} y1={rows.rec + H} x2={mid(C) + 30} y2={rows.compare - 2} marker-end="url(#proof-arrow)" />
+      <line class="dashed" x1={mid(C)} y1={rows.exc} x2={mid(C)} y2={rows.compare + H + 2} marker-end="url(#proof-arrow)" />
+    </g>
+
+    <g class="boxes">
+      <rect {...box(C, rows.sdk)} />
+      <rect {...box(C, rows.proxy)} />
+      <rect {...box(L, rows.target)} />
+      <rect {...box(R, rows.target)} class="ours" />
+      <rect {...box(L, rows.rec)} />
+      <rect {...box(R, rows.rec)} />
+      <rect {...box(C, rows.compare)} />
+      <rect {...box(C, rows.exc)} class="dashed" />
+    </g>
+
+    <g class="labels" text-anchor="middle">
+      <text x={mid(C)} y={rows.sdk + 23}>{d.sdk}</text>
+      <text x={mid(C)} y={rows.proxy + 23}>{d.proxy}</text>
+      <text x={mid(L)} y={rows.target + 23}>{d.sandbox}</text>
+      <text x={mid(R)} y={rows.target + 23} class="strong">{d.ours}</text>
+      <text x={mid(L)} y={rows.rec + 23}>{d.reference}</text>
+      <text x={mid(R)} y={rows.rec + 23}>{d.candidate}</text>
+      <text x={mid(C)} y={rows.compare + 23} class="strong">{d.compare}</text>
+      <text x={mid(C)} y={rows.exc + 23} class="mono">{d.exceptions}</text>
+    </g>
+
+    <g class="marks" text-anchor="middle">
+      {marks.map(([n, cx, cy]) => (
+        <g>
+          <circle cx={cx} cy={cy} r="10" />
+          <text x={cx} y={cy + 4}>{n}</text>
+        </g>
+      ))}
+    </g>
+  </svg>
+  <figcaption>{d.caption}</figcaption>
+</figure>

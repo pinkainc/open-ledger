@@ -1,0 +1,10 @@
+---
+// A code block with a copy button. The button is `hidden` until the page script
+// (index.astro, data-copy) finds navigator.clipboard, so without JS there is no dead button.
+interface Props { code: string; copy: string; copied: string; label?: string }
+const { code, copy, copied, label } = Astro.props;
+---
+<div class="code" data-code>
+  <pre aria-label={label}><code>{code}</code></pre>
+  <button type="button" class="copy" aria-live="polite" data-copy={copy} data-copied={copied} hidden>{copy}</button>
+</div>

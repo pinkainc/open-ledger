@@ -57,6 +57,8 @@ export type Copy = {
       candidate: string;
       compare: string;
       exceptions: string;
+      /** figcaption and aria-label: what the diagram shows, numbers refer to `steps`. */
+      caption: string;
     };
   };
   /** Section 4. */

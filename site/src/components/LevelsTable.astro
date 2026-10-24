@@ -1,0 +1,40 @@
+---
+// Conformance levels: one row per fixture, level and scope span the fixtures of a level.
+// All numbers from facts.levels; headers from copy.levels.columns. Scrolls in its own
+// wrapper on narrow screens.
+import Prose from './Prose.astro';
+import facts from '../data/facts.json';
+import type { Copy } from '../i18n/copy';
+
+interface Props { c: Copy['levels']; label: string }
+const { c, label } = Astro.props;
+const col = c.columns;
+---
+<div class="table-scroll" tabindex="0" role="region" aria-label={label}>
+  <table class="levels">
+    <thead>
+      <tr>
+        <th scope="col">{col.level}</th>
+        <th scope="col">{col.scope}</th>
+        <th scope="col">{col.fixtures}</th>
+        <th scope="col" class="num">{col.client}</th>
+        <th scope="col" class="num">{col.bridge}</th>
+        <th scope="col" class="num">{col.differ}</th>
+      </tr>
+    </thead>
+    {facts.levels.map((l) => (
+      <tbody>
+        {l.fixtures.map((x, i) => (
+          <tr>
+            {i === 0 && <th scope="rowgroup" rowspan={l.fixtures.length}>{l.id}</th>}
+            {i === 0 && <td rowspan={l.fixtures.length} class="scope"><Prose as="span" t={c.scope(l)} /></td>}
+            <td><code>{x.name}</code></td>
+            <td class="num">{x.clientMatched}/{x.clientTotal}</td>
+            <td class={x.bridgeTotal ? 'num' : 'num muted'}>{x.bridgeTotal ? `${x.bridgeMatched}/${x.bridgeTotal}` : '–'}</td>
+            <td class={x.differ ? 'num' : 'num muted'}>{x.differ}</td>
+          </tr>
+        ))}
+      </tbody>
+    ))}
+  </table>
+</div>
