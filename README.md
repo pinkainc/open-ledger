@@ -8,6 +8,10 @@ MinIO, Ceph and R2 implement that contract with their own internals. Minka is a 
 box in the same way: what is public is the API its clients speak. Everything behind
 that API here is our own design and is free to be better than the original.
 
+Website: [open-ledger.mpt.hr](https://open-ledger.mpt.hr) — **not live yet**; the page is
+built from this repository (`site/`, see [`site/README.md`](site/README.md)) and
+deployed only when the owner says so.
+
 ## How compatibility is established
 
 Not by reading the docs and hoping. By recording the reference.

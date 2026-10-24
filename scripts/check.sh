@@ -39,4 +39,5 @@ fi
 
 echo "==> coverage" && npx tsx conformance/coverage.ts
 echo "==> site facts" && npx tsx scripts/site-facts.ts --check
+echo "==> site OG images" && node site/scripts/make-og.mjs --check
 echo "==> sandbox footprint" && npx tsx conformance/footprint.ts verify

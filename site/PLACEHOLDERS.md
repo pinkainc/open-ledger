@@ -7,3 +7,12 @@ Sve što na stranici čeka korisnikovu odluku. U UI-ju je vidljivo kao `[[TODO: 
 | --- | --- | --- | --- |
 | `[[TODO: kontakt]]` | `src/components/Footer.astro` (podnožje, oba jezika) | kontakt: e-mail, GitHub issues ili oboje | korisnik |
 | `[[TODO: hrvatski opseg za …]]` | `src/i18n/copy/hr.ts` (`levels.scope`), samo ako `facts.json` dobije razinu čiji prvi fixture nije u `levelKeys` (`copy/types.ts`) | hrvatski opis opsega nove razine, i ključ u `levelKeys` | tko doda razinu |
+
+## Čeka korisnika, a nije `[[TODO]]` u UI-ju (stanje W8, 2026-10-24)
+
+| Što | Gdje | Što treba | Tko odlučuje |
+| --- | --- | --- | --- |
+| Prvi deploy | `site/wrangler.jsonc`, `docs/handoffs/landing/D1.md` | izričit „deployaj”; `! npx wrangler login` na računu sa zonom `mpt.hr`; provjera da u zoni nema postojećeg zapisa `open-ledger.mpt.hr` | korisnik |
+| GitHub Action za deploy | (nije napravljen) | želi li deploy na push u `site/**`; ako da, secret `CLOUDFLARE_API_TOKEN` (i `CLOUDFLARE_ACCOUNT_ID`) postavlja korisnik | korisnik |
+| Javna demo instanca servera | plan, „Otvoreno za korisnika” | treba li „probaj odmah” (Node + Postgres, nije Workers); sad samo upute za lokalno pokretanje | korisnik |
+| Oznaka „not live yet” | `README.md` repoa (redak „Website”) | maknuti nakon prvog uspješnog deploya | tko radi D1 |

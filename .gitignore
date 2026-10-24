@@ -2,3 +2,4 @@ node_modules/
 .rec/
 site/dist/
 site/.astro/
+site/.wrangler/

@@ -1,7 +1,11 @@
 // Renders public/og-en.png and public/og-hr.png (1200x630) from src/data/facts.json.
 // Needs `rsvg-convert` (librsvg) locally; the PNGs are committed, so CI/build does not.
-// Run: npm run og   (after `npm run facts` in the repo root when numbers changed).
+// Run: npm run og   (after `npx tsx scripts/site-facts.ts` in the repo root when numbers changed).
+// `--check` (in `npm run check` and the site build) needs no rsvg-convert: it rebuilds the
+// SVG sources and compares their sha256 with scripts/og.sha256 (committed with the PNGs, not published),
+// so a stale committed PNG fails the check instead of going out unnoticed.
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -9,7 +13,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const f = JSON.parse(readFileSync(join(root, 'src/data/facts.json'), 'utf8'));
-const tmp = mkdtempSync(join(tmpdir(), 'og-'));
+const check = process.argv.includes('--check');
+const stampFile = join(root, 'scripts/og.sha256');
+const svgs = {};
 
 const copy = {
   en: { head: 'A Minka-compatible ledger', sub: 'Open source, MIT', ops: 'operations confirmed by recording' },
@@ -27,8 +33,28 @@ for (const lang of ['en', 'hr']) {
 <text x="64" y="530" font-family="Menlo, Courier New, monospace" font-size="120" font-weight="700" fill="#7cc4f0">${f.operations.confirmed}/${f.operations.total}</text>
 <text x="64" y="580" font-family="Helvetica, Arial, sans-serif" font-size="32" fill="#9fb6c8">${c.ops}</text>
 </svg>`;
-  const src = join(tmp, `og-${lang}.svg`);
-  writeFileSync(src, svg);
-  execFileSync('rsvg-convert', ['-w', '1200', '-h', '630', '-o', join(root, `public/og-${lang}.png`), src]);
-  console.log(`public/og-${lang}.png`);
+  svgs[lang] = svg;
+}
+const stamp = Object.entries(svgs)
+  .map(([lang, svg]) => `${createHash('sha256').update(svg).digest('hex')}  og-${lang}.svg (source of og-${lang}.png)`)
+  .join('\n') + '\n';
+
+if (check) {
+  let old = '';
+  try { old = readFileSync(stampFile, 'utf8'); } catch {}
+  if (old !== stamp) {
+    console.error('OG images are stale (facts.json or the OG design changed): run `npm --prefix site run og` and commit public/og-*.png and scripts/og.sha256');
+    process.exit(1);
+  }
+  console.log('OG images match facts.json');
+} else {
+  const tmp = mkdtempSync(join(tmpdir(), 'og-'));
+  for (const [lang, svg] of Object.entries(svgs)) {
+    const src = join(tmp, `og-${lang}.svg`);
+    writeFileSync(src, svg);
+    execFileSync('rsvg-convert', ['-w', '1200', '-h', '630', '-o', join(root, `public/og-${lang}.png`), src]);
+    console.log(`public/og-${lang}.png`);
+  }
+  writeFileSync(stampFile, stamp);
+  console.log('scripts/og.sha256');
 }

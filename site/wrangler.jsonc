@@ -1,0 +1,21 @@
+// Cloudflare Workers static assets for https://open-ledger.mpt.hr (plan: docs/2026-10-24-plan-landing.md).
+// No Worker script: everything in dist/ is served as is. Deploy is step D1, run by the user:
+//   npm run build && npx wrangler deploy --dry-run   (checks this file, uploads nothing)
+//   npx wrangler deploy                              (only after `npx wrangler login`)
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "open-ledger-site",
+  "compatibility_date": "2026-10-24",
+  "assets": {
+    "directory": "./dist",
+    // Astro builds /en/ as en/index.html; trailingSlash is "always" in astro.config.mjs.
+    "html_handling": "auto-trailing-slash",
+    // One bilingual dist/404.html (src/pages/404.astro), served with status 404.
+    "not_found_handling": "404-page"
+  },
+  // The zone mpt.hr is already on Cloudflare; the custom domain creates the DNS record on deploy.
+  "routes": [{ "pattern": "open-ledger.mpt.hr", "custom_domain": true }],
+  // Only the custom domain, no *.workers.dev address and no preview URLs.
+  "workers_dev": false,
+  "preview_urls": false
+}
