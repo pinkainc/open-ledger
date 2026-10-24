@@ -42,14 +42,15 @@ Jedna duga početna stranica po jeziku + nekoliko podstranica. Svaka tvrdnja ima
 
 ## Kako se izvršava: linearno, jedan subagent po koraku
 
-Glavna sesija je **orkestrator**: pokrene subagent za korak N, pregleda diff, pusti
-`site` build i provjeri u Braveu, commita i pusha, označi korak u ovoj datoteci i
-`TODO.md`, pa tek onda korak N+1. Nikad dva subagenta istovremeno.
+Glavna sesija je **orkestrator** i radi autonomno (odluka korisnika 2026-10-24): pokrene
+subagent za korak N iz `docs/handoffs/landing/WN.md`; subagent na kraju napiše
+`W(N+1).md`, pozove `wrap-up` i vrati sažetak; orkestrator pregleda commit i build, pa
+pokrene sljedećeg. Nikad dva subagenta istovremeno. Pravila lanca:
+`docs/handoffs/landing/README.md`.
 
-- **Browser radi samo orkestrator.** Jedan je Brave i jedna tab grupa; subagenti grade i
-  vraćaju sažetak, orkestrator gleda (`npm --prefix site run dev`, pa claude-in-chrome na
-  360, 768 i 1280 px, oba jezika, obje teme).
-- **Brief subagenta** = ovaj odjeljak koraka + „Odluke” gore. Subagent ne čita cijele
+- **Browser** radi subagent koji gradi (Brave `ms@ff.hr`, claude-in-chrome), jedan po
+  jedan pa nema sukoba oko tab grupe.
+- **Brief subagenta** = njegov `WN.md` + ovaj plan. Subagent ne čita cijele
   fajlove (grep + `sed -n`), ne commita, ne deploya, zapisuje rezultat na disk i završava
   kratkim sažetkom: što je napravio, što nije, otvorena pitanja.
 - **Model i effort**: piše se uz korak; `effort` uvijek eksplicitno. Bez Fablea.
