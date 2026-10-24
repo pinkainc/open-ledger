@@ -39,7 +39,8 @@ Gotovi `WN.md` se ne prepisuju.
 - `npm run check` mora ostati zelen prije commita koji dira `scripts/` ili server.
   Ne snimaj protiv sandboxa (ovaj lanac ne treba nove snimke).
 - Commit poruke hrvatski, `tip(opseg): …`, s
-  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Stageaj poimence. Push na `main`.
+  `Co-Authored-By: Claude <model koji stvarno radi, npr. Sonnet 5.5 ili Opus 5.5> <noreply@anthropic.com>`.
+  Stageaj poimence. Push na `main`.
 - Ne pitaj korisnika; odluči i zapiši odluku u handoff. Pitanja koja su doista njegova
   stavi u sažetak.
 
