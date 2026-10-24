@@ -350,7 +350,7 @@ checks each step in the browser before the next.
 - [x] W2 `scripts/site-facts.ts` → `site/src/data/facts.json`, stale check in `npm run check`
 - [x] W3 Astro skeleton in `site/` (Astro 7.4.2), i18n `hr`/`en`, light/dark theme
 - [x] W4 copy, EN and HR (`site/src/i18n/copy/`)
-- [ ] W5 home page sections and diagrams
+- [x] W5 home page sections and diagrams (`site/src/components/{ProofDiagram,LevelsTable,CodeBlock}.astro`)
 - [ ] W6 `/coverage` and `/findings` generated from the repo
 - [ ] W7 SEO, meta, accessibility, Lighthouse ≥ 95
 - [ ] W8 final review, `wrangler.jsonc` ready, dry run only
