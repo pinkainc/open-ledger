@@ -54,7 +54,8 @@ Svih jedanaest sesija je gotovo (tablica „Stanje lanca” u `docs/handoffs/REA
   `ledgers` su ponovno snimljeni na 2.47.9 bez ijedne razlike; većina ostalih razina ima
   snimke s 2.47.5 i 2.47.8. Docs mirror je na specu 2.47.2, npm SDK i CLI na 2.47.0.
 - **S11 je dodao:** `labels2` (rubni slučajevi labelsa; svaki proof diže `<record>-updated`)
-  i `forwarding3` (kontekst filtera processing policyja za svaku akciju).
+  i `forwarding3` (kontekst filtera processing policyja za svaku akciju). Detalji su u
+  `docs/2026-10-24-nastanak-s11.md`.
 - **Ostatak je običan backlog u `TODO.md`**, izvan lanca: `schedule` i `layout` policyji,
   in-flight runovi adaptera `bridges/ledger-bridge`, manje round tripova po intentu i nestanak
   servera na memoriji ako se ponovi. Uz to DTC executor ako ga sandbox ikad počne izvršavati
