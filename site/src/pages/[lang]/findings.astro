@@ -1,0 +1,60 @@
+---
+// /{lang}/findings/: FINDINGS.md and conformance/divergences.json, read at build time.
+import Base from '../../layouts/Base.astro';
+import Prose from '../../components/Prose.astro';
+import facts from '../../data/facts.json';
+import { ui, langs, type Lang } from '../../i18n/ui';
+import { copy } from '../../i18n/copy';
+import { readFindings, readDivergences } from '../../lib/repo-docs';
+
+export function getStaticPaths() {
+  return langs.map((lang) => ({ params: { lang } }));
+}
+const lang = Astro.params.lang as Lang;
+const c = copy[lang];
+const heading = ui[lang].sections.findings;
+const L = lang === 'hr'
+  ? { reg: 'Registar odstupanja', list: 'Nalazi, najnoviji prvi', fixture: 'Fixture', exch: 'razmjene', ref: 'Referenca', ours: 'open-ledger', why: 'Zašto', jump: 'Skoči na nalaz', back: 'Početna', toc: 'Popis nalaza' }
+  : { reg: 'Divergence register', list: 'Findings, newest first', fixture: 'Fixture', exch: 'exchanges', ref: 'Reference', ours: 'open-ledger', why: 'Why', jump: 'Jump to a finding', back: 'Home', toc: 'List of findings' };
+const findings = readFindings();
+const divs = readDivergences();
+const desc = lang === 'hr'
+  ? `${findings.length} datiranih nalaza o ponašanju reference i ${divs.length} namjernih odstupanja.`
+  : `${findings.length} dated findings about the reference ledger and ${divs.length} intentional divergences.`;
+---
+<Base lang={lang} path="findings/" title={`${heading} · open-ledger`} description={desc}>
+  <section class="page"><div class="wrap prose">
+    <h1>{heading}</h1>
+    {c.findings.pageIntro.map((p) => <Prose t={p} />)}
+    {lang === 'hr' && <p class="fineprint">{c.findings.languageNote}</p>}
+    <p class="fineprint"><a href="#divergences">{L.reg}</a> · <a href="#findings">{L.list}</a></p>
+
+    <h2 id="divergences">{L.reg} <span class="count">{divs.length}</span></h2>
+    <div class="cards divs">
+      {divs.map((d) => (
+        <article class="card div">
+          <h3><code>{d.fixture}</code> <span class="count">{L.exch} {d.exchanges.join(', ')}</span></h3>
+          <Prose t={d.what} />
+          <dl>
+            <dt>{L.ref}</dt><dd><Prose t={d.reference} as="span" /></dd>
+            <dt>{L.ours}</dt><dd><Prose t={d.ours} as="span" /></dd>
+            <dt>{L.why}</dt><dd><Prose t={d.why} as="span" /></dd>
+          </dl>
+        </article>
+      ))}
+    </div>
+
+    <h2 id="findings">{L.list} <span class="count">{findings.length}</span></h2>
+    <details class="toc">
+      <summary>{L.toc}</summary>
+      <ol>{findings.map((f) => <li><a href={`#${f.id}`}><time datetime={f.date}>{f.date}</time> {f.title}</a></li>)}</ol>
+    </details>
+    {findings.map((f) => (
+      <article class="finding" id={f.id} lang="en">
+        <h3><time datetime={f.date}>{f.date}</time> {f.title}</h3>
+        <Fragment set:html={f.html} />
+      </article>
+    ))}
+    <p><a class="more" href={`/${lang}/`}>{L.back}</a></p>
+  </div></section>
+</Base>

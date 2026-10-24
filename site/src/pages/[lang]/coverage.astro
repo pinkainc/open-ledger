@@ -1,0 +1,66 @@
+---
+// /{lang}/coverage/: every operation of the spec, read from COVERAGE.md at build time.
+import Base from '../../layouts/Base.astro';
+import Prose from '../../components/Prose.astro';
+import facts from '../../data/facts.json';
+import { ui, langs, type Lang } from '../../i18n/ui';
+import { copy, text } from '../../i18n/copy';
+import { readCoverage } from '../../lib/repo-docs';
+
+export function getStaticPaths() {
+  return langs.map((lang) => ({ params: { lang } }));
+}
+const lang = Astro.params.lang as Lang;
+const c = copy[lang];
+const heading = ui[lang].sections.coverage;
+const L = lang === 'hr'
+  ? { all: 'Svi resursi', filter: 'Filtar po resursu', method: 'Metoda', path: 'Putanja', conf: 'Snimka', yes: 'potvrđeno', no: 'nije snimljeno', ops: 'operacija', back: 'Početna' }
+  : { all: 'All resources', filter: 'Filter by resource', method: 'Method', path: 'Path', conf: 'Recording', yes: 'confirmed', no: 'not recorded', ops: 'operations', back: 'Home' };
+const resources = readCoverage();
+const total = resources.reduce((a, r) => a + r.operations.length, 0);
+const summary = lang === 'hr'
+  ? `${total} operacija u ${resources.length} resursa, ${facts.operations.confirmed} potvrđeno snimljenom razmjenom (OpenAPI ${facts.operations.spec}).`
+  : `${total} operations in ${resources.length} resources, ${facts.operations.confirmed} confirmed by a recorded exchange (OpenAPI ${facts.operations.spec}).`;
+---
+<Base lang={lang} path="coverage/" title={`${heading} · open-ledger`} description={summary}>
+  <section class="page"><div class="wrap prose">
+    <h1>{heading}</h1>
+    <p class="badge">{summary}</p>
+    {c.coverage.pageIntro.map((p) => <Prose t={p} />)}
+    <nav class="chips" aria-label={L.filter} id="filter">
+      <a href="#all" data-res="" aria-pressed="true">{L.all}</a>
+      {resources.map((r) => <a href={`#res-${r.name}`} data-res={r.name}>{r.name} <span class="count">{r.total}</span></a>)}
+    </nav>
+    {resources.map((r) => (
+      <section class="res" id={`res-${r.name}`} data-res={r.name}>
+        <h2>{r.name} <span class="count">{r.implemented}/{r.total} {L.ops}</span></h2>
+        <div class="table-scroll" tabindex="0">
+          <table class="levels ops">
+            <thead><tr><th scope="col">{L.method}</th><th scope="col">{L.path}</th><th scope="col">{L.conf}</th></tr></thead>
+            <tbody>
+              {r.operations.map((o) => (
+                <tr><td><code>{o.method}</code></td><td><code>{o.path}</code></td><td>{o.confirmed ? <span class="ok"><span aria-hidden="true">✓</span> {L.yes}</span> : <span class="muted">{L.no}</span>}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    ))}
+    <p><a class="more" href={`/${lang}/`}>{L.back}</a></p>
+  </div></section>
+  <script is:inline>
+    (function () {
+      var chips = document.querySelectorAll('#filter a');
+      var sections = document.querySelectorAll('section.res');
+      function show(name) {
+        chips.forEach(function (a) { a.setAttribute('aria-pressed', String(a.dataset.res === name)); });
+        sections.forEach(function (s) { s.hidden = !!name && s.dataset.res !== name; });
+      }
+      chips.forEach(function (a) {
+        a.addEventListener('click', function (e) { e.preventDefault(); show(a.dataset.res); });
+      });
+      var h = location.hash.match(/^#res-(.+)$/);
+      if (h) show(decodeURIComponent(h[1]));
+    })();
+  </script>
+</Base>

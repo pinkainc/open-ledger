@@ -10,8 +10,11 @@ interface Props {
   lang: Lang;
   /** Path after the language prefix, e.g. '' for the home page or 'coverage/'. */
   path?: string;
+  /** Page title and description; the home page falls back to copy.meta. */
+  title?: string;
+  description?: string;
 }
-const { lang, path = '' } = Astro.props;
+const { lang, path = '', title, description } = Astro.props;
 const t = ui[lang];
 const meta = copy[lang].meta;
 const site = Astro.site!;
@@ -22,8 +25,8 @@ const href = (l: Lang) => new URL(`/${l}/${path}`, site).href;
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{text(meta.title, facts)}</title>
-    <meta name="description" content={text(meta.description, facts)} />
+    <title>{title ?? text(meta.title, facts)}</title>
+    <meta name="description" content={description ?? text(meta.description, facts)} />
     <link rel="canonical" href={href(lang)} />
     {langs.map((l) => <link rel="alternate" hreflang={l} href={href(l)} />)}
     <link rel="alternate" hreflang="x-default" href={new URL('/', site).href} />
