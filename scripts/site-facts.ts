@@ -28,7 +28,7 @@ export const LEVELS: { id: string; scope: string; fixtures: string[] }[] = [
   { id: 'L6', scope: 'several bridges in one intent: two-phase prepare, grouping, aborts only to prepared parts, silent bridges', fixtures: ['l6'] },
   { id: 'Routes', scope: 'addresses schema:handle@parent, wallet routes credit, debit, accept, forward', fixtures: ['routes'] },
   { id: 'L8', scope: 'event deliveries: outbox, attempt proofs, 501 → cancelled, retry, resume', fixtures: ['events'] },
-  { id: 'L7', scope: 'threads of forwarded intents; intent expiry (covered by access4)', fixtures: ['l7'] },
+  { id: 'L7', scope: 'threads of forwarded intents; intent expiry, recorded in access4', fixtures: ['l7'] },
   { id: 'L9', scope: 'two ledgers joined by a bridge: cross-ledger payments', fixtures: ['l9', 'l9mixed'] },
 ]
 

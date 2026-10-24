@@ -280,7 +280,7 @@
     },
     {
       "id": "L7",
-      "scope": "threads of forwarded intents; intent expiry (covered by access4)",
+      "scope": "threads of forwarded intents; intent expiry, recorded in access4",
       "fixtures": [
         {
           "name": "l7",
