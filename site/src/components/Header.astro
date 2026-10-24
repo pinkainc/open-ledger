@@ -22,7 +22,8 @@ const other = otherLang(lang);
       <button
         type="button"
         class="theme"
-        aria-label={t.themeToggle}
+        data-name={t.themeToggle}
+        aria-label={`${t.themeToggle}: ${t.themeDark}`}
         title={t.themeToggle}
         data-light={t.themeLight}
         data-dark={t.themeDark}
@@ -46,7 +47,7 @@ const other = otherLang(lang);
       // The button names the theme it switches to.
       var next = current() === 'dark' ? 'light' : 'dark';
       label.textContent = btn.dataset[next];
-      btn.setAttribute('aria-pressed', String(current() === 'dark'));
+      btn.setAttribute('aria-label', btn.dataset.name + ': ' + label.textContent);
     }
     btn.addEventListener('click', function () {
       var next = current() === 'dark' ? 'light' : 'dark';

@@ -6,7 +6,8 @@
     "dev": "astro dev",
     "build": "tsc --noEmit -p . && astro build",
     "preview": "astro preview",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "og": "node scripts/make-og.mjs"
   },
   "dependencies": {
     "@astrojs/sitemap": "3.7.4",

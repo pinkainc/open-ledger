@@ -28,7 +28,7 @@ const summary = lang === 'hr'
     <p class="badge">{summary}</p>
     {c.coverage.pageIntro.map((p) => <Prose t={p} />)}
     <nav class="chips" aria-label={L.filter} id="filter">
-      <a href="#all" data-res="" aria-pressed="true">{L.all}</a>
+      <a href="#all" data-res="" aria-current="true">{L.all}</a>
       {resources.map((r) => <a href={`#res-${r.name}`} data-res={r.name}>{r.name} <span class="count">{r.total}</span></a>)}
     </nav>
     {resources.map((r) => (
@@ -53,7 +53,7 @@ const summary = lang === 'hr'
       var chips = document.querySelectorAll('#filter a');
       var sections = document.querySelectorAll('section.res');
       function show(name) {
-        chips.forEach(function (a) { a.setAttribute('aria-pressed', String(a.dataset.res === name)); });
+        chips.forEach(function (a) { if (a.dataset.res === name) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current'); });
         sections.forEach(function (s) { s.hidden = !!name && s.dataset.res !== name; });
       }
       chips.forEach(function (a) {

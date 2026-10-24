@@ -13,21 +13,45 @@ interface Props {
   /** Page title and description; the home page falls back to copy.meta. */
   title?: string;
   description?: string;
+  /** Keep the page out of search indexes (404). */
+  noindex?: boolean;
 }
-const { lang, path = '', title, description } = Astro.props;
+const { lang, path = '', title, description, noindex = false } = Astro.props;
 const t = ui[lang];
 const meta = copy[lang].meta;
 const site = Astro.site!;
 const href = (l: Lang) => new URL(`/${l}/${path}`, site).href;
+const pageTitle = title ?? text(meta.title, facts);
+const pageDescription = description ?? text(meta.description, facts);
+const ogImage = new URL(`/og-${lang}.png`, site).href;
+const ogAlt = lang === 'hr' ? 'open-ledger: ledger kompatibilan s Minkom' : 'open-ledger: a Minka-compatible ledger';
 ---
 <!doctype html>
 <html lang={lang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title ?? text(meta.title, facts)}</title>
-    <meta name="description" content={description ?? text(meta.description, facts)} />
+    <title>{pageTitle}</title>
+    <meta name="description" content={pageDescription} />
+    {noindex && <meta name="robots" content="noindex" />}
     <link rel="canonical" href={href(lang)} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="open-ledger" />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={pageDescription} />
+    <meta property="og:url" content={href(lang)} />
+    <meta property="og:locale" content={lang === 'hr' ? 'hr_HR' : 'en_US'} />
+    <meta property="og:locale:alternate" content={lang === 'hr' ? 'en_US' : 'hr_HR'} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={ogAlt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={pageTitle} />
+    <meta name="twitter:description" content={pageDescription} />
+    <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:image:alt" content={ogAlt} />
     {langs.map((l) => <link rel="alternate" hreflang={l} href={href(l)} />)}
     <link rel="alternate" hreflang="x-default" href={new URL('/', site).href} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />

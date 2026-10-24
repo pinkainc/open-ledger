@@ -1,0 +1,11 @@
+---
+// 404 for both languages on one page (Cloudflare static assets serve a single 404.html).
+import Base from '../layouts/Base.astro';
+---
+<Base lang="en" title="Page not found · open-ledger" description="This page does not exist." noindex>
+  <div class="wrap">
+    <h1>404</h1>
+    <p lang="en">This page does not exist. <a href="/en/">Go to the English home page</a>.</p>
+    <p lang="hr">Ova stranica ne postoji. <a href="/hr/">Idi na početnu stranicu</a>.</p>
+  </div>
+</Base>

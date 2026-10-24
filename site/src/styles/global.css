@@ -225,8 +225,8 @@ pre {
   padding: .3rem .7rem; border: 1px solid var(--border); border-radius: 999px;
   background: var(--bg); color: var(--fg); text-decoration: none; font-size: .9rem;
 }
-.chips a:hover, .chips a[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.chips a[aria-pressed="true"] { font-weight: 600; }
+.chips a:hover, .chips a[aria-current="true"] { border-color: var(--accent); color: var(--accent); }
+.chips a[aria-current="true"] { font-weight: 600; }
 table.ops { min-width: 28rem; }
 .ops td code { white-space: normal; overflow-wrap: anywhere; }
 .ok { color: var(--accent); }

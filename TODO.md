@@ -352,6 +352,6 @@ checks each step in the browser before the next.
 - [x] W4 copy, EN and HR (`site/src/i18n/copy/`)
 - [x] W5 home page sections and diagrams (`site/src/components/{ProofDiagram,LevelsTable,CodeBlock}.astro`)
 - [x] W6 `/coverage` and `/findings` generated from the repo
-- [ ] W7 SEO, meta, accessibility, Lighthouse ≥ 95
+- [x] W7 SEO, meta, accessibility, Lighthouse ≥ 95 (100/100/100/100 on /en/, /hr/, coverage, findings)
 - [ ] W8 final review, `wrangler.jsonc` ready, dry run only
 - [ ] D1 deploy — only on the user's explicit go
