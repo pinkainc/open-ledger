@@ -29,8 +29,8 @@ official SDK ──► recording proxy ──► open-ledger             → .re
 
 Where the reference is plainly defective we answer differently on purpose, and say so:
 `conformance/divergences.json` lists each case with what the reference does, what we do
-and why; the comparator reports those exchanges instead of failing on them. So far:
-one (an intent breaking `maxBalance` stays `committed` forever on the reference).
+and why; the comparator reports those exchanges instead of failing on them. So far: 21 cases in 14 fixtures
+(the first: an intent breaking `maxBalance` stays `committed` forever on the reference).
 
 Documentation (the mirror in `../docs.minka.io`) is the specification for what the
 sandbox cannot show from outside. Where docs and sandbox disagree, the sandbox wins —
@@ -58,7 +58,7 @@ backlog in `TODO.md`.
 | **L6** | several bridges in one intent: two-phase prepare, grouping (`claims.groupBy`), aborts only to prepared parts, silent bridges | — | **34/34** client exchanges, **75/75** bridge calls |
 | **Routes** | addresses `schema:handle@parent`, wallet routes `credit`, `debit`, `accept`, `forward` | — | **62/62** client exchanges, **18/18** bridge calls |
 | **L8** (bridges) | event deliveries: outbox, attempt proofs, 501 → cancelled, retry, resume | bridges 11/14 | **23/23** client exchanges, **20/20** bridge calls |
-| **L7** (part) | intent expiry (also of intents waiting for a bridge) | — | covered by access4 |
+| **L7** (part) | threads of forwarded intents; intent expiry (also of intents waiting for a bridge) | — | `l7` **33/36** client exchanges, **9/12** bridge calls, 3 + 3 deliberately differ; expiry covered by access4 |
 | **L9** | two ledgers joined by a bridge (`bridges/ledger-bridge`): cross-ledger payments | — | `l9` **40/40** client exchanges, **51/51** bridge log; `l9mixed` **31/31**, **78/78** |
 
 (L2, multi-claim atomicity, is covered by the L1 and L3 scenarios.)
@@ -87,7 +87,7 @@ symbol, wallets, issue, transfer, balances, filtered lists — in `scripts/cli-e
 part of `npm run check`.
 
 Every level passes on the in-memory store and on Postgres. Beyond conformance, the unit
-tests (`server/test/`, 217 with Postgres) check invariants the reference cannot show from
+tests (`server/test/`, 451 with Postgres) check invariants the reference cannot show from
 outside: conservation of supply over a random intent sequence compared against a
 model, no overdraft under 50 concurrent transfers, two processes sharing one
 Postgres, and recovery of intents left pending by a crashed process.
@@ -132,7 +132,7 @@ only when a scenario changes.
   refuses a token hashed over any address but its own.
 - **Ledger-wide serialisation.** Intents of one ledger are processed one at a time
   (advisory lock in Postgres): ~200–240 transfers/s per ledger on a local Postgres,
-  ~450–530/s over 16 ledgers (`scripts/bench.ts`). Per-wallet locking was measured and
+  ~400–450/s over 16 ledgers (`scripts/bench.ts`, 2026-10-19). Per-wallet locking was measured and
   dropped: a 2× ceiling does not pay for the risk.
 
 ## Non-goals

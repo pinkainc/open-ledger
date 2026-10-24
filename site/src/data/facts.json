@@ -1,0 +1,364 @@
+{
+  "operations": {
+    "total": 146,
+    "implemented": 146,
+    "confirmed": 146,
+    "spec": "2.47.2"
+  },
+  "resources": [
+    {
+      "name": "signers",
+      "implemented": 17,
+      "total": 17
+    },
+    {
+      "name": "wallets",
+      "implemented": 15,
+      "total": 15
+    },
+    {
+      "name": "bridges",
+      "implemented": 14,
+      "total": 14
+    },
+    {
+      "name": "effects",
+      "implemented": 14,
+      "total": 14
+    },
+    {
+      "name": "circles",
+      "implemented": 13,
+      "total": 13
+    },
+    {
+      "name": "anchors",
+      "implemented": 10,
+      "total": 10
+    },
+    {
+      "name": "policies",
+      "implemented": 10,
+      "total": 10
+    },
+    {
+      "name": "reports",
+      "implemented": 9,
+      "total": 9
+    },
+    {
+      "name": "domains",
+      "implemented": 8,
+      "total": 8
+    },
+    {
+      "name": "ledger",
+      "implemented": 8,
+      "total": 8
+    },
+    {
+      "name": "schemas",
+      "implemented": 8,
+      "total": 8
+    },
+    {
+      "name": "symbols",
+      "implemented": 8,
+      "total": 8
+    },
+    {
+      "name": "intents",
+      "implemented": 7,
+      "total": 7
+    },
+    {
+      "name": "ledgers",
+      "implemented": 2,
+      "total": 2
+    },
+    {
+      "name": "system",
+      "implemented": 2,
+      "total": 2
+    },
+    {
+      "name": "oauth",
+      "implemented": 1,
+      "total": 1
+    }
+  ],
+  "version": {
+    "server": "2.47.9",
+    "sandbox": "2.47.9"
+  },
+  "fixtures": {
+    "reference": 64,
+    "bridge": 24
+  },
+  "exchanges": {
+    "client": 3123,
+    "bridge": 543,
+    "total": 3666
+  },
+  "scenarios": {
+    "count": 64
+  },
+  "tests": {
+    "postgres": 451,
+    "files": 32
+  },
+  "server": {
+    "sourceFiles": 22
+  },
+  "divergences": {
+    "count": 21,
+    "fixtures": 14
+  },
+  "findings": {
+    "sections": 40,
+    "firstDate": "2026-09-26",
+    "lastDate": "2026-10-24"
+  },
+  "levels": [
+    {
+      "id": "L0",
+      "scope": "ledger, symbol, wallet: records only, no money moves",
+      "fixtures": [
+        {
+          "name": "l0",
+          "clientTotal": 18,
+          "clientMatched": 18,
+          "bridgeTotal": 0,
+          "bridgeMatched": 0,
+          "differ": 0
+        }
+      ]
+    },
+    {
+      "id": "L1",
+      "scope": "intents: issue, transfer, destroy; balances; async processing",
+      "fixtures": [
+        {
+          "name": "l1",
+          "clientTotal": 30,
+          "clientMatched": 30,
+          "bridgeTotal": 0,
+          "bridgeMatched": 0,
+          "differ": 0
+        }
+      ]
+    },
+    {
+      "id": "L3",
+      "scope": "limits (minBalance, maxBalance), pagination, reads by luid",
+      "fixtures": [
+        {
+          "name": "l3",
+          "clientTotal": 41,
+          "clientMatched": 39,
+          "bridgeTotal": 0,
+          "bridgeMatched": 0,
+          "differ": 2
+        }
+      ]
+    },
+    {
+      "id": "L4 records",
+      "scope": "record lifecycle: update, status proofs, changes, drop, access check; signers, the ledger record, system policies",
+      "fixtures": [
+        {
+          "name": "records",
+          "clientTotal": 23,
+          "clientMatched": 23,
+          "bridgeTotal": 0,
+          "bridgeMatched": 0,
+          "differ": 0
+        },
+        {
+          "name": "records2",
+          "clientTotal": 52,
+          "clientMatched": 52,
+          "bridgeTotal": 0,
+          "bridgeMatched": 0,
+          "differ": 0
+        }
+      ]
+    },
+    {
+      "id": "L4 access",
+      "scope": "rule scope, ledger gate, matchers, circles, status policies, token impersonation, claim permissions",
+      "fixtures": [
+        {
+          "name": "access",
+          "clientTotal": 35,
+          "clientMatched": 35,
+          "bridgeTotal": 0,
+          "bridgeMatched": 0,
+          "differ": 0
+        },
+        {
+          "name": "access2",
+          "clientTotal": 15,
+          "clientMatched": 15,
+          "bridgeTotal": 0,
+          "bridgeMatched": 0,
+          "differ": 0
+        },
+        {
+          "name": "access3",
+          "clientTotal": 16,
+          "clientMatched": 16,
+          "bridgeTotal": 0,
+          "bridgeMatched": 0,
+          "differ": 0
+        },
+        {
+          "name": "access4",
+          "clientTotal": 14,
+          "clientMatched": 14,
+          "bridgeTotal": 0,
+          "bridgeMatched": 0,
+          "differ": 0
+        }
+      ]
+    },
+    {
+      "id": "L5",
+      "scope": "2PC with one bridge: prepare/commit/abort calls, status notifications, retries, restart",
+      "fixtures": [
+        {
+          "name": "l5",
+          "clientTotal": 21,
+          "clientMatched": 21,
+          "bridgeTotal": 24,
+          "bridgeMatched": 24,
+          "differ": 0
+        }
+      ]
+    },
+    {
+      "id": "L6",
+      "scope": "several bridges in one intent: two-phase prepare, grouping, aborts only to prepared parts, silent bridges",
+      "fixtures": [
+        {
+          "name": "l6",
+          "clientTotal": 34,
+          "clientMatched": 34,
+          "bridgeTotal": 75,
+          "bridgeMatched": 75,
+          "differ": 0
+        }
+      ]
+    },
+    {
+      "id": "Routes",
+      "scope": "addresses schema:handle@parent, wallet routes credit, debit, accept, forward",
+      "fixtures": [
+        {
+          "name": "routes",
+          "clientTotal": 62,
+          "clientMatched": 62,
+          "bridgeTotal": 18,
+          "bridgeMatched": 18,
+          "differ": 0
+        }
+      ]
+    },
+    {
+      "id": "L8",
+      "scope": "event deliveries: outbox, attempt proofs, 501 → cancelled, retry, resume",
+      "fixtures": [
+        {
+          "name": "events",
+          "clientTotal": 23,
+          "clientMatched": 23,
+          "bridgeTotal": 20,
+          "bridgeMatched": 20,
+          "differ": 0
+        }
+      ]
+    },
+    {
+      "id": "L7",
+      "scope": "threads of forwarded intents; intent expiry (covered by access4)",
+      "fixtures": [
+        {
+          "name": "l7",
+          "clientTotal": 36,
+          "clientMatched": 33,
+          "bridgeTotal": 12,
+          "bridgeMatched": 9,
+          "differ": 6
+        }
+      ]
+    },
+    {
+      "id": "L9",
+      "scope": "two ledgers joined by a bridge: cross-ledger payments",
+      "fixtures": [
+        {
+          "name": "l9",
+          "clientTotal": 40,
+          "clientMatched": 40,
+          "bridgeTotal": 51,
+          "bridgeMatched": 51,
+          "differ": 0
+        },
+        {
+          "name": "l9mixed",
+          "clientTotal": 31,
+          "clientMatched": 31,
+          "bridgeTotal": 78,
+          "bridgeMatched": 78,
+          "differ": 0
+        }
+      ]
+    }
+  ],
+  "interop": {
+    "supply": 325,
+    "mixed": {
+      "client": 31,
+      "bridge": 78
+    }
+  },
+  "lineCoverage": {
+    "lines": 99.05,
+    "branches": 91.28,
+    "functions": 98.92,
+    "measured": "2026-10-17",
+    "commit": "3054926"
+  },
+  "footprint": {
+    "ledgers": 152,
+    "events": 271
+  },
+  "ports": {
+    "server": 4620,
+    "cliE2e": 4640,
+    "devPostgres": 5439
+  },
+  "node": {
+    "engine": ">=20"
+  },
+  "license": "MIT",
+  "bench": {
+    "measured": "2026-10-19",
+    "source": "docs/2026-10-19-nastanak-benchmark.md",
+    "transfers": 500,
+    "perSecond": {
+      "oneLedger": [
+        221,
+        245
+      ],
+      "fourLedgers": [
+        271,
+        295
+      ],
+      "sixteenLedgers": [
+        398,
+        446
+      ]
+    }
+  }
+}
