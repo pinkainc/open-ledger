@@ -44,6 +44,22 @@ nešto što mijenja sljedeći paket.
 | **S9** | Testna pokrivenost i jezgra | Mjerenje pokrivenosti (`node --test --experimental-test-coverage` ili c8), cilj ≥ 90 % linija u `server/src`; test pada usred credit faze; zaključavanje po walletu; indeks threadova po `meta.thread`; ponovno snimanje svih razina na zadnjoj verziji sandboxa; svaka operacija potvrđena snimkom | — | 146/146 potvrđeno snimkom; pokrivenost u `COVERAGE.md` |
 | S10–S11 | DTC, labels, rezerva | **DTC policy** (premješten iz S5: `schema: dtc`, konfigurabilni 2PC koraci `dtc.prepare/commit/notify/setStatus` i `core.commit`, prioritet, filter po koraku, `suspendTimeoutMs`; u specu od 2.46, docs bez proze, SDK 2.47 ima tipove). Minka izlazi često: v2.47 je promijenio otpuštanje rezervacija i trebalo je ponovno snimiti l5–l7. Uz to idu iznenađenja iz snimki S3 i S6. **Pregled TODO-a 2026-10-11** dodao je u S10: labels (`meta.labels` preko proofa) i labels policies (docs postoje, kod ih ne primjenjuje), `filter` na processing policyjima, snimku `allowClientCredentials` i agregate dnevnih limita. `schedule` i `layout` policyji ostaju backlog izvan lanca | — | S10: DTC i labels snimljeni i jednaki |
 
+## Gdje smo (2026-10-24, lanac zatvoren)
+
+Svih jedanaest sesija je gotovo (tablica „Stanje lanca” u `docs/handoffs/README.md`).
+
+- **146/146 operacija, svaka potvrđena snimkom.** `npm run check` je zelen na memoriji i na
+  Postgresu: sve conformance razine, 446 unit testova, `minka` CLI e2e, pokrivenost i footprint.
+- **Verzija:** sandbox je na **2.47.9** i `SEMVER` u `server/src/app.ts` je isti. `surface` i
+  `ledgers` su ponovno snimljeni na 2.47.9 bez ijedne razlike; većina ostalih razina ima
+  snimke s 2.47.5 i 2.47.8. Docs mirror je na specu 2.47.2, npm SDK i CLI na 2.47.0.
+- **S11 je dodao:** `labels2` (rubni slučajevi labelsa; svaki proof diže `<record>-updated`)
+  i `forwarding3` (kontekst filtera processing policyja za svaku akciju).
+- **Ostatak je običan backlog u `TODO.md`**, izvan lanca: `schedule` i `layout` policyji,
+  in-flight runovi adaptera `bridges/ledger-bridge`, manje round tripova po intentu i nestanak
+  servera na memoriji ako se ponovi. Uz to DTC executor ako ga sandbox ikad počne izvršavati
+  (`dtc` ponovno snimiti na novoj verziji).
+
 **Procjena: 9 planiranih sesija, s rezervom 9–11 handoff promptova.** Najrizičniji
 su S3 i S6. Reports i cross-ledger imaju vlastiti protokol, a docs su dosad u više
 točaka bili netočni (npr. trait `effects`, a ne `events`). Ako se pokaže da reporting

@@ -41,7 +41,10 @@ a bank are recorded too (`fixtures/*.bridge.jsonl`).
 ## Status
 
 All **146 of 146** operations of Minka's spec are implemented and every one is confirmed
-by a recorded exchange; every level was re-recorded on the sandbox's 2.47.5 (2026-10-19).
+by a recorded exchange. Every level was re-recorded on the sandbox's 2.47.5 (2026-10-19);
+`surface` and `ledgers` again on 2.47.9 (2026-10-24), unchanged, and the server reports
+that version. The plan that got here (sessions S1–S11) is closed; what is left is ordinary
+backlog in `TODO.md`.
 
 
 | Level | Scope | Minka operations | Conformance |
