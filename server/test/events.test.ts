@@ -11,8 +11,9 @@ for (const [storeName, makeStore] of STORES) {
     let server: Awaited<ReturnType<typeof startServer>>
     let bridge: Awaited<ReturnType<typeof testBridge>>
     let kp: KeyPair, bank: KeyPair
+    let store: Awaited<ReturnType<typeof makeStore>>
     before(async () => {
-      const store = await makeStore()
+      store = await makeStore()
       server = await startServer(store, new Core(store, { bridges: { retryMs: 20 } }))
       bridge = await testBridge()
       kp = await newKeyPair()
@@ -45,7 +46,7 @@ for (const [storeName, makeStore] of STORES) {
     const statuses = (d: any) => d.meta.proofs.map((p: any) => p.custom.status)
 
     test('a prepare answered 500 then 202: failed, delivered, two attempts, same handle', async () => {
-      const { sdk } = await books()
+      const { ledger, sdk } = await books()
       let n = 0
       bridge.answerWith((c) => (c.url === '/v2/credits' && n++ === 0 ? 500 : 202))
       try {
@@ -57,7 +58,10 @@ for (const [storeName, makeStore] of STORES) {
         assert.deepEqual(statuses(d), ['failed', 'delivered'])
         assert.deepEqual(d.meta.proofs[0].custom, { detail: { httpStatus: 500 }, moment: d.meta.proofs[0].custom.moment, reason: 'delivery.target-rejected', status: 'failed' })
         assert.equal(d.meta.replay, 2)
-        assert.equal(d.meta.output.data.schema, 'credit', 'the output is the prepare that was sent')
+        // Since 2.47.20 the body is kept for retries but not shown; a DTC message has no signal.
+        assert.deepEqual(Object.keys(d.meta).sort(), ['moment', 'proofs', 'replay', 'status'])
+        const kept = (await store.list(ledger, 'events')).find((k) => k.data.handle === d.data.handle)!
+        assert.equal((kept.meta.output as any).data.schema, 'credit', 'the kept output is the prepare that was sent')
         assert.ok(d.meta.proofs.every((p: any) => p.signer === 'system'))
       } finally {
         bridge.answerWith(() => 202)

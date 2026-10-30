@@ -1,6 +1,7 @@
 // L8: event deliveries (docs: inspect-event-deliveries). Every call the ledger makes to
 // a bridge is a delivery `$evd` with a stable handle, a status (pending, delivered,
-// failed, cancelled), a signed proof per attempt and the body it sent (`meta.output`).
+// failed, cancelled) and a signed proof per attempt; until 2.47.20 also the body it sent
+// (`meta.output`), since then not shown.
 // A bridge answers one prepare with 500 first (failed → delivered) and another with 501
 // (cancelled: the ledger stops), which is then retried by handle.
 //

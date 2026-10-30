@@ -894,6 +894,8 @@ All reproduced.
   characters>, bridge, effect: null, record: "intent", linked: <intent>}, luid, meta:
   {status, replay, moment, output, proofs}}`. `hash` is of `data`; `output` is exactly
   the body sent (signed entry, command, or the intent itself for a status PUT).
+  **Since 2.47.20 (spec and docs, not recorded):** `output` is no longer returned; an
+  effect delivery shows `signal` in its place, filterable as `meta.signal`.
 - **One `system` proof per attempt**: `delivered {detail: {httpStatus}}`; `failed
   {reason: delivery.target-rejected, detail: {httpStatus}}` — `detail.body` appeared
   only for 501 (`"{}"` for an empty answer); `replay` counts attempts; `meta.moment`

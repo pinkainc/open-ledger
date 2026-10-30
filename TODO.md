@@ -258,6 +258,16 @@ Legend: `[x]` done · `[ ]` open · `[~]` in progress · `(?)` needs a sandbox r
 - [x] A cancelled delivery notes its intent (`error`, `core.bridge-unreachable`)
 - [x] `GET /bridges/{id}/events[/{handle}]`, `POST …/events/retry` (handle or `maxAge`),
       access `query-event` / `retry-event`
+- [x] 2.47.20 (spec and docs, 2026-10-30): a delivery no longer shows its body; `meta.output`
+      is kept for retries and left out of the answer, an effect delivery has `meta.signal` in
+      its place, filterable. Old recordings are read as the new spec in `compare.ts`
+      (`upgradeEvd`); delivery lists are settled on linked record, signal and status
+- [ ] (?) Record `events` and `effects` again on 2.47.20, then the canaries (`surface`, `ledgers`,
+      `l1`, `l5`, `dtc`) and raise `SEMVER`. Guessed until then: no `signal` key on a DTC
+      message and on an effect delivery whose bridge is missing, `signal` in `output`'s
+      place. **Blocked:** since 2026-10-30 the sandbox refuses `ledger.create` (403
+      `auth.forbidden`, "Cannot create ledger.") for the old operator key and for a fresh
+      one, and reads of our old ledgers; recording needs access from Minka
 - [x] Unreachable target (network error): `delivery.target-unreachable {message, code}` —
       from the docs, not recorded (the shape of `detail` is ours)
 - [x] Retry cap: 5 retries, then `cancelled delivery.retry-cap-exhausted`; the last failed

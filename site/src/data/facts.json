@@ -3,7 +3,7 @@
     "total": 146,
     "implemented": 146,
     "confirmed": 146,
-    "spec": "2.47.2"
+    "spec": "2.47.20"
   },
   "resources": [
     {
@@ -330,8 +330,8 @@
     "commit": "3054926"
   },
   "footprint": {
-    "ledgers": 152,
-    "events": 271
+    "ledgers": 154,
+    "events": 275
   },
   "ports": {
     "server": 4620,

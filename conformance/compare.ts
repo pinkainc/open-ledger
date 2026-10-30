@@ -252,6 +252,26 @@ const title = (x: any, n: (v: any) => any) =>
           ? `log ${JSON.stringify(x).slice(0, 60)}`
           : `${x.req.method} ${n(x.req.url)}`
 
+// Recordings made before 2.47.20 show a delivery's body in `meta.output`; the spec since
+// returns `meta.signal` in its place (effect deliveries only) and no body. Old reference
+// answers are read as the new spec describes them until they are recorded again.
+function upgradeEvd(x: any): any {
+  if (Array.isArray(x)) return x.map(upgradeEvd)
+  if (!x || typeof x !== 'object') return x
+  const out: any = {}
+  for (const [k, v] of Object.entries(x)) out[k] = upgradeEvd(v)
+  if (String(out.luid).startsWith('$evd.') && out.meta && 'output' in out.meta) {
+    const signal = out.data?.effect ? out.meta.output?.data?.signal : undefined
+    const meta: any = {}
+    for (const [k, v] of Object.entries(out.meta)) {
+      if (k !== 'output') meta[k] = v
+      else if (signal !== undefined) meta.signal = signal
+    }
+    out.meta = meta
+  }
+  return out
+}
+
 // Reports of several bridges race: adjacent proofs by participants other than the
 // ledger, with the same status, arrive in timing order on the reference as here.
 // Sorted by signer, then entry kind, before comparing.
@@ -266,25 +286,21 @@ function settleRaces(x: any): any {
   const evd = Array.isArray(out.data) && out.data.length && out.data.every((d: any) => String(d?.luid).startsWith('$evd.'))
   // An effect's deliveries are made as events happen, which races: ordered by what the
   // event is about (linked record, signal, the version of the record it carries).
+  // Since 2.47.20 a delivery no longer shows what it sent (`meta.output`), so the order is
+  // settled on what remains: the linked record, the signal, the status.
   if (evd && out.data.every((d: any) => d.data?.effect)) {
-    const key = (d: any) => {
-      const e = d.meta?.output?.data ?? {}
-      const v = e.intent ?? e[d.data.record] ?? {}
-      // `*-proofs-added` carries the proof, `balance-received` an amount per credit (signals2).
-      const proofs = (e.proofs ?? []).map((p: any) => `${p?.signer ?? ''}:${p?.custom?.status ?? ''}:${p?.custom?.detail ?? ''}`).join(',')
-      return `${d.data.linked} ${e.signal} ${String(v.meta?.proofs?.length ?? 0).padStart(4, '0')} ${v.meta?.status ?? ''} ${e.amount ?? ''} ${proofs}`
-    }
+    const key = (d: any) => `${d.data.linked} ${d.meta?.signal ?? ''} ${d.meta?.status ?? ''} ${d.meta?.replay ?? ''}`
     out.data = [...out.data].sort((a: any, b: any) => key(a).localeCompare(key(b)))
   } else if (evd) {
     const group = new Map<string, number>()
     for (const d of out.data) if (!group.has(d.data.linked)) group.set(d.data.linked, group.size)
-    const rank = (d: any) => {
-      const o = d.meta?.output?.data ?? {}
-      if (o.action) return 1
-      if (o.schema === 'debit' || o.schema === 'credit') return 3
-      return d.meta?.output?.meta?.status === 'prepared' ? 2 : 0
-    }
-    out.data = out.data.map((d: any, i: number) => ({ d, i })).sort((a: any, b: any) => group.get(a.d.data.linked)! - group.get(b.d.data.linked)! || rank(a.d) - rank(b.d) || a.i - b.i).map((x: any) => x.d)
+    // Within an intent, by what each attempt came to (the body that told them apart is gone).
+    const outcome = (d: any) =>
+      `${d.meta?.status} ${d.meta?.replay} ${(d.meta?.proofs ?? []).map((p: any) => `${p?.custom?.status}:${p?.custom?.reason ?? ''}:${p?.custom?.detail?.httpStatus ?? ''}`).join(',')}`
+    out.data = out.data
+      .map((d: any, i: number) => ({ d, i }))
+      .sort((a: any, b: any) => group.get(a.d.data.linked)! - group.get(b.d.data.linked)! || outcome(a.d).localeCompare(outcome(b.d)) || a.i - b.i)
+      .map((x: any) => x.d)
   }
   if (Array.isArray(out.proofs)) {
     const external = (p: any) => p?.signer && !['system', 'core'].includes(p.signer) && p.custom?.handle
@@ -316,7 +332,7 @@ for (let i = 0; i < n; i++) {
     } else console.log(`FAIL  #${i} ${label}: only in ${r ? 'reference' : 'candidate'}`)
     continue
   }
-  const rb = nr(settleRaces(subject(r))), cb = nc(settleRaces(subject(c)))
+  const rb = nr(settleRaces(upgradeEvd(subject(r)))), cb = nc(settleRaces(subject(c)))
   // `detail` is human text: a wording difference is reported but does not fail.
   const soft: string[] = []
   // Keys and hashes embedded in the text differ per run; compare the wording around them.

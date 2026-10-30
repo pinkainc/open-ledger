@@ -50,7 +50,7 @@ Svih jedanaest sesija je gotovo (tablica „Stanje lanca” u `docs/handoffs/REA
 
 - **146/146 operacija, svaka potvrđena snimkom.** `npm run check` je zelen na memoriji i na
   Postgresu: sve conformance razine, 446 unit testova, `minka` CLI e2e, pokrivenost i footprint.
-- **Verzija:** sandbox je na **2.47.9** i `SEMVER` u `server/src/app.ts` je isti. `surface` i
+- **Verzija (2026-10-30):** sandbox je na **2.47.20**, `SEMVER` ostaje 2.47.9 jer snimanje je blokirano (vidi `docs/handoffs/nova-verzija.md`); deliveryji su po specu 2.47.20. Do 2026-10-24: sandbox **2.47.9** i `SEMVER` isti. `surface` i
   `ledgers` su ponovno snimljeni na 2.47.9 bez ijedne razlike; većina ostalih razina ima
   snimke s 2.47.5 i 2.47.8. Docs mirror je na specu 2.47.2, npm SDK i CLI na 2.47.0.
 - **S11 je dodao:** `labels2` (rubni slučajevi labelsa; svaki proof diže `<record>-updated`)

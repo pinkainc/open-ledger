@@ -62,3 +62,4 @@ ishod. Provjera bez promjene ne ostavlja trag.
 | Datum | Sandbox | Spec | npm | Ishod |
 | --- | --- | --- | --- | --- |
 | 2026-10-24 | 2.47.9 | 2.47.2 | 2.47.0 | Polazište nakon zatvaranja lanca |
+| 2026-10-30 | 2.47.20 | 2.47.20 | 2.47.0 | Spec: deliveryji bez `meta.output`, novo `meta.signal`; implementirano po specu (`compare.ts` čita stare snimke kao novi spec). **Snimanje blokirano**: sandbox odbija `ledger.create` (403) i starom i novom ključu. `SEMVER` ostaje 2.47.9 dok se ne snimi |

@@ -10,8 +10,9 @@ for (const [storeName, makeStore] of STORES) {
     let server: Awaited<ReturnType<typeof startServer>>
     let target: Awaited<ReturnType<typeof testBridge>>
     let kp: KeyPair
+    let store: Awaited<ReturnType<typeof makeStore>>
     before(async () => {
-      const store = await makeStore()
+      store = await makeStore()
       server = await startServer(store, new Core(store, { bridges: { retryMs: 5 } }))
       target = await testBridge()
       kp = await newKeyPair()
@@ -23,8 +24,10 @@ for (const [storeName, makeStore] of STORES) {
 
     const sign = () => [{ keyPair: kp }]
     let seq = 0
+    const ledgerOf = new WeakMap<object, string>()
     async function books() {
-      const { sdk } = await newLedger(server.base, kp)
+      const { sdk, handle } = await newLedger(server.base, kp)
+      ledgerOf.set(sdk, handle)
       const s: any = sdk
       await s.symbol.init().data({ handle: 'usd', factor: 100 }).hash().sign(sign()).send()
       for (const w of ['alice', 'bob', 'carol']) await s.wallet.init().data({ handle: w }).hash().sign(sign()).send()
@@ -40,7 +43,19 @@ for (const [storeName, makeStore] of STORES) {
     const pay = (s: any, to: string, amount: number) => move(s, [{ action: 'transfer', source: ref('alice'), target: ref(to), symbol: ref('usd'), amount }])
     const effect = (s: any, data: Record<string, unknown>) => s.effect.init().data(data).hash().sign(sign()).send()
     const hook = (name: string) => ({ schema: 'webhook', endpoint: `${target.url.replace(/\/v2$/, '')}/hooks/${name}` })
-    const events = async (s: any, e: string, filter: Record<string, unknown> = {}) => (await s.effect.with(e).events.list(filter)).response.data.data
+    // Since 2.47.20 a delivery shows its signal, not what it sent: `sent` is the event as
+    // the ledger keeps it for retries, read from the store.
+    const events = async (s: any, e: string, filter: Record<string, unknown> = {}) => {
+      const rows = (await s.effect.with(e).events.list(filter)).response.data.data
+      const kept = await store.list(ledgerOf.get(s)!, 'events')
+      for (const d of rows) {
+        assert.equal('output' in d.meta, false, 'a delivery does not show its body')
+        d.sent = kept.find((k) => k.data.handle === d.data.handle)!.meta.output
+        if (d.sent) assert.equal(d.meta.signal, d.sent.data.signal)
+        else assert.equal('signal' in d.meta, false)
+      }
+      return rows
+    }
     const final = (rows: any[]) => rows.length > 0 && rows.every((d: any) => ['delivered', 'cancelled'].includes(d.meta.status))
     const calls = (path: string) => target.calls.filter((c) => c.url === path)
 
@@ -54,9 +69,11 @@ for (const [storeName, makeStore] of STORES) {
         return final(rows) && rows
       }, 'delivered event')
       assert.equal((await events(s, 'got')).length, 1, 'carol is filtered out')
+      assert.equal((await events(s, 'got', { 'meta.signal': 'balance-received' })).length, 1, 'filtered on meta.signal (2.47.20)')
+      assert.deepEqual(await events(s, 'got', { 'meta.output.data.signal': 'balance-received' }), [], 'the body is no longer there to filter on')
       assert.deepEqual(d.data, { handle: d.data.handle, bridge: null, effect: 'got', record: 'wallet', linked: 'bob' })
       assert.deepEqual(d.meta.proofs.map((p: any) => p.custom.status), ['delivered'])
-      const e = d.meta.output
+      const e = d.sent
       assert.match(e.data.handle, /^evt_[\w-]{17}$/)
       assert.deepEqual([e.data.signal, e.data.amount, e.data.wallet.data.handle, e.data.symbol.data.handle, e.data.intent.data.handle], ['balance-received', 30, 'bob', 'usd', h])
       assert.deepEqual([e.data.intent.meta.status, e.data.intent.meta.routed, e.data.intent.meta.proofs.length], ['committed', true, 9])
@@ -76,7 +93,7 @@ for (const [storeName, makeStore] of STORES) {
         return r.length === 4 && final(r) && r
       }, 'four events')
       const pairs = rows
-        .map((d: any) => d.meta.output.data)
+        .map((d: any) => d.sent.data)
         .map((e: any) => [e.intent.meta.status, e.intent.meta.proofs.length, e.parent.meta.status, e.parent.meta.proofs.length])
         .sort((a: any, b: any) => a[1] - b[1])
       assert.deepEqual(pairs, [
@@ -89,7 +106,7 @@ for (const [storeName, makeStore] of STORES) {
         const r = await events(s, 'new', { 'data.linked': handle })
         return final(r) && r
       }, 'intent-created')
-      assert.deepEqual([created.meta.output.data.intent.meta.status, created.meta.output.data.intent.meta.proofs.length], ['pending', 3])
+      assert.deepEqual([created.sent.data.intent.meta.status, created.sent.data.intent.meta.proofs.length], ['pending', 3])
     })
 
     test('wallet-updated: a proof is a new version, the system proof that takes a unique label too (labels2)', async () => {
@@ -105,7 +122,7 @@ for (const [storeName, makeStore] of STORES) {
         return r.length === 2 && final(r) && r
       }, 'two events')
       const seen = rows
-        .map((d: any) => d.meta.output.data)
+        .map((d: any) => d.sent.data)
         .map((e: any) => [e.wallet.meta.proofs.length, e.wallet.meta.labels ?? null, e.parent.meta.proofs.length, e.parent.meta.labels ?? null])
         .sort((a: any, b: any) => a[0] - b[0])
       assert.deepEqual(seen, [
@@ -133,7 +150,7 @@ for (const [storeName, makeStore] of STORES) {
           const r = await events(s, 'b')
           return final(r) && r
         }, 'delivered')
-        assert.equal(a.meta.output.data.handle, b.meta.output.data.handle)
+        assert.equal(a.sent.data.handle, b.sent.data.handle)
         assert.deepEqual(a.meta.proofs.map((p: any) => p.custom.status), ['failed', 'cancelled'])
         assert.deepEqual(a.meta.proofs[0].custom.detail, { httpStatus: 501 }, 'no answer body on an effect delivery')
         assert.equal(a.meta.replay, 1)
@@ -172,7 +189,7 @@ for (const [storeName, makeStore] of STORES) {
         const r = await events(s, 'to-none')
         return final(r) && r
       }, 'missing bridge', 10_000)
-      assert.deepEqual([lost.data.bridge, lost.data.record, lost.data.linked, lost.meta.output], ['nope', null, null, null])
+      assert.deepEqual([lost.data.bridge, lost.data.record, lost.data.linked, lost.sent], ['nope', null, null, null])
       assert.equal(lost.meta.proofs.length, 11)
       assert.deepEqual(lost.meta.proofs[0].custom.detail, { reason: 'core.unexpected-error', message: 'Bridge nope not found' })
       assert.deepEqual([lost.meta.status, lost.meta.proofs.at(-1).custom.reason, lost.meta.replay], ['cancelled', 'delivery.retry-cap-exhausted', 11])
@@ -207,7 +224,7 @@ for (const [storeName, makeStore] of STORES) {
         const r = await events(s, 'ip')
         return r.length === 5 && final(r) && r
       }, 'five events')
-      const seen = rows.map((d: any) => d.meta.output.data).map((e: any) => {
+      const seen = rows.map((d: any) => d.sent.data).map((e: any) => {
         assert.deepEqual(Object.keys(e).sort(), ['handle', 'intent', 'proofs', 'signal'])
         assert.equal(e.intent, handle)
         assert.equal(e.proofs.length, 1)
@@ -228,12 +245,12 @@ for (const [storeName, makeStore] of STORES) {
         const r = await events(s, 'ip2')
         return final(r) && r
       }, 'proofs added')
-      assert.equal(p.meta.output.data.proofs[0].custom.note, 'seen')
+      assert.equal(p.sent.data.proofs[0].custom.note, 'seen')
       const [u] = await until(async () => {
         const r = await events(s, 'up2')
         return final(r) && r
       }, 'updated')
-      const { intent, parent } = u.meta.output.data
+      const { intent, parent } = u.sent.data
       assert.deepEqual([intent.meta.status, intent.meta.proofs.length, parent.meta.status, parent.meta.proofs.length], ['completed', before.meta.proofs.length + 1, 'completed', before.meta.proofs.length])
       assert.deepEqual([intent.meta.domains, parent.meta.domains], [[], []])
     })
@@ -247,14 +264,14 @@ for (const [storeName, makeStore] of STORES) {
         const r = await events(s, 'wp')
         return final(r) && r
       }, 'wallet proofs')
-      const e = w.meta.output.data
+      const e = w.sent.data
       assert.deepEqual([e.wallet, e.proofs.length, e.proofs[0].signer, e.proofs[0].custom.status, typeof e.proofs[0].custom.luid], ['erin', 1, 'system', 'created', 'string'])
       const h = await move(s, [{ action: 'limit', metric: 'minBalance', wallet: ref('bob'), symbol: ref('usd'), amount: -500 }])
       const [l] = await until(async () => {
         const r = await events(s, 'lim')
         return final(r) && r
       }, 'wallet limited')
-      const x = l.meta.output.data
+      const x = l.sent.data
       assert.deepEqual([x.amount, x.metric, x.wallet.data.handle, x.symbol.data.handle, x.intent.data.handle, x.intent.meta.status], [-500, 'minBalance', 'bob', 'usd', h, 'committed'])
       assert.equal(x.intent.meta.proofs.at(-1).custom.detail, 'awaiting-clearance')
       assert.deepEqual(l.data, { handle: l.data.handle, bridge: null, effect: 'lim', record: 'wallet', linked: 'bob' })
@@ -271,7 +288,7 @@ for (const [storeName, makeStore] of STORES) {
         const r = await events(s, 'two')
         return r.length === 2 && final(r) && r
       }, 'two events')
-      assert.deepEqual(rows.map((d: any) => d.meta.output.data.amount).sort(), [3, 4])
+      assert.deepEqual(rows.map((d: any) => d.sent.data.amount).sort(), [3, 4])
     })
 
     test('a webhook unreachable on the network: eleven attempts, then cancelled', async () => {

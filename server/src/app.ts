@@ -1386,10 +1386,24 @@ export function buildApp({ store, core = new Core(store), onRoute, serverRules =
   // core.ts), linked to its bridge or effect by `data.bridge` / `data.effect`. Listing
   // needs `query-event` on the owner, retrying `retry-event`; lists take the usual
   // filters (`meta.status`, `data.linked`) and come newest first.
+  // Since 2.47.20 (spec, inspect-event-deliveries; not recorded yet) a delivery no longer
+  // shows the body it sent: `meta.output` is kept for retries but left out, and an effect
+  // delivery names its signal in `meta.signal`, in the place `output` had. Filters see
+  // the record as returned, so `meta.signal` filters and `meta.output.…` matches nothing.
+  const deliveryView = (d: StoredRecord): StoredRecord => {
+    const signal = d.data.effect ? (d.meta.output as any)?.data?.signal : undefined
+    const meta: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(d.meta)) {
+      if (k !== 'output') meta[k] = v
+      else if (signal !== undefined) meta.signal = signal
+    }
+    return { ...d, meta } as StoredRecord
+  }
   for (const kind of ['bridges', 'effects'] as const) {
     const record = KINDS[kind].record
     type E = { Params: { id: string; delivery: string } }
-    const deliveriesOf = async (t: Target) => (await store.list(t.scope, 'events')).filter((d) => d.data[record] === t.found.data.handle)
+    const deliveriesOf = async (t: Target) =>
+      (await store.list(t.scope, 'events')).filter((d) => d.data[record] === t.found.data.handle).map(deliveryView)
     app.get<{ Params: { id: string } }>(`/api/v2/${kind}/:id/events`, async (req) => {
       const who = await authenticate(req)
       const t = await target(req, kind, req.params.id)
