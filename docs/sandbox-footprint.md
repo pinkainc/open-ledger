@@ -115,7 +115,7 @@ the git history of `conformance/fixtures/`.
 | 2026-10-19 10:00 | `open-ledger-conf-20261019100038078` | drops | 19 |  | run.sh, ok | yes |  |
 | 2026-10-19 10:01 | `open-ledger-conf-20261019100044459` | edges2pc | 27 | 28 | run.sh, ok | yes |  |
 | 2026-10-19 10:06 | `open-ledger-conf-20261019100529626` | effects | 51 | 21 | run.sh, ok | yes |  |
-| 2026-10-19 10:08 | `open-ledger-conf-20261019100726607` | events | 23 | 20 | run.sh, ok |  |  |
+| 2026-10-19 10:08 | `open-ledger-conf-20261019100726607` | events | 23 | 20 | run.sh, ok | yes |  |
 | 2026-10-19 10:08 | `open-ledger-conf-20261019100855007` | factors | 43 |  | run.sh, ok | yes |  |
 | 2026-10-19 10:09 | `open-ledger-conf-20261019100906996` | filters | 298 |  | run.sh, ok | yes |  |
 | 2026-10-19 10:09 | `open-ledger-conf-20261019100954709` | filters2 | 18 |  | run.sh, ok | yes |  |
@@ -171,4 +171,4 @@ the git history of `conformance/fixtures/`.
 | 2026-10-23 23:26 | `open-ledger-conf-20261023232607741` | ledgers | 39 |  | run.sh, ok | yes |  |
 | 2026-10-23 23:28 | `open-ledger-conf-20261023232652875` | labels2 | 43 | 2 | run.sh, ok | yes |  |
 | 2026-10-23 23:35 | `open-ledger-conf-20261023233403089` | forwarding3 | 241 | 15 | run.sh, ok | yes |  |
-| 2026-10-30 17:33 | `open-ledger-conf-20261030173217178` | events | 23 | 0 | run.sh, ok | yes |  |
+| 2026-10-30 17:33 | `open-ledger-conf-20261030173217178` | events | 23 | 0 | run.sh, ok |  |  |
