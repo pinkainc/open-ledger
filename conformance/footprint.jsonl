@@ -271,3 +271,5 @@
 {"event":"end","run":"20261023233403089","ledger":"open-ledger-conf-20261023233403089","level":"forwarding3","at":"2026-10-23T23:36:24.461Z","exit":0,"exchanges":241,"bridgeCalls":15}
 {"event":"start","run":"20261030173217178","ledger":"open-ledger-conf-20261030173217178","level":"events","at":"2026-10-30T17:33:31.184Z","reference":"https://ldg-stg.one","operator":"AJfz5Bl3L24H9pVgJQlyWc0lcFLh1obkwMLqf1RBbYQ=","sdk":"2.47.0"}
 {"event":"end","run":"20261030173217178","ledger":"open-ledger-conf-20261030173217178","level":"events","at":"2026-10-30T17:39:46.076Z","exit":0,"exchanges":23,"bridgeCalls":0}
+{"event":"start","run":"20261030174314166","ledger":"open-ledger-conf-20261030174314166","level":"events","at":"2026-10-30T17:44:27.508Z","reference":"https://ldg-stg.one","operator":"4zd2qgUKSNK54KahbiCmr9B+NCL9Hx/+4QU6DWDzxq0=","sdk":"2.47.0"}
+{"event":"end","run":"20261030174314166","ledger":"open-ledger-conf-20261030174314166","level":"events","at":"2026-10-30T17:50:40.853Z","exit":0,"exchanges":23,"bridgeCalls":0}
