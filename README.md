@@ -1,5 +1,7 @@
 # open-ledger
 
+[Pinka](https://github.com/pinkainc) · **open-ledger** · [open-banking](https://github.com/pinkainc/open-banking) · [docs.minka.io](https://github.com/pinkainc/docs.minka.io)
+
 A Minka-compatible ledger: a server that answers the Minka Ledger API the way Minka
 does, so the official `@minka/ledger-sdk` and `minka` CLI work against it unchanged.
 
@@ -36,7 +38,7 @@ Where the reference is plainly defective we answer differently on purpose, and s
 and why; the comparator reports those exchanges instead of failing on them. So far: 21 cases in 14 fixtures
 (the first: an intent breaking `maxBalance` stays `committed` forever on the reference).
 
-Documentation (the mirror in `../docs.minka.io`) is the specification for what the
+Documentation (the mirror in [docs.minka.io](https://github.com/pinkainc/docs.minka.io), checked out next to this repo as `../docs.minka.io`) is the specification for what the
 sandbox cannot show from outside. Where docs and sandbox disagree, the sandbox wins —
 and more can be shown than it seems: for 2PC the scenario runs its own bridge, which
 the sandbox reaches through a public quick tunnel, so the calls the reference makes to
@@ -99,7 +101,7 @@ Postgres, and recovery of intents left pending by a crashed process.
 Work in progress is tracked in `TODO.md`; reference behaviour in `FINDINGS.md`.
 
 
-The level ladder (L0–L9) is in `../docs.minka.io/ssot/2026-08-08-state-machine-model.md`.
+The level ladder (L0–L9) is in [`docs.minka.io/ssot/2026-08-08-state-machine-model.md`](https://github.com/pinkainc/docs.minka.io/blob/main/ssot/2026-08-08-state-machine-model.md).
 
 ## Run
 
@@ -145,13 +147,18 @@ An open-source ledger does not open a bank: licensing, capital, AML/KYC, sanctio
 screening and scheme access are the larger part of that problem. This is a core
 banking substrate a licensed institution can run.
 
+## Legal
+
 Minka's text, code and name are not copied. The API is implemented from observed
 behaviour and public documentation. The CLI (UNLICENSED) is used as a client and its
 bundle was read to learn the token claims it sends; none of its code is reused.
-The SDK (MIT) is a dev dependency of the conformance suite.
+The SDK (MIT) is a dev dependency of the conformance suite. Reimplementing a public
+interface is lawful in the EU: the Court of Justice held in *SAS Institute v World
+Programming* (C-406/10, 2012) that the functionality of a program, its programming
+language and its data file formats are not protected by copyright. open-ledger is an
+independent project and is not affiliated with or endorsed by Minka Inc.; "Minka" refers
+to their product only to name the API this server is compatible with.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). open-ledger is an independent project and is not
-affiliated with or endorsed by Minka Inc.; "Minka" refers to their product only to
-name the API this server is compatible with.
+MIT, see [LICENSE](LICENSE).
