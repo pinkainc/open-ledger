@@ -1,6 +1,6 @@
 # open-ledger
 
-[Pinka](https://github.com/pinkainc) · **open-ledger** · [open-banking](https://github.com/pinkainc/open-banking) · [docs.minka.io](https://github.com/pinkainc/docs.minka.io)
+[Pinka](https://github.com/pinkainc) · **open-ledger** · [open-banking](https://github.com/pinkainc/open-banking)
 
 A Minka-compatible ledger: a server that answers the Minka Ledger API the way Minka
 does, so the official `@minka/ledger-sdk` and `minka` CLI work against it unchanged.
@@ -9,6 +9,10 @@ The model is S3. Amazon's implementation is closed, but its API is the contract,
 MinIO, Ceph and R2 implement that contract with their own internals. Minka is a black
 box in the same way: what is public is the API its clients speak. Everything behind
 that API here is our own design and is free to be better than the original.
+
+Only our implementation is published here. The API itself is described in Minka's own
+documentation at [docs.minka.io](https://docs.minka.io); the copy of it we work from is
+kept privately and is not redistributed.
 
 Website: [open-ledger.mpt.hr](https://open-ledger.mpt.hr), in English and Croatian. It is
 built from this repository (`site/`, see [`site/README.md`](site/README.md)): every number
@@ -38,7 +42,7 @@ Where the reference is plainly defective we answer differently on purpose, and s
 and why; the comparator reports those exchanges instead of failing on them. So far: 21 cases in 14 fixtures
 (the first: an intent breaking `maxBalance` stays `committed` forever on the reference).
 
-Documentation (the mirror in [docs.minka.io](https://github.com/pinkainc/docs.minka.io), checked out next to this repo as `../docs.minka.io`) is the specification for what the
+Documentation ([docs.minka.io](https://docs.minka.io); our private mirror of it sits next to this repo as `../docs.minka.io`) is the specification for what the
 sandbox cannot show from outside. Where docs and sandbox disagree, the sandbox wins —
 and more can be shown than it seems: for 2PC the scenario runs its own bridge, which
 the sandbox reaches through a public quick tunnel, so the calls the reference makes to
@@ -101,7 +105,7 @@ Postgres, and recovery of intents left pending by a crashed process.
 Work in progress is tracked in `TODO.md`; reference behaviour in `FINDINGS.md`.
 
 
-The level ladder (L0–L9) is in [`docs.minka.io/ssot/2026-08-08-state-machine-model.md`](https://github.com/pinkainc/docs.minka.io/blob/main/ssot/2026-08-08-state-machine-model.md).
+The level ladder (L0–L9) is kept with the private docs mirror (`../docs.minka.io/ssot/2026-08-08-state-machine-model.md`).
 
 ## Run
 
