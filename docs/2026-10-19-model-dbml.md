@@ -56,7 +56,7 @@ vlastita svojstva. Sticky bilješke su sve ispale žute iako svaka ima svoju boj
 
 ```bash
 # parse + render + preklapanja u headless Chromeu (24 provjere)
-cd ~/git/stepanic/open-diagram && npm test -- ~/git/minka/open-ledger/docs/model.dbml
+cd ~/git/stepanic/open-diagram && npm test -- ~/git/pinkainc/open-ledger/docs/model.dbml
 ```
 
 `examples/open-ledger.dbml` u open-diagramu mora ostati bajt-identičan `docs/model.dbml`.
